@@ -1,0 +1,83 @@
+{
+  "name": "@proofofwork-agency/reporecall",
+  "version": "0.1.0",
+  "description": "Reporecall — local codebase memory for Claude Code and MCP",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/proofofwork-agency/reporecall.git"
+  },
+  "bugs": {
+    "url": "https://github.com/proofofwork-agency/reporecall/issues"
+  },
+  "homepage": "https://github.com/proofofwork-agency/reporecall#readme",
+  "keywords": [
+    "reporecall",
+    "codebase-memory",
+    "claude-code",
+    "mcp",
+    "code-search",
+    "tree-sitter",
+    "rag"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "Danillo Felixd",
+  "bin": {
+    "reporecall": "./dist/memory.js",
+    "memory": "./dist/memory.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "lint": "tsc --noEmit",
+    "benchmark": "tsx benchmark.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@lancedb/lancedb": "^0.26.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "apache-arrow": "^21.1.0",
+    "better-sqlite3": "^12.8.0",
+    "chokidar": "^5.0.0",
+    "commander": "^14.0.3",
+    "glob": "^13.0.6",
+    "ignore": "^7.0.5",
+    "pino": "^10.3.1",
+    "safe-regex2": "^5.1.0",
+    "tiktoken": "^1.0.22",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.22.6",
+    "xxhash-wasm": "^1.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

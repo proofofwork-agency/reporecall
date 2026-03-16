@@ -1,0 +1,348 @@
+{
+  "timestamp": "2026-03-17T00:42:55.894Z",
+  "results": [
+    {
+      "size": "small",
+      "fileCount": 5,
+      "approxLoc": 200,
+      "modes": [
+        {
+          "mode": "baseline",
+          "indexTimeMs": 0,
+          "chunksCreated": 0,
+          "avgSearchLatencyMs": 0,
+          "p50SearchLatencyMs": 0,
+          "p95SearchLatencyMs": 0,
+          "avgResultsFound": 0,
+          "top1Accuracy": 0,
+          "top5Recall": 0,
+          "avgContextTokens": 0,
+          "avgContextChunks": 0,
+          "avgBudgetUtilization": 0,
+          "queries": [
+            {
+              "query": "How does validateToken work?",
+              "category": "exact",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 1,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "What does createSession do?",
+              "category": "exact",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 1,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "How is authentication handled?",
+              "category": "concept",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 3,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "How are user credentials managed?",
+              "category": "concept",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 2,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "What happens when a token expires?",
+              "category": "cross-cutting",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 2,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "Why might sessions expire early?",
+              "category": "debugging",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 3,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "Show me the request lifecycle",
+              "category": "architecture",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 3,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            },
+            {
+              "query": "Where is the session store used?",
+              "category": "refactoring",
+              "searchLatencyMs": 0,
+              "resultsFound": 0,
+              "top1Hit": false,
+              "top5Hits": 0,
+              "top5Expected": 4,
+              "contextTokens": 0,
+              "contextChunks": 0,
+              "budgetUtilization": 0
+            }
+          ]
+        },
+        {
+          "mode": "keyword",
+          "indexTimeMs": 318,
+          "chunksCreated": 20,
+          "avgSearchLatencyMs": 16.57,
+          "p50SearchLatencyMs": 4.05,
+          "p95SearchLatencyMs": 108.49,
+          "avgResultsFound": 4.63,
+          "top1Accuracy": 62.5,
+          "top5Recall": 81.25,
+          "avgContextTokens": 608,
+          "avgContextChunks": 4.63,
+          "avgBudgetUtilization": 15.19,
+          "queries": [
+            {
+              "query": "How does validateToken work?",
+              "category": "exact",
+              "searchLatencyMs": 108.49,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 1,
+              "contextTokens": 644,
+              "contextChunks": 5,
+              "budgetUtilization": 16.1
+            },
+            {
+              "query": "What does createSession do?",
+              "category": "exact",
+              "searchLatencyMs": 2.43,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 1,
+              "contextTokens": 740,
+              "contextChunks": 5,
+              "budgetUtilization": 18.5
+            },
+            {
+              "query": "How is authentication handled?",
+              "category": "concept",
+              "searchLatencyMs": 4.05,
+              "resultsFound": 3,
+              "top1Hit": false,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 419,
+              "contextChunks": 3,
+              "budgetUtilization": 10.48
+            },
+            {
+              "query": "How are user credentials managed?",
+              "category": "concept",
+              "searchLatencyMs": 5.09,
+              "resultsFound": 5,
+              "top1Hit": false,
+              "top5Hits": 2,
+              "top5Expected": 2,
+              "contextTokens": 440,
+              "contextChunks": 5,
+              "budgetUtilization": 11
+            },
+            {
+              "query": "What happens when a token expires?",
+              "category": "cross-cutting",
+              "searchLatencyMs": 4.76,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 2,
+              "contextTokens": 665,
+              "contextChunks": 5,
+              "budgetUtilization": 16.63
+            },
+            {
+              "query": "Why might sessions expire early?",
+              "category": "debugging",
+              "searchLatencyMs": 4.29,
+              "resultsFound": 5,
+              "top1Hit": false,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 770,
+              "contextChunks": 5,
+              "budgetUtilization": 19.25
+            },
+            {
+              "query": "Show me the request lifecycle",
+              "category": "architecture",
+              "searchLatencyMs": 1.37,
+              "resultsFound": 4,
+              "top1Hit": true,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 561,
+              "contextChunks": 4,
+              "budgetUtilization": 14.03
+            },
+            {
+              "query": "Where is the session store used?",
+              "category": "refactoring",
+              "searchLatencyMs": 2.06,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 4,
+              "top5Expected": 4,
+              "contextTokens": 622,
+              "contextChunks": 5,
+              "budgetUtilization": 15.55
+            }
+          ]
+        },
+        {
+          "mode": "semantic",
+          "indexTimeMs": 910,
+          "chunksCreated": 20,
+          "avgSearchLatencyMs": 23.5,
+          "p50SearchLatencyMs": 14.22,
+          "p95SearchLatencyMs": 78.27,
+          "avgResultsFound": 5,
+          "top1Accuracy": 75,
+          "top5Recall": 81.25,
+          "avgContextTokens": 643,
+          "avgContextChunks": 5,
+          "avgBudgetUtilization": 16.09,
+          "queries": [
+            {
+              "query": "How does validateToken work?",
+              "category": "exact",
+              "searchLatencyMs": 78.27,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 1,
+              "contextTokens": 644,
+              "contextChunks": 5,
+              "budgetUtilization": 16.1
+            },
+            {
+              "query": "What does createSession do?",
+              "category": "exact",
+              "searchLatencyMs": 19.74,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 1,
+              "contextTokens": 665,
+              "contextChunks": 5,
+              "budgetUtilization": 16.63
+            },
+            {
+              "query": "How is authentication handled?",
+              "category": "concept",
+              "searchLatencyMs": 13.62,
+              "resultsFound": 5,
+              "top1Hit": false,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 623,
+              "contextChunks": 5,
+              "budgetUtilization": 15.58
+            },
+            {
+              "query": "How are user credentials managed?",
+              "category": "concept",
+              "searchLatencyMs": 18.26,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 1,
+              "top5Expected": 2,
+              "contextTokens": 460,
+              "contextChunks": 5,
+              "budgetUtilization": 11.5
+            },
+            {
+              "query": "What happens when a token expires?",
+              "category": "cross-cutting",
+              "searchLatencyMs": 15.98,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 2,
+              "top5Expected": 2,
+              "contextTokens": 585,
+              "contextChunks": 5,
+              "budgetUtilization": 14.63
+            },
+            {
+              "query": "Why might sessions expire early?",
+              "category": "debugging",
+              "searchLatencyMs": 13.92,
+              "resultsFound": 5,
+              "top1Hit": false,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 770,
+              "contextChunks": 5,
+              "budgetUtilization": 19.25
+            },
+            {
+              "query": "Show me the request lifecycle",
+              "category": "architecture",
+              "searchLatencyMs": 13.98,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 2,
+              "top5Expected": 3,
+              "contextTokens": 778,
+              "contextChunks": 5,
+              "budgetUtilization": 19.45
+            },
+            {
+              "query": "Where is the session store used?",
+              "category": "refactoring",
+              "searchLatencyMs": 14.22,
+              "resultsFound": 5,
+              "top1Hit": true,
+              "top5Hits": 4,
+              "top5Expected": 4,
+              "contextTokens": 622,
+              "contextChunks": 5,
+              "budgetUtilization": 15.55
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.memory/
+.claude/
+*.tsbuildinfo
+.DS_Store
+CLAUDE.md
+skills-lock.json
+.agents/

@@ -1,0 +1,11 @@
+export { loadConfig, type MemoryConfig } from "./core/config.js";
+export { detectProjectRoot } from "./core/project.js";
+export { IndexingPipeline } from "./indexer/pipeline.js";
+export { HybridSearch } from "./search/hybrid.js";
+export { createDaemonServer } from "./daemon/server.js";
+export { createMCPServer } from "./daemon/mcp-server.js";
+export { extractCallEdges, type CallEdge } from "./analysis/call-graph.js";
+export { analyzeConventions, type ConventionsReport } from "./analysis/conventions.js";
+export type { CodeChunk } from "./parser/types.js";
+export type { SearchResult, SearchOptions, AssembledContext } from "./search/types.js";
+export type { IndexStats } from "./indexer/types.js";
