@@ -97,6 +97,21 @@ export function statsCommand(): Command {
         console.log(`  p95:  ${latency.p95}ms`)
       }
 
+      // Route breakdown
+      const routeSkip = metadata.getStat('route_skip_count') ?? '0'
+      const routeR0 = metadata.getStat('route_R0_count') ?? '0'
+      const routeR1 = metadata.getStat('route_R1_count') ?? '0'
+      const routeR2 = metadata.getStat('route_R2_count') ?? '0'
+      const totalRoutes = parseInt(routeSkip, 10) + parseInt(routeR0, 10) + parseInt(routeR1, 10) + parseInt(routeR2, 10)
+      if (totalRoutes > 0) {
+        console.log(``)
+        console.log(`Route Breakdown:`)
+        console.log(`  Skipped (meta/non-code):  ${routeSkip}`)
+        console.log(`  R0 (fast path):           ${routeR0}`)
+        console.log(`  R1 (flow route):          ${routeR1}`)
+        console.log(`  R2 (deep route):          ${routeR2}`)
+      }
+
       // Check daemon status
       const pidPath = resolve(config.dataDir, 'daemon.pid')
       if (existsSync(pidPath)) {

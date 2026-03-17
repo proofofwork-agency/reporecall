@@ -238,7 +238,7 @@ export function serveCommand(): Command {
         config,
         search,
         pipeline.getMetadataStore(),
-        { ftsInitialized, debugMode: !!options.debug }
+        { ftsInitialized, debugMode: !!options.debug, ftsStore: ftsInitialized ? pipeline.getFTSStore() : undefined }
       )
 
       const tokenPath = resolve(config.dataDir, 'daemon.token')

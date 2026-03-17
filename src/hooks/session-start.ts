@@ -38,8 +38,9 @@ function formatConventionsSummary(metadata: MetadataStore): string {
 
 const MEMORY_BEHAVIOR_INSTRUCTION =
   '## Reporecall Behavior\n\n' +
-  '> When codebase context is injected via hooks, prefer answering from that context. ' +
-  'If the injected context is insufficient, you may use tools to find additional information.\n\n'
+  '> When codebase context is injected via hooks, treat it as the primary source for that prompt. ' +
+  'For normal and flow-route bundles, answer from the injected context first and avoid repository tools unless the bundle is missing a required detail. ' +
+  'For low-confidence bundles, repository tools are allowed.\n\n'
 
 export async function handleSessionStart(
   search: HybridSearch,

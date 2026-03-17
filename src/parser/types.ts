@@ -9,4 +9,5 @@ export interface CodeChunk {
   parentName?: string;
   docstring?: string;
   language: string;
+  isExported?: boolean;
 }

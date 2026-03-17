@@ -3,13 +3,15 @@ import type { MemoryConfig } from "../core/config.js";
 import type { HybridSearch } from "../search/hybrid.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { handleSessionStart } from "../hooks/session-start.js";
-import { handlePromptContext } from "../hooks/prompt-context.js";
+import { handlePromptContextDetailed } from "../hooks/prompt-context.js";
+import { classifyIntent, deriveRoute } from "../search/intent.js";
 import { getLogger } from "../core/logger.js";
 import { mkdirSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { RotatingLog } from "./rotating-log.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
+import type { HookDebugRecord } from "../search/types.js";
 
 // --- Rate limiter -----------------------------------------------------------
 // Sliding-window, in-memory, per client IP. No external dependencies.
@@ -192,6 +194,7 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
 export interface DaemonServerOptions {
   ftsInitialized?: boolean;
   debugMode?: boolean;
+  ftsStore?: import("../storage/fts-store.js").FTSStore;
 }
 
 export function createDaemonServer(
@@ -202,6 +205,7 @@ export function createDaemonServer(
 ): { server: ReturnType<typeof createServer>; token: string; metrics: MetricsCollector } {
   const ftsInitialized = options?.ftsInitialized ?? true;
   const debugMode = options?.debugMode ?? false;
+  const ftsStore = options?.ftsStore;
   const log = getLogger();
   const hookLogDir = resolve(config.dataDir, "logs");
   mkdirSync(hookLogDir, { recursive: true });
@@ -435,34 +439,199 @@ export function createDaemonServer(
             query = body;
           }
 
+          // Save raw query before sanitization for debug records
+          const rawQuery = query;
+
           // Sanitize query: strip code fragments, imports, and other noise
           // that can leak into the hook payload from CLI wrappers
           query = sanitizeQuery(query);
 
           if (!query) {
             log.debug({ requestId, reason: "empty query after sanitization" }, "prompt-context skipped");
-            json(res, { additionalContext: "" });
+            metadata.incrementRouteStat("skip");
+            const skipDebug: HookDebugRecord = {
+              route: "skip",
+              intentType: { isCodeQuery: false, needsNavigation: false },
+              skipReason: "empty query after sanitization",
+              injectedTokenCount: 0,
+              injectedChunkCount: 0,
+              seedCandidate: null,
+              confidence: null,
+              latencyMs: 0,
+              query: rawQuery,
+              sanitizedQuery: query,
+            };
+            await logHook(`[${requestId}] SKIP reason="empty query after sanitization" debug=${JSON.stringify(skipDebug)}`);
+            if (debugMode) {
+              res.setHeader("X-Memory-Debug", JSON.stringify({
+                requestId,
+                hookEventName: "UserPromptSubmit",
+                route: "skip",
+                chunks: 0,
+                tokens: 0,
+                elapsedMs: 0,
+                queryClassification: { isCodeQuery: false, needsNavigation: false },
+                skipReason: "empty query after sanitization",
+              }));
+            }
+            json(res, {
+              additionalContext: "",
+              _debug: {
+                route: "skip" as const,
+                tokensInjected: 0,
+                chunksInjected: 0,
+                queryClassification: { isCodeQuery: false, needsNavigation: false },
+                skipReason: "empty query after sanitization",
+                latencyMs: 0,
+              },
+            });
+            return;
+          }
+
+          // Classify intent — skip retrieval entirely for non-code queries
+          const intent = classifyIntent(query);
+          let route = deriveRoute(intent);
+
+          // For navigational queries, attempt seed resolution to determine R1 vs R2
+          let seedCandidate: string | null = null;
+          let seedConfidence: number | null = null;
+          if (intent.needsNavigation && route === "R0" && ftsStore) {
+            const { resolveSeeds } = await import("../search/seed.js");
+            const seedResult = resolveSeeds(query, metadata, ftsStore);
+            if (seedResult.bestSeed) {
+              seedCandidate = seedResult.bestSeed.name;
+              seedConfidence = seedResult.bestSeed.confidence;
+            }
+            route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
+          }
+
+          if (route === "skip") {
+            const skipDebug: HookDebugRecord = {
+              route: "skip",
+              intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
+              skipReason: intent.skipReason ?? "non-code query",
+              injectedTokenCount: 0,
+              injectedChunkCount: 0,
+              seedCandidate: null,
+              confidence: null,
+              latencyMs: 0,
+              query: rawQuery,
+              sanitizedQuery: query,
+            };
+            await logHook(
+              `[${requestId}] SKIP query="${query.slice(0, 100)}" reason="${intent.skipReason ?? "non-code query"}" debug=${JSON.stringify(skipDebug)}`
+            );
+            metadata.incrementRouteStat("skip");
+            if (debugMode) {
+              res.setHeader("X-Memory-Debug", JSON.stringify({
+                requestId,
+                hookEventName: "UserPromptSubmit",
+                route: "skip",
+                chunks: 0,
+                tokens: 0,
+                elapsedMs: 0,
+                queryClassification: intent,
+                skipReason: intent.skipReason ?? "non-code query",
+              }));
+            }
+            json(res, {
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: "",
+              },
+              _debug: {
+                route: "skip",
+                tokensInjected: 0,
+                chunksInjected: 0,
+                queryClassification: intent,
+                skipReason: intent.skipReason,
+                latencyMs: 0,
+              },
+            });
             return;
           }
 
           const startTime = Date.now();
-          await logHook(`[${requestId}] SEARCH query="${query.slice(0, 100)}"`);
+          await logHook(`[${requestId}] SEARCH route=${route} query="${query.slice(0, 100)}"`);
 
-          const context = await handlePromptContext(query, search, config, activeFiles, signal);
+          const promptContext = await handlePromptContextDetailed(
+            query,
+            search,
+            config,
+            activeFiles,
+            signal,
+            route,
+            ftsStore ? metadata : undefined,
+            ftsStore
+          );
+          route = promptContext.resolvedRoute;
+          const context = promptContext.context;
 
           if (!context) {
-            json(res, { additionalContext: "" });
+            const skipElapsed = Date.now() - startTime;
+            metadata.incrementRouteStat("skip");
+            const skipDebug: HookDebugRecord = {
+              route: "skip",
+              intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
+              skipReason: "no context returned",
+              injectedTokenCount: 0,
+              injectedChunkCount: 0,
+              seedCandidate: null,
+              confidence: null,
+              latencyMs: skipElapsed,
+              query: rawQuery,
+              sanitizedQuery: query,
+            };
+            await logHook(`[${requestId}] SKIP reason="no context returned" debug=${JSON.stringify(skipDebug)}`);
+            if (debugMode) {
+              res.setHeader("X-Memory-Debug", JSON.stringify({
+                requestId,
+                hookEventName: "UserPromptSubmit",
+                route: "skip",
+                chunks: 0,
+                tokens: 0,
+                elapsedMs: skipElapsed,
+                queryClassification: intent,
+                skipReason: "no context returned",
+              }));
+            }
+            json(res, {
+              additionalContext: "",
+              _debug: {
+                route: "skip" as const,
+                tokensInjected: 0,
+                chunksInjected: 0,
+                queryClassification: intent,
+                skipReason: "no context returned",
+                latencyMs: skipElapsed,
+              },
+            });
             return;
           }
 
           const elapsed = Date.now() - startTime;
+
+          const debugRecord: HookDebugRecord = {
+            route,
+            intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
+            skipReason: null,
+            injectedTokenCount: context.tokenCount,
+            injectedChunkCount: context.chunks.length,
+            seedCandidate,
+            confidence: seedConfidence,
+            latencyMs: elapsed,
+            query: rawQuery,
+            sanitizedQuery: query,
+          };
+
           await logHook(
-            `[${requestId}] RESULT ${context.chunks.length} chunks (${context.tokenCount} tokens) in ${elapsed}ms`
+            `[${requestId}] RESULT ${context.chunks.length} chunks (${context.tokenCount} tokens) in ${elapsed}ms route=${route}`
           );
 
           log.debug({
             requestId,
             query: query.slice(0, 120),
+            route,
             activeFilesCount: activeFiles?.length ?? 0,
             chunkCount: context.chunks.length,
             tokenCount: context.tokenCount,
@@ -471,6 +640,7 @@ export function createDaemonServer(
             })),
             hasHookOutput: context.text.length > 0,
             elapsedMs: elapsed,
+            debugRecord,
           }, "prompt-context hook complete");
 
           for (const chunk of context.chunks) {
@@ -486,6 +656,7 @@ export function createDaemonServer(
           // Stats update: all reads and writes are synchronous (better-sqlite3),
           // so no interleaving is possible within this block
           metadata.recordLatency(elapsed);
+          metadata.incrementRouteStat(route);
           const hooksCount = parseInt(metadata.getStat("hooksFireCount") ?? "0", 10);
           metadata.setStat("hooksFireCount", String(hooksCount + 1));
           const totalTokens = parseInt(metadata.getStat("totalTokensInjected") ?? "0", 10);
@@ -496,9 +667,13 @@ export function createDaemonServer(
           if (debugMode) {
             res.setHeader("X-Memory-Debug", JSON.stringify({
               requestId,
+              hookEventName: "UserPromptSubmit",
+              route,
               chunks: context.chunks.length,
               tokens: context.tokenCount,
               elapsedMs: elapsed,
+              queryClassification: intent,
+              ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
             }));
           }
 
@@ -506,6 +681,14 @@ export function createDaemonServer(
             hookSpecificOutput: {
               hookEventName: "UserPromptSubmit",
               additionalContext: context.text,
+            },
+            _debug: {
+              route,
+              tokensInjected: context.tokenCount,
+              chunksInjected: context.chunks.length,
+              queryClassification: intent,
+              latencyMs: elapsed,
+              ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
             },
           });
         }, res, 30000, "/hooks/prompt-context");

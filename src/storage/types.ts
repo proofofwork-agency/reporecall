@@ -11,6 +11,7 @@ export interface StoredChunk {
   language: string;
   indexedAt: string;
   fileMtime?: string;
+  isExported?: boolean;
 }
 
 export interface ChunkScoringInfo {

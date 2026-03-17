@@ -30,4 +30,18 @@ export interface AssembledContext {
   text: string;
   tokenCount: number;
   chunks: SearchResult[];
+  routeStyle?: "standard" | "concept" | "flow" | "deep";
+}
+
+export interface HookDebugRecord {
+  route: "skip" | "R0" | "R1" | "R2";
+  intentType: { isCodeQuery: boolean; needsNavigation: boolean };
+  skipReason: string | null;
+  injectedTokenCount: number;
+  injectedChunkCount: number;
+  seedCandidate: string | null;  // null until Phase 3
+  confidence: number | null;     // null until Phase 3
+  latencyMs: number;
+  query: string;
+  sanitizedQuery: string;
 }

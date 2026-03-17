@@ -6,6 +6,9 @@ import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
 import type { MemoryConfig } from '../core/config.js'
 import type { ReadWriteLock } from '../core/rwlock.js'
+import { resolveSeeds } from '../search/seed.js'
+import { buildStackTree } from '../search/tree-builder.js'
+import { assembleFlowContext } from '../search/context-assembler.js'
 import { createRequire } from 'module'
 
 const require = createRequire(import.meta.url)
@@ -293,6 +296,285 @@ export function createMCPServer(
             {
               type: 'text' as const,
               text: JSON.stringify(callees, null, 2)
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'resolve_seed',
+    {
+      description:
+        'Resolve a query to seed candidates for stack tree building. Returns ranked code symbols that best match the query.',
+      inputSchema: {
+        query: z.string().describe('Natural language query or code symbol name')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ query }) => {
+      try {
+        const ftsStore = pipeline.getFTSStore()
+        const result = resolveSeeds(query, metadata, ftsStore)
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  bestSeed: result.bestSeed,
+                  candidates: result.seeds,
+                  count: result.seeds.length
+                },
+                null,
+                2
+              )
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'build_stack_tree',
+    {
+      description:
+        'Build a bidirectional call tree from a seed function/method. Shows callers (who invokes it) and callees (what it invokes).',
+      inputSchema: {
+        seed: z
+          .string()
+          .describe('Function or method name to use as the tree seed'),
+        depth: z
+          .number()
+          .max(10)
+          .optional()
+          .describe('Maximum tree depth (default: 2)'),
+        direction: z
+          .enum(['up', 'down', 'both'])
+          .optional()
+          .describe('Tree direction (default: both)')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ seed, depth, direction }) => {
+      try {
+        const ftsStore = pipeline.getFTSStore()
+        const seedResult = resolveSeeds(seed, metadata, ftsStore)
+        if (!seedResult.bestSeed) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `No matching code symbol found for "${seed}"`
+              }
+            ]
+          }
+        }
+
+        const tree = buildStackTree(metadata, {
+          seed: seedResult.bestSeed,
+          direction: direction ?? 'both',
+          maxDepth: depth ?? 2,
+          maxBranchFactor: 3,
+          maxNodes: 24
+        })
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  seed: tree.seed,
+                  upTree: tree.upTree,
+                  downTree: tree.downTree,
+                  edges: tree.edges,
+                  nodeCount: tree.nodeCount,
+                  coverage: tree.coverage
+                },
+                null,
+                2
+              )
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_imports',
+    {
+      description:
+        'Get import statements for a file. Shows what modules/symbols a file imports.',
+      inputSchema: {
+        filePath: z
+          .string()
+          .describe('Relative file path (e.g., src/auth/handler.ts)')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ filePath }) => {
+      try {
+        if (!isPathSafe(config.projectRoot, filePath)) {
+          return errorResult(new Error('Path outside project root'))
+        }
+
+        const imports = metadata.getImportsForFile(filePath)
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  filePath,
+                  imports: imports.map((i) => ({
+                    name: i.importedName,
+                    from: i.sourceModule,
+                    resolvedPath: i.resolvedPath,
+                    isDefault: i.isDefault,
+                    isNamespace: i.isNamespace
+                  })),
+                  count: imports.length
+                },
+                null,
+                2
+              )
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_symbol',
+    {
+      description:
+        'Look up code symbols (functions, classes, methods) by name. Returns matching chunks with file path, lines, and kind.',
+      inputSchema: {
+        name: z.string().describe('Symbol name to look up (e.g., "authenticate", "UserService")')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ name }) => {
+      try {
+        const matches = metadata.findChunksByNames([name])
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  symbol: name,
+                  matches: matches.map((m) => ({
+                    name: m.name,
+                    kind: m.kind,
+                    filePath: m.filePath,
+                    startLine: m.startLine,
+                    endLine: m.endLine,
+                    content: m.content,
+                    parentName: m.parentName,
+                    language: m.language
+                  })),
+                  count: matches.length
+                },
+                null,
+                2
+              )
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'explain_flow',
+    {
+      description:
+        'Explain the call flow around a query or function name. Resolves a seed symbol, builds a bidirectional call tree, and returns assembled flow context with callers, seed, and callees.',
+      inputSchema: {
+        query: z.string().describe('Natural language query or function name'),
+        direction: z
+          .enum(['up', 'down', 'both'])
+          .optional()
+          .describe('Tree direction (default: both)'),
+        maxDepth: z
+          .number()
+          .max(10)
+          .optional()
+          .describe('Maximum tree depth (default: 2)')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ query, direction, maxDepth }) => {
+      try {
+        const ftsStore = pipeline.getFTSStore()
+        const seedResult = resolveSeeds(query, metadata, ftsStore)
+        if (!seedResult.bestSeed) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `No matching code symbol found for "${query}"`
+              }
+            ]
+          }
+        }
+
+        const tree = buildStackTree(metadata, {
+          seed: seedResult.bestSeed,
+          direction: direction ?? 'both',
+          maxDepth: maxDepth ?? 2,
+          maxBranchFactor: 3,
+          maxNodes: 24
+        })
+
+        const flowContext = assembleFlowContext(
+          tree,
+          metadata,
+          config.contextBudget,
+          query
+        )
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  seed: {
+                    name: seedResult.bestSeed.name,
+                    filePath: seedResult.bestSeed.filePath,
+                    kind: seedResult.bestSeed.kind,
+                    confidence: seedResult.bestSeed.confidence
+                  },
+                  tree: {
+                    nodeCount: tree.nodeCount,
+                    upCount: tree.upTree.length,
+                    downCount: tree.downTree.length,
+                    coverage: tree.coverage
+                  },
+                  flowContext: flowContext.text,
+                  tokenCount: flowContext.tokenCount,
+                  chunksIncluded: flowContext.chunks.length
+                },
+                null,
+                2
+              )
             }
           ]
         }

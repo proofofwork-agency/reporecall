@@ -42,7 +42,8 @@ export class ChunkStore {
         parent_name TEXT,
         language TEXT NOT NULL,
         indexed_at TEXT NOT NULL,
-        file_mtime TEXT
+        file_mtime TEXT,
+        is_exported INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);
@@ -54,6 +55,9 @@ export class ChunkStore {
     const cols = this.db.prepare("PRAGMA table_info(chunks)").all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === "file_mtime")) {
       this.db.exec("ALTER TABLE chunks ADD COLUMN file_mtime TEXT");
+    }
+    if (!cols.some((c) => c.name === "is_exported")) {
+      this.db.exec("ALTER TABLE chunks ADD COLUMN is_exported INTEGER NOT NULL DEFAULT 0");
     }
   }
 
@@ -74,8 +78,8 @@ export class ChunkStore {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO chunks
-         (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime, is_exported)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         chunk.id,
@@ -89,7 +93,8 @@ export class ChunkStore {
         chunk.parentName ?? null,
         chunk.language,
         chunk.indexedAt,
-        chunk.fileMtime ?? null
+        chunk.fileMtime ?? null,
+        chunk.isExported ? 1 : 0
       );
   }
 
@@ -227,8 +232,8 @@ export class ChunkStore {
   bulkUpsertChunks(chunks: StoredChunk[]): void {
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO chunks
-       (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime, is_exported)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     this.db.transaction(() => {
       for (const chunk of chunks) {
@@ -244,7 +249,8 @@ export class ChunkStore {
           chunk.parentName ?? null,
           chunk.language,
           chunk.indexedAt,
-          chunk.fileMtime ?? null
+          chunk.fileMtime ?? null,
+          chunk.isExported ? 1 : 0
         );
       }
     })();
@@ -264,6 +270,7 @@ export class ChunkStore {
       language: row.language as string,
       indexedAt: row.indexed_at as string,
       fileMtime: (row.file_mtime as string) ?? undefined,
+      isExported: (row.is_exported as number) === 1,
     };
   }
 }

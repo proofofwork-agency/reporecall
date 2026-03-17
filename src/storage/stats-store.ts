@@ -31,6 +31,12 @@ export class StatsStore {
     return row?.value;
   }
 
+  incrementRouteStat(route: "skip" | "R0" | "R1" | "R2"): void {
+    const key = `route_${route}_count`;
+    const current = parseInt(this.getStat(key) ?? "0", 10);
+    this.setStat(key, String(current + 1));
+  }
+
   recordLatency(latencyMs: number): void {
     this.db.transaction(() => {
       this.db

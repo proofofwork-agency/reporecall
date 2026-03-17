@@ -9,12 +9,15 @@ import { ChunkStore } from "./chunk-store.js";
 import { CallEdgeStore } from "./call-edge-store.js";
 import { StatsStore } from "./stats-store.js";
 import { ConventionsStore } from "./conventions-store.js";
+import { ImportStore } from "./import-store.js";
+import type { ImportRecord } from "./import-store.js";
 
 // Re-export focused stores and types for consumers
 export { ChunkStore, type ChunkLightweight } from "./chunk-store.js";
 export { CallEdgeStore } from "./call-edge-store.js";
 export { StatsStore } from "./stats-store.js";
 export { ConventionsStore } from "./conventions-store.js";
+export { ImportStore, type ImportRecord } from "./import-store.js";
 
 /**
  * Facade that composes the focused stores (ChunkStore, CallEdgeStore,
@@ -28,6 +31,7 @@ export class MetadataStore {
   private callEdges: CallEdgeStore;
   private stats: StatsStore;
   private conventions: ConventionsStore;
+  private imports: ImportStore;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
@@ -38,10 +42,12 @@ export class MetadataStore {
     this.callEdges = new CallEdgeStore(this.db);
     this.stats = new StatsStore(this.db);
     this.conventions = new ConventionsStore(this.stats);
+    this.imports = new ImportStore(this.db);
 
     this.chunks.initSchema();
     this.callEdges.initSchema();
     this.stats.initSchema();
+    this.imports.initSchema();
   }
 
   // --- Chunk delegation -------------------------------------------------------
@@ -53,6 +59,7 @@ export class MetadataStore {
   removeFile(path: string): void {
     this.chunks.removeFile(path);
     this.callEdges.removeCallEdgesForFile(path);
+    this.imports.removeImportsForFile(path);
   }
 
   upsertChunk(chunk: StoredChunk): void {
@@ -122,6 +129,10 @@ export class MetadataStore {
     return this.stats.getStat(key);
   }
 
+  incrementRouteStat(route: "skip" | "R0" | "R1" | "R2"): void {
+    this.stats.incrementRouteStat(route);
+  }
+
   recordLatency(latencyMs: number): void {
     this.stats.recordLatency(latencyMs);
   }
@@ -142,16 +153,24 @@ export class MetadataStore {
 
   findCallers(
     targetName: string,
-    limit?: number
-  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string }> {
-    return this.callEdges.findCallers(targetName, limit);
+    limit?: number,
+    targetFilePath?: string
+  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; receiver?: string }> {
+    return this.callEdges.findCallers(targetName, limit, targetFilePath);
   }
 
   findCallees(
     sourceName: string,
     limit?: number
-  ): Array<{ targetName: string; callType: string; line: number; filePath: string }> {
+  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
     return this.callEdges.findCallees(sourceName, limit);
+  }
+
+  findCalleesForChunk(
+    sourceChunkId: string,
+    limit?: number
+  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
+    return this.callEdges.findCalleesForChunk(sourceChunkId, limit);
   }
 
   getTopCallTargets(limit?: number): string[] {
@@ -166,6 +185,24 @@ export class MetadataStore {
 
   getConventions(): ConventionsReport | undefined {
     return this.conventions.getConventions();
+  }
+
+  // --- Imports delegation -----------------------------------------------------
+
+  upsertImports(records: ImportRecord[]): void {
+    this.imports.upsertImports(records);
+  }
+
+  getImportsForFile(filePath: string): ImportRecord[] {
+    return this.imports.getImportsForFile(filePath);
+  }
+
+  findImportByName(name: string, filePath?: string): ImportRecord[] {
+    return this.imports.findImportByName(name, filePath);
+  }
+
+  removeImportsForFile(filePath: string): void {
+    this.imports.removeImportsForFile(filePath);
   }
 
   // --- Lifecycle --------------------------------------------------------------

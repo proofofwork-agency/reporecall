@@ -1,0 +1,170 @@
+[
+  {
+    "query": "where is validateToken?",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Direct symbol lookup for a specific function"
+  },
+  {
+    "query": "what does sanitizeQuery do?",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Direct function explanation"
+  },
+  {
+    "query": "find the HybridSearch class",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Class lookup by name"
+  },
+  {
+    "query": "show me the MetadataStore constructor",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Constructor lookup on a specific class"
+  },
+  {
+    "query": "where is loadConfig defined?",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Definition lookup for config loader"
+  },
+  {
+    "query": "what is the MemoryConfig interface?",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Interface/type lookup"
+  },
+  {
+    "query": "find extractExplicitTargets",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Function lookup in seed resolution"
+  },
+  {
+    "query": "show the AssembledContext type",
+    "expectedRoute": "R0",
+    "category": "exact_lookup",
+    "description": "Type definition lookup"
+  },
+  {
+    "query": "how does the search pipeline work?",
+    "expectedRoute": "R0",
+    "category": "flow",
+    "description": "Concept bundle query — search_pipeline concept fires at R0"
+  },
+  {
+    "query": "how does intent classification route queries?",
+    "expectedRoute": "R0",
+    "category": "flow",
+    "description": "Concept bundle query — search_pipeline concept fires at R0"
+  },
+  {
+    "query": "how does the indexing pipeline process files?",
+    "expectedRoute": "R1",
+    "category": "flow",
+    "description": "Flow question about indexing"
+  },
+  {
+    "query": "how is the call graph built and used?",
+    "expectedRoute": "R0",
+    "category": "flow",
+    "description": "Concept bundle query — call_graph concept fires at R0"
+  },
+  {
+    "query": "what happens when a prompt-context hook fires?",
+    "expectedRoute": "R2",
+    "category": "flow",
+    "description": "Navigational query that degrades to R2 when tree coverage is weak"
+  },
+  {
+    "query": "how does seed resolution determine the best seed?",
+    "expectedRoute": "R1",
+    "category": "flow",
+    "description": "Flow question about seed resolution"
+  },
+  {
+    "query": "how is the project structured?",
+    "expectedRoute": "R1",
+    "category": "architecture",
+    "description": "High-level architecture question"
+  },
+  {
+    "query": "what is the overall design of the storage layer?",
+    "expectedRoute": "R2",
+    "category": "architecture",
+    "description": "Architecture question that degrades to R2 when tree coverage is weak"
+  },
+  {
+    "query": "why does the FTS search return empty results?",
+    "expectedRoute": "R1",
+    "category": "debugging",
+    "description": "Debugging question about FTS"
+  },
+  {
+    "query": "why is the daemon failing to start?",
+    "expectedRoute": "R1",
+    "category": "debugging",
+    "description": "Debugging question about daemon startup"
+  },
+  {
+    "query": "trace the error when embedding fails",
+    "expectedRoute": "R1",
+    "category": "debugging",
+    "description": "Error tracing for embedding failures"
+  },
+  {
+    "query": "why does sanitizeQuery strip too much from the prompt?",
+    "expectedRoute": "R1",
+    "category": "debugging",
+    "description": "Debugging over-aggressive sanitization"
+  },
+  {
+    "query": "debug the rate limiter — it blocks all requests",
+    "expectedRoute": "R1",
+    "category": "debugging",
+    "description": "Debugging rate limiter behavior"
+  },
+  {
+    "query": "hello",
+    "expectedRoute": "skip",
+    "category": "meta",
+    "description": "Simple greeting should skip"
+  },
+  {
+    "query": "thanks!",
+    "expectedRoute": "skip",
+    "category": "meta",
+    "description": "Thank you should skip"
+  },
+  {
+    "query": "tell me a joke",
+    "expectedRoute": "skip",
+    "category": "meta",
+    "description": "Non-code request should skip"
+  },
+  {
+    "query": "what model are you using?",
+    "expectedRoute": "skip",
+    "category": "meta",
+    "description": "Meta question about the AI model"
+  },
+  {
+    "query": "how many tokens were injected?",
+    "expectedRoute": "skip",
+    "category": "meta",
+    "description": "Meta question about injection context"
+  },
+  {
+    "query": "who calls handlePromptContext?",
+    "expectedRoute": "R0",
+    "category": "flow",
+    "description": "Caller tracing — matches call_graph concept RE, routes R0 with explicit target fallback"
+  },
+  {
+    "query": "what is called by buildStackTree?",
+    "expectedRoute": "R0",
+    "category": "flow",
+    "description": "Callee tracing — matches call_graph concept RE, routes R0 with explicit target fallback"
+  }
+]
