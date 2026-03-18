@@ -57,9 +57,9 @@
   "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "@lancedb/lancedb": "^0.26.2",
+    "@lancedb/lancedb": "^0.27.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "apache-arrow": "^21.1.0",
+    "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.3",
