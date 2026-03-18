@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] — 2026-03-18
+
+### Fixes
+
+- Fix peer dependency conflict: downgrade `apache-arrow` from `^21.1.0` to `^18.1.0` (lancedb only supports `<=18.1.0`)
+- Bump `@lancedb/lancedb` from `^0.26.2` to `^0.27.0`
+
 ## [0.2.0] — 2026-03-18
 
 ### Features
