@@ -71,7 +71,7 @@ function isExported(node: SyntaxNode): boolean {
     if (current.type === "export_statement") return true;
     // Don't walk past function/class boundaries
     if (
-      ["function_declaration", "class_declaration", "method_definition"].includes(
+      ["function_declaration", "class_declaration", "method_definition", "arrow_function"].includes(
         current.type
       )
     ) {

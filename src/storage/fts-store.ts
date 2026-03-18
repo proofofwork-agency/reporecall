@@ -24,9 +24,6 @@ export class FTSStore {
   private upsertInsertStmt!: Database.Statement;
   private removeByFileStmt!: Database.Statement;
   private searchStmt!: Database.Statement;
-  private bulkRemoveStmt!: Database.Statement;
-  private bulkUpsertDeleteStmt!: Database.Statement;
-  private bulkUpsertInsertStmt!: Database.Statement;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "fts.db");
@@ -81,12 +78,6 @@ export class FTSStore {
        ORDER BY rank
        LIMIT ?`
     );
-    this.bulkRemoveStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`);
-    this.bulkUpsertDeleteStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`);
-    this.bulkUpsertInsertStmt = this.db.prepare(
-      `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
   }
 
   upsert(chunk: {
@@ -118,7 +109,7 @@ export class FTSStore {
     if (filePaths.length === 0) return;
     this.db.transaction(() => {
       for (const filePath of filePaths) {
-        this.bulkRemoveStmt.run(filePath);
+        this.removeByFileStmt.run(filePath);
       }
     })();
   }
@@ -165,8 +156,8 @@ export class FTSStore {
   bulkUpsert(chunks: Array<{ id: string; name: string; filePath: string; content: string; kind: string }>): void {
     this.db.transaction(() => {
       for (const chunk of chunks) {
-        this.bulkUpsertDeleteStmt.run(chunk.id);
-        this.bulkUpsertInsertStmt.run(
+        this.upsertDeleteStmt.run(chunk.id);
+        this.upsertInsertStmt.run(
           chunk.id,
           splitIdentifiers(chunk.name),
           splitIdentifiers(chunk.filePath),

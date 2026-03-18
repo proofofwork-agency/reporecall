@@ -34,6 +34,21 @@ export interface PipelineDependencies {
   merkle?: MerkleTree;
 }
 
+function buildImportRecords(
+  rawImports: Array<{ importedName: string; sourceModule: string; isDefault: boolean; isNamespace: boolean }>,
+  relPath: string,
+  projectRoot: string
+): ImportRecord[] {
+  return rawImports.map((raw) => ({
+    filePath: relPath,
+    importedName: raw.importedName,
+    sourceModule: raw.sourceModule,
+    resolvedPath: resolveImportPath(raw.sourceModule, relPath, projectRoot),
+    isDefault: raw.isDefault,
+    isNamespace: raw.isNamespace,
+  }));
+}
+
 export class IndexingPipeline {
   private config: MemoryConfig;
   private embedder: EmbeddingProvider;
@@ -145,16 +160,7 @@ export class IndexingPipeline {
         allCallEdges.push(...callEdges);
 
         // Resolve and collect import records
-        for (const raw of rawImports) {
-          allImportRecords.push({
-            filePath: change.path,
-            importedName: raw.importedName,
-            sourceModule: raw.sourceModule,
-            resolvedPath: resolveImportPath(raw.sourceModule, change.path, this.config.projectRoot),
-            isDefault: raw.isDefault,
-            isNamespace: raw.isNamespace,
-          });
-        }
+        allImportRecords.push(...buildImportRecords(rawImports, change.path, this.config.projectRoot));
 
         successfulFiles.add(change.path);
       } catch (err) {
@@ -410,15 +416,7 @@ export class IndexingPipeline {
 
         // Store import records (before call edges so resolution can query them)
         if (rawImports.length > 0) {
-          const importRecords: ImportRecord[] = rawImports.map((raw) => ({
-            filePath: relPath,
-            importedName: raw.importedName,
-            sourceModule: raw.sourceModule,
-            resolvedPath: resolveImportPath(raw.sourceModule, relPath, this.config.projectRoot),
-            isDefault: raw.isDefault,
-            isNamespace: raw.isNamespace,
-          }));
-          this.metadata.upsertImports(importRecords);
+          this.metadata.upsertImports(buildImportRecords(rawImports, relPath, this.config.projectRoot));
         }
 
         // Resolve call edge targets using stored imports and chunks

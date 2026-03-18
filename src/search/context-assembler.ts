@@ -475,6 +475,9 @@ export function assembleFlowContext(
     const seedTokens = countTokens(seedSection);
 
     // Seed always gets included even if it fills the budget
+    if (seedTokens > tokenBudget - SUMMARY_RESERVE) {
+      log.warn({ seedName: tree.seed.name, seedTokens, tokenBudget }, "seed chunk exceeds token budget — callers/callees may be truncated");
+    }
     totalTokens += seedTokens;
     included.push(seedResult);
 
