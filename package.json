@@ -34,7 +34,7 @@
     "README.md",
     "LICENSE"
   ],
-  "author": "Danillo Felix",
+  "author": "ProofOfWork / Danillo Felix <danillo@proofofwork.agency>",
   "bin": {
     "reporecall": "./dist/memory.js",
     "memory": "./dist/memory.js"
