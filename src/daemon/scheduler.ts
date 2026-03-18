@@ -24,7 +24,7 @@ export class IndexScheduler {
   }
 
   drain(): Promise<void> {
-    if (!this.processing) return Promise.resolve();
+    if (!this.processing && !this.flushScheduled) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.flushDoneCallbacks.push(resolve);
     });

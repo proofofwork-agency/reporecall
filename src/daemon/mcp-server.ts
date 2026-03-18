@@ -74,6 +74,8 @@ export function createMCPServer(
         query: z.string().min(1).describe('Search query'),
         limit: z
           .number()
+          .int()
+          .min(1)
           .max(500)
           .optional()
           .describe('Max results (default 20)'),

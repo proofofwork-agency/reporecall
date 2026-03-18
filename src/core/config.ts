@@ -55,7 +55,7 @@ const UserConfigSchema = z.object({
   ollamaUrl: z.string().url().refine((u) => {
     const h = new URL(u).hostname;
     return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
-  }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or ::1)" }).optional(),
+  }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or [::1])" }).optional(),
   extensions: z.array(z.string()).optional(),
   ignorePatterns: z.array(z.string()).optional(),
   maxFileSize: z.number().positive().optional(),
