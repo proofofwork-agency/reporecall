@@ -209,6 +209,7 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
   });
   res.end(JSON.stringify(data));
 }
@@ -700,12 +701,9 @@ export function createDaemonServer(
           // so no interleaving is possible within this block
           metadata.recordLatency(elapsed);
           metadata.incrementRouteStat(route);
-          const hooksCount = parseInt(metadata.getStat("hooksFireCount") ?? "0", 10);
-          metadata.setStat("hooksFireCount", String(hooksCount + 1));
-          const totalTokens = parseInt(metadata.getStat("totalTokensInjected") ?? "0", 10);
-          metadata.setStat("totalTokensInjected", String(totalTokens + context.tokenCount));
-          const chunksServed = parseInt(metadata.getStat("chunksServed") ?? "0", 10);
-          metadata.setStat("chunksServed", String(chunksServed + context.chunks.length));
+          metadata.incrementStat("hooksFireCount");
+          metadata.incrementStat("totalTokensInjected", context.tokenCount);
+          metadata.incrementStat("chunksServed", context.chunks.length);
 
           if (debugMode) {
             res.setHeader("X-Memory-Debug", JSON.stringify({

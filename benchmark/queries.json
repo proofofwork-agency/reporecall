@@ -166,5 +166,23 @@
     "expectedRoute": "R0",
     "category": "flow",
     "description": "Callee tracing — matches call_graph concept RE, routes R0 with explicit target fallback"
+  },
+  {
+    "query": "Explain how the vector search pipeline processes queries end-to-end",
+    "expectedRoute": "R2",
+    "category": "architecture",
+    "description": "Deep architectural flow — no identifiable seed symbol"
+  },
+  {
+    "query": "Describe the complete workflow when a user submits a prompt to the daemon",
+    "expectedRoute": "R2",
+    "category": "flow",
+    "description": "Vague navigational query without explicit target"
+  },
+  {
+    "query": "How does the system handle graceful shutdown across all storage layers?",
+    "expectedRoute": "R2",
+    "category": "debugging",
+    "description": "Broad recovery question without seed symbol"
   }
 ]

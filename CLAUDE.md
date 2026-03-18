@@ -37,7 +37,7 @@ reporecall index
 - Creates `.memory/` for indexes and config
 - Generates `.claude/settings.json` with `$CLAUDE_PROJECT_DIR` hooks (portable & reliable)
 - Auto-generates `.mcp.json` with MCP server config
-- Both are committed to git; teammates sync automatically
+- `.mcp.json` is committed and syncs automatically. Hooks in `.claude/settings.json` are generated per-machine — each teammate runs `reporecall init` once after cloning.
 
 **Machine-specific overrides:**
 Create `.claude/settings.local.json` (gitignored):
@@ -50,5 +50,5 @@ Create `.claude/settings.local.json` (gitignored):
 
 Claude Code merges this over `.claude/settings.json`, so each team member can customize locally without affecting the shared config.
 
-**No re-running init needed** — hooks work immediately after clone because `$CLAUDE_PROJECT_DIR` is automatically resolved by Claude Code.
+**Each teammate runs `reporecall init` once after cloning.** After that, no re-running is needed.
 <!-- reporecall -->

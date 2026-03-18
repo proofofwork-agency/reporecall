@@ -6,6 +6,7 @@ export class StatsStore {
   private setStatStmt!: Database.Statement;
   private getStatStmt!: Database.Statement;
   private incrementRouteStatStmt!: Database.Statement;
+  private incrementStatStmt!: Database.Statement;
   private insertLatencyStmt!: Database.Statement;
   private pruneLatenciesStmt!: Database.Statement;
   private countLatenciesStmt!: Database.Statement;
@@ -36,6 +37,10 @@ export class StatsStore {
     this.incrementRouteStatStmt = this.db.prepare(
       `INSERT INTO stats (key, value) VALUES (?, '1')
        ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`
+    );
+    this.incrementStatStmt = this.db.prepare(
+      `INSERT INTO stats (key, value) VALUES (?, CAST(? AS TEXT))
+       ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT)`
     );
     this.insertLatencyStmt = this.db.prepare(
       `INSERT INTO search_latencies (timestamp, latency_ms) VALUES (?, ?)`
@@ -72,6 +77,10 @@ export class StatsStore {
   incrementRouteStat(route: "skip" | "R0" | "R1" | "R2"): void {
     const key = `route_${route}_count`;
     this.incrementRouteStatStmt.run(key);
+  }
+
+  incrementStat(key: string, delta: number = 1): void {
+    this.incrementStatStmt.run(key, delta, delta);
   }
 
   recordLatency(latencyMs: number): void {

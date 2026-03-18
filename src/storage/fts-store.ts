@@ -20,6 +20,13 @@ function splitIdentifiers(text: string): string {
 
 export class FTSStore {
   private db: Database.Database;
+  private upsertDeleteStmt!: Database.Statement;
+  private upsertInsertStmt!: Database.Statement;
+  private removeByFileStmt!: Database.Statement;
+  private searchStmt!: Database.Statement;
+  private bulkRemoveStmt!: Database.Statement;
+  private bulkUpsertDeleteStmt!: Database.Statement;
+  private bulkUpsertInsertStmt!: Database.Statement;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "fts.db");
@@ -60,6 +67,26 @@ export class FTSStore {
         tokenize = 'porter'
       );
     `);
+
+    // Cache prepared statements
+    this.upsertDeleteStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`);
+    this.upsertInsertStmt = this.db.prepare(
+      `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    this.removeByFileStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`);
+    this.searchStmt = this.db.prepare(
+      `SELECT id, rank FROM chunks_fts
+       WHERE chunks_fts MATCH ?
+       ORDER BY rank
+       LIMIT ?`
+    );
+    this.bulkRemoveStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`);
+    this.bulkUpsertDeleteStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`);
+    this.bulkUpsertInsertStmt = this.db.prepare(
+      `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
   }
 
   upsert(chunk: {
@@ -71,35 +98,27 @@ export class FTSStore {
   }): void {
     this.db.transaction(() => {
       // Delete existing entry if any
-      this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`).run(chunk.id);
-      this.db
-        .prepare(
-          `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          chunk.id,
-          splitIdentifiers(chunk.name),
-          splitIdentifiers(chunk.filePath),
-          splitIdentifiers(chunk.content),
-          chunk.kind,
-          chunk.filePath
-        );
+      this.upsertDeleteStmt.run(chunk.id);
+      this.upsertInsertStmt.run(
+        chunk.id,
+        splitIdentifiers(chunk.name),
+        splitIdentifiers(chunk.filePath),
+        splitIdentifiers(chunk.content),
+        chunk.kind,
+        chunk.filePath
+      );
     })();
   }
 
   removeByFile(filePath: string): void {
-    this.db
-      .prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`)
-      .run(filePath);
+    this.removeByFileStmt.run(filePath);
   }
 
   bulkRemoveByFiles(filePaths: string[]): void {
     if (filePaths.length === 0) return;
-    const stmt = this.db.prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`);
     this.db.transaction(() => {
       for (const filePath of filePaths) {
-        stmt.run(filePath);
+        this.bulkRemoveStmt.run(filePath);
       }
     })();
   }
@@ -138,28 +157,16 @@ export class FTSStore {
   }
 
   private runFtsQuery(ftsQuery: string, limit: number): FTSResult[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, rank FROM chunks_fts
-         WHERE chunks_fts MATCH ?
-         ORDER BY rank
-         LIMIT ?`
-      )
-      .all(ftsQuery, limit) as Array<{ id: string; rank: number }>;
+    const rows = this.searchStmt.all(ftsQuery, limit) as Array<{ id: string; rank: number }>;
 
     return rows.map((r) => ({ id: r.id, rank: r.rank }));
   }
 
   bulkUpsert(chunks: Array<{ id: string; name: string; filePath: string; content: string; kind: string }>): void {
-    const deleteStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`);
-    const insertStmt = this.db.prepare(
-      `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
     this.db.transaction(() => {
       for (const chunk of chunks) {
-        deleteStmt.run(chunk.id);
-        insertStmt.run(
+        this.bulkUpsertDeleteStmt.run(chunk.id);
+        this.bulkUpsertInsertStmt.run(
           chunk.id,
           splitIdentifiers(chunk.name),
           splitIdentifiers(chunk.filePath),

@@ -2,6 +2,14 @@ import type Database from "better-sqlite3";
 import type { CallEdge } from "../analysis/call-graph.js";
 
 export class CallEdgeStore {
+  private insertStmt!: Database.Statement;
+  private deleteStmt!: Database.Statement;
+  private removeFileStmt!: Database.Statement;
+  private findCallersStmt!: Database.Statement;
+  private findCallersWithFileStmt!: Database.Statement;
+  private findCalleesStmt!: Database.Statement;
+  private findCalleesForChunkStmt!: Database.Statement;
+
   constructor(private readonly db: Database.Database) {}
 
   initSchema(): void {
@@ -33,25 +41,57 @@ export class CallEdgeStore {
       CREATE INDEX IF NOT EXISTS idx_call_edges_target_file ON call_edges(target_name, target_file_path);
       CREATE INDEX IF NOT EXISTS idx_call_edges_file ON call_edges(file_path);
     `);
+
+    // Cache prepared statements
+    this.insertStmt = this.db.prepare(
+      `INSERT INTO call_edges (source_chunk_id, target_name, call_type, file_path, line, receiver, target_file_path) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.deleteStmt = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
+    this.removeFileStmt = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
+    this.findCallersStmt = this.db.prepare(
+      `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
+       FROM call_edges ce
+       LEFT JOIN chunks c ON c.id = ce.source_chunk_id
+       WHERE ce.target_name = ?
+       LIMIT ?`
+    );
+    this.findCallersWithFileStmt = this.db.prepare(
+      `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
+       FROM call_edges ce
+       LEFT JOIN chunks c ON c.id = ce.source_chunk_id
+       WHERE ce.target_name = ?
+         AND (ce.target_file_path = ? OR ce.target_file_path IS NULL)
+       ORDER BY CASE WHEN ce.target_file_path = ? THEN 0 ELSE 1 END, ce.line ASC
+       LIMIT ?`
+    );
+    this.findCalleesStmt = this.db.prepare(
+      `SELECT ce.target_name, ce.call_type, ce.line, ce.file_path, ce.receiver, ce.target_file_path
+       FROM call_edges ce
+       JOIN chunks c ON c.id = ce.source_chunk_id
+       WHERE c.name = ?
+       LIMIT ?`
+    );
+    this.findCalleesForChunkStmt = this.db.prepare(
+      `SELECT ce.target_name, ce.call_type, ce.line, ce.file_path, ce.receiver, ce.target_file_path
+       FROM call_edges ce
+       WHERE ce.source_chunk_id = ?
+       LIMIT ?`
+    );
   }
 
   upsertCallEdges(edges: CallEdge[]): void {
     if (edges.length === 0) return;
     const filePaths = [...new Set(edges.map(e => e.filePath))];
-    const del = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
-    const ins = this.db.prepare(
-      `INSERT INTO call_edges (source_chunk_id, target_name, call_type, file_path, line, receiver, target_file_path) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
     this.db.transaction(() => {
-      for (const fp of filePaths) del.run(fp);
+      for (const fp of filePaths) this.deleteStmt.run(fp);
       for (const edge of edges) {
-        ins.run(edge.sourceChunkId, edge.targetName, edge.callType, edge.filePath, edge.line, edge.receiver ?? null, edge.targetFilePath ?? null);
+        this.insertStmt.run(edge.sourceChunkId, edge.targetName, edge.callType, edge.filePath, edge.line, edge.receiver ?? null, edge.targetFilePath ?? null);
       }
     })();
   }
 
   removeCallEdgesForFile(filePath: string): void {
-    this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`).run(filePath);
+    this.removeFileStmt.run(filePath);
   }
 
   findCallers(
@@ -61,26 +101,8 @@ export class CallEdgeStore {
   ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; callerKind?: string; receiver?: string }> {
     const rows = (
       targetFilePath
-        ? this.db
-            .prepare(
-              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
-               FROM call_edges ce
-               LEFT JOIN chunks c ON c.id = ce.source_chunk_id
-               WHERE ce.target_name = ?
-                 AND (ce.target_file_path = ? OR ce.target_file_path IS NULL)
-               ORDER BY CASE WHEN ce.target_file_path = ? THEN 0 ELSE 1 END, ce.line ASC
-               LIMIT ?`
-            )
-            .all(targetName, targetFilePath, targetFilePath, limit)
-        : this.db
-            .prepare(
-              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
-               FROM call_edges ce
-               LEFT JOIN chunks c ON c.id = ce.source_chunk_id
-               WHERE ce.target_name = ?
-               LIMIT ?`
-            )
-            .all(targetName, limit)
+        ? this.findCallersWithFileStmt.all(targetName, targetFilePath, targetFilePath, limit)
+        : this.findCallersStmt.all(targetName, limit)
     ) as Array<{
       source_chunk_id: string;
       file_path: string;
@@ -104,22 +126,14 @@ export class CallEdgeStore {
     sourceName: string,
     limit = 20
   ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
-    const rows = this.db
-      .prepare(
-        `SELECT ce.target_name, ce.call_type, ce.line, ce.file_path, ce.receiver, ce.target_file_path
-         FROM call_edges ce
-         JOIN chunks c ON c.id = ce.source_chunk_id
-         WHERE c.name = ?
-         LIMIT ?`
-      )
-      .all(sourceName, limit) as Array<{
-        target_name: string;
-        call_type: string;
-        line: number;
-        file_path: string;
-        receiver: string | null;
-        target_file_path: string | null;
-      }>;
+    const rows = this.findCalleesStmt.all(sourceName, limit) as Array<{
+      target_name: string;
+      call_type: string;
+      line: number;
+      file_path: string;
+      receiver: string | null;
+      target_file_path: string | null;
+    }>;
 
     return rows.map((r) => ({
       targetName: r.target_name,
@@ -135,21 +149,14 @@ export class CallEdgeStore {
     sourceChunkId: string,
     limit = 20
   ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
-    const rows = this.db
-      .prepare(
-        `SELECT ce.target_name, ce.call_type, ce.line, ce.file_path, ce.receiver, ce.target_file_path
-         FROM call_edges ce
-         WHERE ce.source_chunk_id = ?
-         LIMIT ?`
-      )
-      .all(sourceChunkId, limit) as Array<{
-        target_name: string;
-        call_type: string;
-        line: number;
-        file_path: string;
-        receiver: string | null;
-        target_file_path: string | null;
-      }>;
+    const rows = this.findCalleesForChunkStmt.all(sourceChunkId, limit) as Array<{
+      target_name: string;
+      call_type: string;
+      line: number;
+      file_path: string;
+      receiver: string | null;
+      target_file_path: string | null;
+    }>;
 
     return rows.map((r) => ({
       targetName: r.target_name,

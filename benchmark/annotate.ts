@@ -20,6 +20,7 @@ import { HybridSearch } from "../src/search/hybrid.js";
 import { sanitizeQuery } from "../src/daemon/server.js";
 import { classifyIntent, deriveRoute } from "../src/search/intent.js";
 import { resolveSeeds } from "../src/search/seed.js";
+import { handlePromptContextDetailed } from "../src/hooks/prompt-context.js";
 import { loadConfig } from "../src/core/config.js";
 
 interface QueryEntry {
@@ -100,10 +101,13 @@ async function main() {
       continue;
     }
 
-    const results = await search.search(queryText, { limit: 20 });
+    const promptContext = await handlePromptContextDetailed(
+      queryText, search, config, undefined, undefined, route, metadata, fts
+    );
+    const results = promptContext.context?.chunks ?? [];
 
     console.log(`\n━━━ "${entry.query}" ━━━`);
-    console.log(`  Route: ${route} | Expected: ${entry.expectedRoute}`);
+    console.log(`  Route: ${route} → ${promptContext.resolvedRoute} | Expected: ${entry.expectedRoute}`);
     console.log(`  Results: ${results.length}`);
 
     const relevance: Record<string, number> = {};
@@ -116,7 +120,7 @@ async function main() {
           : r.name;
 
       console.log(
-        `    ${String(i + 1).padStart(2)}. ${key.padEnd(50)} ${r.kind.padEnd(12)} ${r.score.toFixed(4)}`
+        `    ${String(i + 1).padStart(2)}. ${key.padEnd(50)} ${r.kind.padEnd(12)}`
       );
       relevance[key] = 0;
     }

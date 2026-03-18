@@ -520,7 +520,9 @@ export class IndexingPipeline {
     freeEncoder();
     this.metadata.close();
     this.fts.close();
-    this.vectors.close().catch(() => {});
+    this.vectors.close().catch((err) => {
+      getLogger().warn({ err }, '[Pipeline] vectors.close() failed in sync close');
+    });
   }
 
   /** Async close that awaits vector store shutdown to prevent native teardown races. */

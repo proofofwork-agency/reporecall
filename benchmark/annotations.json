@@ -590,6 +590,42 @@
       "category": "meta",
       "expectedRoute": "skip",
       "relevance": {}
+    },
+    {
+      "id": "explain-vector-search-pipeline-end-to-end",
+      "query": "Explain how the vector search pipeline processes queries end-to-end",
+      "category": "architecture",
+      "expectedRoute": "R2",
+      "relevance": {
+        "assembleDeepRouteContext": 3,
+        "buildDeepRouteContext": 3,
+        "searchWithContext": 2,
+        "search": 2
+      }
+    },
+    {
+      "id": "describe-workflow-user-submits-prompt-to-daemon",
+      "query": "Describe the complete workflow when a user submits a prompt to the daemon",
+      "category": "flow",
+      "expectedRoute": "R2",
+      "relevance": {
+        "handlePromptContextDetailed": 3,
+        "handleSessionStart": 3,
+        "serve": 2,
+        "startDaemon": 2
+      }
+    },
+    {
+      "id": "graceful-shutdown-across-storage-layers",
+      "query": "How does the system handle graceful shutdown across all storage layers?",
+      "category": "debugging",
+      "expectedRoute": "R2",
+      "relevance": {
+        "closeAsync": 3,
+        "shutdown": 3,
+        "pipeline": 2,
+        "drain": 2
+      }
     }
   ]
 }

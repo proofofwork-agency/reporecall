@@ -6,12 +6,13 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { mkdirSync } from "fs";
-import type { MemoryConfig } from "../../src/core/config.js";
+import { loadConfig } from "../../src/core/config.js";
 import { IndexingPipeline } from "../../src/indexer/pipeline.js";
 import { HybridSearch } from "../../src/search/hybrid.js";
 import { sanitizeQuery } from "../../src/daemon/server.js";
 import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
 import { resolveSeeds } from "../../src/search/seed.js";
+import { handlePromptContextDetailed } from "../../src/hooks/prompt-context.js";
 import { computeAllMetrics } from "./metrics.js";
 
 // ─── Types ───
@@ -83,52 +84,17 @@ interface AnnotationsFile {
 
 // ─── Helpers ───
 
-function makeConfig(
+function makeBenchmarkConfig(
   projectRoot: string,
   dataDir: string,
-  provider: MemoryConfig["embeddingProvider"]
-): MemoryConfig {
+  provider: "keyword" | "local"
+) {
+  const baseConfig = loadConfig(projectRoot);
   return {
-    projectRoot,
+    ...baseConfig,
     dataDir,
     embeddingProvider: provider,
-    embeddingModel: "Xenova/all-MiniLM-L6-v2",
-    embeddingDimensions: 384,
-    ollamaUrl: "http://localhost:11434",
-    extensions: [
-      ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java",
-      ".c", ".cpp", ".h", ".hpp", ".rb", ".swift", ".kt", ".scala",
-      ".vue", ".svelte", ".css", ".scss", ".sql", ".sh", ".bash",
-      ".yaml", ".yml", ".toml", ".json", ".md",
-    ],
-    ignorePatterns: [
-      "node_modules", ".git", ".memory", ".memory-*", "dist", "build", "target",
-      "__pycache__", ".next", ".nuxt", "vendor", "coverage",
-      "*.min.js", "*.min.css", "*.map", "*.lock", "package-lock.json",
-      "benchmark", "scripts",
-    ],
-    maxFileSize: 100 * 1024,
-    batchSize: 32,
-    contextBudget: 4000,
-    maxContextChunks: 5,
-    sessionBudget: 2000,
-    searchWeights: { vector: 0.5, keyword: 0.3, recency: 0.2 },
-    rrfK: 60,
-    graphExpansion: false,
-    graphDiscountFactor: 0.6,
-    siblingExpansion: false,
-    siblingDiscountFactor: 0.4,
-    reranking: false,
-    rerankingModel: "Xenova/ms-marco-MiniLM-L-6-v2",
-    rerankTopK: 25,
-    codeBoostFactor: 1.5,
-    testPenaltyFactor: 0.3,
-    anonymousPenaltyFactor: 0.5,
-    debounceMs: 2000,
-    port: 37222,
-    implementationPaths: ["src/", "lib/", "bin/"],
-    factExtractors: [],
-    conceptBundles: [],
+    ignorePatterns: [...baseConfig.ignorePatterns, "benchmark", "scripts"],
   };
 }
 
@@ -172,8 +138,8 @@ export async function runLiveBenchmark(
   const dataDir = join(projectRoot, `.memory-live-benchmark-${Date.now()}`);
   mkdirSync(dataDir, { recursive: true });
 
-  const provider = mode === "keyword" ? "keyword" : "local";
-  const config = makeConfig(projectRoot, dataDir, provider);
+  const provider = mode === "keyword" ? "keyword" as const : "local" as const;
+  const config = makeBenchmarkConfig(projectRoot, dataDir, provider);
 
   const pipeline = new IndexingPipeline(config);
   await pipeline.indexAll();
@@ -234,15 +200,20 @@ export async function runLiveBenchmark(
       route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
     }
 
-    actualRoute = route;
-
     if (route !== "skip") {
-      const results = await search.search(queryText, { limit: 20 });
-      resultsFound = results.length;
-      retrievedNames = results.map((r) => r.name);
-      retrievedGrades = results.map((r) =>
-        lookupGrade(r.name, r.filePath, aq.relevance)
+      const promptContext = await handlePromptContextDetailed(
+        queryText, search, config, undefined, undefined, route, metadata, fts
       );
+      actualRoute = promptContext.resolvedRoute;
+      if (promptContext.context) {
+        retrievedNames = promptContext.context.chunks.map((r) => r.name);
+        retrievedGrades = promptContext.context.chunks.map((r) =>
+          lookupGrade(r.name, r.filePath, aq.relevance)
+        );
+        resultsFound = promptContext.context.chunks.length;
+      }
+    } else {
+      actualRoute = "skip";
     }
 
     const searchLatencyMs =

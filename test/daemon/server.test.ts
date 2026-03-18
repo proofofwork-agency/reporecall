@@ -63,6 +63,7 @@ function makeMetadata(overrides?: Partial<any>): any {
     setStat: () => {},
     recordLatency: () => {},
     incrementRouteStat: () => {},
+    incrementStat: () => {},
     getConventions: () => null,
     getLatencyPercentiles: () => ({ avg: 0, p50: 0, p95: 0, count: 0 }),
     close: () => {},

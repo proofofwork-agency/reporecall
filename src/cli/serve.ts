@@ -17,6 +17,7 @@ import { FileWatcher } from '../daemon/watcher.js'
 import { IndexScheduler } from '../daemon/scheduler.js'
 import { createDaemonServer } from '../daemon/server.js'
 import { ReadWriteLock } from '../core/rwlock.js'
+import { freeEncoder } from '../search/context-assembler.js'
 import { OllamaEmbedder } from '../indexer/embedder.js'
 import { createMCPServer } from '../daemon/mcp-server.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -333,23 +334,27 @@ export function serveCommand(): Command {
             })
           })
 
-          // Step 2: Stop file watcher (no more change events)
+          // Step 2: Stop scheduler and drain pending jobs
+          scheduler.stop();
+          await scheduler.drain();
+
+          // Step 3: Stop file watcher (no more change events)
           await watcher.stop()
 
-          // Step 3: Close MCP server if running
+          // Step 4: Close MCP server if running
           if (mcpServer) {
             await mcpServer.close()
           }
 
-          // Step 4: Destroy metrics collector (stop timers, disable histogram)
+          // Step 5: Destroy metrics collector (stop timers, disable histogram)
           metrics.destroy()
 
-          // Step 5: Close all stores in order (FTS, metadata, vector via pipeline)
+          // Step 6: Close all stores in order (FTS, metadata, vector via pipeline)
           // Await vector store close to prevent native library teardown race
           // that can cause libc++abi mutex errors on process exit.
           await pipeline.closeAsync()
 
-          // Step 6: Clean up SQLite WAL sidecars for a clean next startup
+          // Step 7: Clean up SQLite WAL sidecars for a clean next startup
           const sidecarFiles = [
             resolve(config.dataDir, 'metadata.db-wal'),
             resolve(config.dataDir, 'metadata.db-shm'),
@@ -367,7 +372,7 @@ export function serveCommand(): Command {
           log.error({ err }, 'Error during shutdown')
         }
 
-        // Step 7: Remove PID file and release advisory lock
+        // Step 8: Remove PID file and release advisory lock
         if (pidFd !== undefined) {
           try {
             closeSync(pidFd)
@@ -381,7 +386,7 @@ export function serveCommand(): Command {
           // ignore — may have already been removed
         }
 
-        // Step 8: Remove token file
+        // Step 9: Remove token file
         try {
           unlinkSync(tokenPath)
         } catch (err) {
@@ -391,7 +396,10 @@ export function serveCommand(): Command {
           )
         }
 
-        // Step 9: Flush pino logger before exiting to ensure all log lines are written
+        // Step 10: Free tiktoken WASM encoder
+        freeEncoder()
+
+        // Step 11: Flush pino logger before exiting to ensure all log lines are written
         log.flush()
 
         // All handles closed/unreffed — Node.js will exit naturally.

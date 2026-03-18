@@ -52,7 +52,10 @@ const UserConfigSchema = z.object({
   embeddingProvider: z.enum(["local", "ollama", "openai", "keyword"]).optional(),
   embeddingModel: z.string().optional(),
   embeddingDimensions: z.number().int().min(1).optional(),
-  ollamaUrl: z.string().url().optional(),
+  ollamaUrl: z.string().url().refine((u) => {
+    const h = new URL(u).hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "::1";
+  }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or ::1)" }).optional(),
   extensions: z.array(z.string()).optional(),
   ignorePatterns: z.array(z.string()).optional(),
   maxFileSize: z.number().positive().optional(),
@@ -157,6 +160,36 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
       symbols: ["classifyIntent", "deriveRoute", "handlePromptContextDetailed", "searchWithContext", "search", "resolveSeeds"],
       maxChunks: 5,
     },
+    {
+      kind: "storage",
+      pattern: "\\bstorage\\s+layer\\b|\\bstorage\\s+design\\b|\\bdata\\s+stores?\\b|\\bpersist",
+      symbols: ["MetadataStore", "FTSStore", "ChunkStore", "CallEdgeStore", "ImportStore", "StatsStore", "ConventionsStore"],
+      maxChunks: 5,
+    },
+    {
+      kind: "daemon",
+      pattern: "\\bdaemon\\b|\\bhttp\\s+server\\b|\\bserver\\s+architect",
+      symbols: ["createDaemonServer", "handlePromptContext", "sanitizeQuery", "IndexScheduler"],
+      maxChunks: 4,
+    },
+    {
+      kind: "embedding",
+      pattern: "\\bembedding\\s+(provider|handled|across)\\b|\\bembedder\\b|\\bvector\\s+encod",
+      symbols: ["EmbeddingProvider", "LocalEmbedder", "NullEmbedder", "OllamaEmbedder", "createEmbedder"],
+      maxChunks: 4,
+    },
+    {
+      kind: "cli",
+      pattern: "\\bcli\\b|\\bcommand\\s+struct|\\bcommand\\s+line\\b",
+      symbols: ["createCLI", "initCommand", "searchCommand", "serveCommand", "explainCommand", "mcpCommand"],
+      maxChunks: 5,
+    },
+    {
+      kind: "context_assembly",
+      pattern: "\\btoken\\s+budget\\b|\\bcontext\\s+assembl|\\bbudget\\s+strat",
+      symbols: ["assembleContext", "assembleConceptContext", "assembleDeepRouteContext", "AssembledContext", "countTokens"],
+      maxChunks: 5,
+    },
   ],
 };
 
@@ -216,8 +249,20 @@ export function loadConfig(projectRoot: string): MemoryConfig {
     });
   }
 
+  // Validate conceptBundle patterns: reject unsafe regex (same protection as factExtractors)
+  if (merged.conceptBundles && merged.conceptBundles.length > 0) {
+    const log = getLogger();
+    merged.conceptBundles = merged.conceptBundles.filter((bundle) => {
+      if (!safe(bundle.pattern)) {
+        log.warn(`Rejected conceptBundle pattern "${bundle.pattern}" (kind: ${bundle.kind}): potential ReDoS (exponential backtracking)`);
+        return false;
+      }
+      return true;
+    });
+  }
+
   // H-1: Never load API keys from config file — env var only
-  if ((userConfig as any).openaiApiKey) {
+  if ("openaiApiKey" in (userConfig as Record<string, unknown>)) {
     getLogger().warn("openaiApiKey in config file is ignored for security. Use OPENAI_API_KEY env var.");
   }
 

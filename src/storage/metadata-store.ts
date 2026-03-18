@@ -136,6 +136,10 @@ export class MetadataStore {
     this.stats.incrementRouteStat(route);
   }
 
+  incrementStat(key: string, delta: number = 1): void {
+    this.stats.incrementStat(key, delta);
+  }
+
   recordLatency(latencyMs: number): void {
     this.stats.recordLatency(latencyMs);
   }

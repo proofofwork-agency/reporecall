@@ -11,15 +11,29 @@ export class IndexScheduler {
   private lock: ReadWriteLock | undefined;
   private retryCount = new Map<string, number>();
   private readonly MAX_RETRIES = 3;
+  private stopped = false;
+  private flushDoneCallbacks: Array<() => void> = [];
 
   constructor(pipeline: IndexingPipeline, lock?: ReadWriteLock) {
     this.pipeline = pipeline;
     this.lock = lock;
   }
 
+  stop(): void {
+    this.stopped = true;
+  }
+
+  drain(): Promise<void> {
+    if (!this.processing) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.flushDoneCallbacks.push(resolve);
+    });
+  }
+
   enqueue(
     changes: Array<{ path: string; type: "add" | "change" | "unlink" }>
   ): void {
+    if (this.stopped) return;
     const log = getLogger();
 
     for (const change of changes) {
@@ -129,6 +143,12 @@ export class IndexScheduler {
       log.error(`Index scheduler error: ${err}`);
     } finally {
       this.processing = false;
+
+      // Notify drain() waiters that flush is complete
+      const cbs = this.flushDoneCallbacks;
+      this.flushDoneCallbacks = [];
+      for (const cb of cbs) cb();
+
       // If new items arrived during processing, flush again
       if (this.queue.size > 0 || this.deleteQueue.size > 0) {
         this.scheduleFlush();

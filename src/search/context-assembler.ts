@@ -32,7 +32,7 @@ export interface AssembleOptions {
   factExtractors?: Array<{ keyword: string; pattern: string; label: string }>;
 }
 
-export type ConceptContextKind = "ast" | "call_graph" | "search_pipeline";
+export type ConceptContextKind = "ast" | "call_graph" | "search_pipeline" | "storage" | "daemon" | "embedding" | "cli" | "context_assembly" | (string & {});
 
 export function assembleContext(
   results: SearchResult[],
@@ -299,30 +299,57 @@ function buildConceptFacts(
 ): string[] {
   const byName = new Map(chunks.map((chunk) => [chunk.name, chunk]));
 
-  if (kind === "ast") {
-    const facts = [
-      `Main entry point: ${describeChunk(byName.get("chunkFileWithCalls")) ?? "`chunkFileWithCalls`"} parses a file, builds the syntax tree, and orchestrates chunk, import, and call-edge extraction.`,
-      `Parser setup: ${describeChunk(byName.get("initTreeSitter")) ?? "`initTreeSitter`"} initializes Tree-sitter, and ${describeChunk(byName.get("createParser")) ?? "`createParser`"} creates the parser instance for the loaded grammar.`,
-      `AST traversal: ${describeChunk(byName.get("walkForExtractables")) ?? "`walkForExtractables`"} walks the tree for extractable nodes, while ${describeChunk(byName.get("extractName")) ?? "`extractName`"} derives stable symbol names for chunks.`,
-    ];
-    return facts.map((fact) => `- ${fact}`);
+  const CONCEPT_FACTS: Record<string, (m: Map<string, SearchResult>) => string[]> = {
+    ast: (m) => [
+      `Main entry point: ${describeChunk(m.get("chunkFileWithCalls")) ?? "`chunkFileWithCalls`"} parses a file, builds the syntax tree, and orchestrates chunk, import, and call-edge extraction.`,
+      `Parser setup: ${describeChunk(m.get("initTreeSitter")) ?? "`initTreeSitter`"} initializes Tree-sitter, and ${describeChunk(m.get("createParser")) ?? "`createParser`"} creates the parser instance for the loaded grammar.`,
+      `AST traversal: ${describeChunk(m.get("walkForExtractables")) ?? "`walkForExtractables`"} walks the tree for extractable nodes, while ${describeChunk(m.get("extractName")) ?? "`extractName`"} derives stable symbol names for chunks.`,
+    ],
+    call_graph: (m) => [
+      `Main entry point: ${describeChunk(m.get("extractCallEdges")) ?? "`extractCallEdges`"} walks AST call sites and emits persisted call edges.`,
+      `Callee resolution: ${describeChunk(m.get("extractCalleeInfo")) ?? "`extractCalleeInfo`"} resolves the callee name and receiver, and ${describeChunk(m.get("extractReceiver")) ?? "`extractReceiver`"} normalizes chained member receivers.`,
+      `Consumers: ${describeChunk(m.get("graphCommand")) ?? "`graphCommand`"} exposes the CLI view, and ${describeChunk(m.get("buildStackTree")) ?? "`buildStackTree`"} builds higher-level caller/callee navigation from stored edges.`,
+    ],
+    search_pipeline: (m) => [
+      `Routing: ${describeChunk(m.get("classifyIntent")) ?? "`classifyIntent`"} classifies the query, ${describeChunk(m.get("deriveRoute")) ?? "`deriveRoute`"} selects skip/R0/R1/R2, and ${describeChunk(m.get("handlePromptContextDetailed")) ?? "`handlePromptContextDetailed`"} dispatches the chosen route.`,
+      `R0 retrieval: ${describeChunk(m.get("searchWithContext")) ?? "`searchWithContext`"} builds the prompt bundle, while ${describeChunk(m.get("search")) ?? "`search`"} runs retrieve, fuse, expand, and hydrate/rerank.`,
+      `Navigational path: ${describeChunk(m.get("resolveSeeds")) ?? "`resolveSeeds`"} chooses seeds for R1 flow traces, and weak or ambiguous navigational results degrade to the low-confidence deep route.`,
+    ],
+    storage: (m) => [
+      `Facade: ${describeChunk(m.get("MetadataStore")) ?? "`MetadataStore`"} delegates to sub-stores for chunks, call edges, stats, conventions, and imports.`,
+      `Keyword search: ${describeChunk(m.get("FTSStore")) ?? "`FTSStore`"} provides FTS5 full-text search with Porter stemming and camelCase splitting.`,
+      `Chunk persistence: ${describeChunk(m.get("ChunkStore")) ?? "`ChunkStore`"} stores parsed code chunks with schema migrations and batch queries.`,
+    ],
+    daemon: (m) => [
+      `Server: ${describeChunk(m.get("createDaemonServer")) ?? "`createDaemonServer`"} creates the HTTP server with bearer auth, rate limiting, and hook endpoints.`,
+      `Query processing: ${describeChunk(m.get("sanitizeQuery")) ?? "`sanitizeQuery`"} strips code fragments from hook payloads before intent classification.`,
+      `Incremental updates: ${describeChunk(m.get("IndexScheduler")) ?? "`IndexScheduler`"} queues file changes from the watcher and flushes them through the pipeline.`,
+    ],
+    embedding: (m) => [
+      `Local embedder: ${describeChunk(m.get("LocalEmbedder")) ?? "`LocalEmbedder`"} runs all-MiniLM-L6-v2 in-process via ONNX for zero-dependency vector encoding.`,
+      `Keyword fallback: ${describeChunk(m.get("NullEmbedder")) ?? "`NullEmbedder`"} provides a no-op embedder for keyword-only mode.`,
+      `Remote provider: ${describeChunk(m.get("OllamaEmbedder")) ?? "`OllamaEmbedder`"} connects to Ollama with circuit breaker and retry logic.`,
+    ],
+    cli: (m) => [
+      `Entry point: ${describeChunk(m.get("createCLI")) ?? "`createCLI`"} registers all commands using Commander.`,
+      `Initialization: ${describeChunk(m.get("initCommand")) ?? "`initCommand`"} sets up .memory/, hooks, and .mcp.json configuration.`,
+      `Daemon startup: ${describeChunk(m.get("serveCommand")) ?? "`serveCommand`"} manages the daemon lifecycle with PID locking and graceful shutdown.`,
+    ],
+    context_assembly: (m) => [
+      `Standard assembly: ${describeChunk(m.get("assembleContext")) ?? "`assembleContext`"} builds token-budgeted context from ranked search results.`,
+      `Concept assembly: ${describeChunk(m.get("assembleConceptContext")) ?? "`assembleConceptContext`"} builds subsystem-specific context bundles with targeted facts.`,
+      `Token counting: ${describeChunk(m.get("countTokens")) ?? "`countTokens`"} uses tiktoken gpt-4o encoding for accurate budget tracking.`,
+    ],
+  };
+
+  const factBuilder = CONCEPT_FACTS[kind];
+  if (factBuilder) {
+    return factBuilder(byName).map((fact) => `- ${fact}`);
   }
 
-  if (kind === "search_pipeline") {
-    const facts = [
-      `Routing: ${describeChunk(byName.get("classifyIntent")) ?? "`classifyIntent`"} classifies the query, ${describeChunk(byName.get("deriveRoute")) ?? "`deriveRoute`"} selects skip/R0/R1/R2, and ${describeChunk(byName.get("handlePromptContextDetailed")) ?? "`handlePromptContextDetailed`"} dispatches the chosen route.`,
-      `R0 retrieval: ${describeChunk(byName.get("searchWithContext")) ?? "`searchWithContext`"} builds the prompt bundle, while ${describeChunk(byName.get("search")) ?? "`search`"} runs retrieve, fuse, expand, and hydrate/rerank.`,
-      `Navigational path: ${describeChunk(byName.get("resolveSeeds")) ?? "`resolveSeeds`"} chooses seeds for R1 flow traces, and weak or ambiguous navigational results degrade to the low-confidence deep route.`,
-    ];
-    return facts.map((fact) => `- ${fact}`);
-  }
-
-  const facts = [
-    `Main entry point: ${describeChunk(byName.get("extractCallEdges")) ?? "`extractCallEdges`"} walks AST call sites and emits persisted call edges.`,
-    `Callee resolution: ${describeChunk(byName.get("extractCalleeInfo")) ?? "`extractCalleeInfo`"} resolves the callee name and receiver, and ${describeChunk(byName.get("extractReceiver")) ?? "`extractReceiver`"} normalizes chained member receivers.`,
-    `Consumers: ${describeChunk(byName.get("graphCommand")) ?? "`graphCommand`"} exposes the CLI view, and ${describeChunk(byName.get("buildStackTree")) ?? "`buildStackTree`"} builds higher-level caller/callee navigation from stored edges.`,
-  ];
-  return facts.map((fact) => `- ${fact}`);
+  // Generic fallback for user-defined concept kinds
+  const names = chunks.slice(0, 3).map((c) => describeChunk(c) ?? `\`${c.name}\``);
+  return names.map((n) => `- Key symbol: ${n}`);
 }
 
 export function assembleConceptContext(
@@ -330,18 +357,28 @@ export function assembleConceptContext(
   chunks: SearchResult[],
   tokenBudget: number
 ): AssembledContext {
-  const title =
-    kind === "ast"
-      ? "AST pipeline"
-      : kind === "call_graph"
-        ? "call graph"
-        : "search pipeline";
-  const routeNote =
-    kind === "ast"
-      ? "This query is about the AST parsing and chunking pipeline, not the call graph."
-      : kind === "call_graph"
-        ? "This query is about the call graph system, not the AST chunking pipeline."
-        : "This query is about the routing and retrieval pipeline for answering repository search prompts.";
+  const CONCEPT_TITLES: Record<string, string> = {
+    ast: "AST pipeline",
+    call_graph: "call graph",
+    search_pipeline: "search pipeline",
+    storage: "storage layer",
+    daemon: "daemon server",
+    embedding: "embedding system",
+    cli: "CLI commands",
+    context_assembly: "context assembly",
+  };
+  const CONCEPT_NOTES: Record<string, string> = {
+    ast: "This query is about the AST parsing and chunking pipeline, not the call graph.",
+    call_graph: "This query is about the call graph system, not the AST chunking pipeline.",
+    search_pipeline: "This query is about the routing and retrieval pipeline for answering repository search prompts.",
+    storage: "This query is about the storage layer and data stores.",
+    daemon: "This query is about the HTTP daemon server and hook handlers.",
+    embedding: "This query is about the embedding providers and vector encoding.",
+    cli: "This query is about the CLI command structure and options.",
+    context_assembly: "This query is about token budgeting and context assembly strategies.",
+  };
+  const title = CONCEPT_TITLES[kind] ?? kind.replace(/_/g, " ");
+  const routeNote = CONCEPT_NOTES[kind] ?? `This query is about the ${title} subsystem.`;
   const header =
     `## Relevant codebase context (${title})\n\n` +
     `> ${routeNote} Answer directly from this bundle. Do not use repository tools unless a required detail is missing from this context.\n\n`;
