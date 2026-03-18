@@ -55,7 +55,7 @@ Initial release. Local codebase memory engine for Claude Code and MCP.
 - Hybrid search (vector + keyword + recency via RRF)
 - SQLite FTS5 full-text search
 - LanceDB vector store with local embeddings
-- MCP server with 11 tools
+- MCP server with 6 tools (search_code, index_codebase, get_stats, clear_index, find_callers, find_callees)
 - File watcher with debounced incremental indexing
 - Claude Code hook integration (`prompt_context`, `session_start`)
 - Configurable via `.memory/config.json`
