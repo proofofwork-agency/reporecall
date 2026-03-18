@@ -107,7 +107,7 @@ reporecall index
 
 Claude Code automatically merges `.settings.local.json` over shared settings, so each team member can customize locally without affecting the shared config.
 
-**Key benefit:** Hooks use **relative paths** so they work immediately when teammates clone the repo to different machines—no re-running init needed.
+**Key benefit:** Hooks use **`$CLAUDE_PROJECT_DIR`** (provided by Claude Code at runtime) so they resolve correctly on any machine—no re-running init needed.
 
 See [CLAUDE.md](./CLAUDE.md#team-collaboration) for detailed team collaboration guide.
 
@@ -258,7 +258,7 @@ flowchart TD
     FS["File Scanner<br/>(extensions +<br/>ignore rules)"]
     MC{"Merkle check<br/>(xxHash64<br/>per file)"}
     Skip["skip - no change"]
-    TS["Tree-sitter parser<br/>(23-language<br/>WASM grammars)"]
+    TS["Tree-sitter parser<br/>(22-language<br/>WASM grammars)"]
     Chunks["AST Chunks<br/>fn · class · method<br/>interface · enum · export<br/>↳ file-level fallback<br/>if no nodes"]
     CE["Call Edge extraction<br/>source_chunk →<br/>target_name"]
     IA["Import analysis"]
@@ -393,8 +393,8 @@ flowchart LR
     FTS5S["FTS5 keyword search<br/>phrase → AND →<br/>OR fallback"]
     VEC["Vector search<br/>cosine ANN<br/>(LanceDB)"]
     RRF["Reciprocal Rank<br/>Fusion<br/>1/(k+rank), k=60"]
-    Adj["Score adjustments<br/>impl +25% · test −65%<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +15%"]
-    Floor["Score floor filter<br/>≥ 50% of top score"]
+    Adj["Score adjustments<br/>impl +50% · test −70%<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +30%/term"]
+    Floor["Score floor filter<br/>≥ 70% of top score"]
     Budget["Token budget<br/>assembly<br/>tiktoken gpt-4o<br/>counting<br/>4000 token default"]
     Ctx["Assembled context<br/>markdown code blocks<br/>+ Direct Facts section"]
 
@@ -402,7 +402,7 @@ flowchart LR
     FTS5S & VEC --> RRF --> Adj --> Floor --> Budget --> Ctx
 ```
 
-**Design decision:** RRF fuses BM25 (FTS5) and cosine-similarity (LanceDB) scores without normalization - the two score spaces are incomparable, but rank positions are. k=60 follows the established RRF literature default. The 50% score floor prevents low-signal noise chunks from bloating context with irrelevant code.
+**Design decision:** RRF fuses BM25 (FTS5) and cosine-similarity (LanceDB) scores without normalization - the two score spaces are incomparable, but rank positions are. k=60 follows the established RRF literature default. The 70% score floor prevents low-signal noise chunks from bloating context with irrelevant code.
 
 #### R1 - Flow Path: Bidirectional Call Tree
 
