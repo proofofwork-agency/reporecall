@@ -105,7 +105,7 @@ reporecall init    # Creates .claude/settings.json + .mcp.json (committed)
 reporecall index
 ```
 
-Claude Code automatically merges `.settings.local.json` over shared settings, so each team member can customize locally without affecting the shared config.
+Claude Code automatically merges `.claude/settings.local.json` over shared settings, so each team member can customize locally without affecting the shared config.
 
 **Key benefit:** Hooks use **`$CLAUDE_PROJECT_DIR`** (provided by Claude Code at runtime) so they resolve correctly on any machine—no re-running init needed.
 
@@ -556,18 +556,17 @@ The live-repo benchmark (NDCG@10: 0.482, MRR: 0.670 in keyword mode) provides ho
 ### Daemon Lifecycle
 - PID file locking prevents concurrent daemon instances
 - Stale PID detection: checks if the process is still alive before claiming a port conflict
-- Graceful shutdown on SIGTERM/SIGINT with 11-step ordered sequence:
+- Graceful shutdown on SIGTERM/SIGINT with 10-step ordered sequence:
   1. Stop HTTP server (5s drain for in-flight requests)
   2. Stop scheduler and drain pending indexing jobs
   3. Stop file watcher
   4. Close MCP server (if running)
   5. Destroy metrics collector
-  6. Close all stores (FTS, metadata, vector)
+  6. Close all stores (FTS, metadata, vector — includes freeing tiktoken encoder)
   7. Clean up SQLite WAL sidecar files
   8. Release PID file lock
   9. Remove token file
-  10. Free tiktoken WASM encoder
-  11. Flush pino logger
+  10. Flush pino logger
 - Force-exit timeout (10s) prevents indefinite hangs
 
 ### Indexing Strategy
