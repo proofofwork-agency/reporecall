@@ -32,6 +32,7 @@ function makeTree(overrides?: Partial<StackTree>): StackTree {
     downTree: [],
     edges: [],
     nodeCount: 1,
+    coverage: { utilization: 0, balance: 0, overall: 0 },
     ...overrides,
   };
 }

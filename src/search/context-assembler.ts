@@ -394,7 +394,7 @@ export function assembleConceptContext(
     if (totalTokens + chunkTokens > tokenBudget) break;
     totalTokens += chunkTokens;
     included.push(chunk);
-    parts.push(formatChunk(chunk));
+    parts.push(chunkText);
   }
 
   if (included.length > 0) {
