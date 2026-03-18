@@ -468,73 +468,71 @@ export function assembleFlowContext(
   const included: SearchResult[] = [];
   const parts: string[] = [header];
 
-  // Always include seed first
-  if (seedChunk) {
-    const seedResult = storedChunkToSearchResult(seedChunk);
-    const seedSection = `### Seed\n` + formatChunk(seedResult);
-    const seedTokens = countTokens(seedSection);
+  // Always include seed
+  const seedResult = storedChunkToSearchResult(seedChunk);
+  const seedSection = `### Seed\n` + formatChunk(seedResult);
+  const seedTokens = countTokens(seedSection);
 
-    // Seed always gets included even if it fills the budget
-    if (seedTokens > tokenBudget - SUMMARY_RESERVE) {
-      log.warn({ seedName: tree.seed.name, seedTokens, tokenBudget }, "seed chunk exceeds token budget — callers/callees may be truncated");
-    }
-    totalTokens += seedTokens;
-    included.push(seedResult);
+  // Seed always gets included even if it fills the budget
+  if (seedTokens > tokenBudget - SUMMARY_RESERVE) {
+    log.warn({ seedName: tree.seed.name, seedTokens, tokenBudget }, "seed chunk exceeds token budget — callers/callees may be truncated");
+  }
+  totalTokens += seedTokens;
+  included.push(seedResult);
 
-    // Build callers section (sorted by depth descending: entry point first)
-    const callersSorted = [...tree.upTree].sort((a, b) => b.depth - a.depth);
-    const callerParts: string[] = [];
-    const callerResults: SearchResult[] = [];
+  // Build callers section (sorted by depth descending: entry point first)
+  const callersSorted = [...tree.upTree].sort((a, b) => b.depth - a.depth);
+  const callerParts: string[] = [];
+  const callerResults: SearchResult[] = [];
 
-    for (const callerNode of callersSorted) {
-      const callerChunk = chunkMap.get(callerNode.chunkId);
-      if (!callerChunk) continue;
+  for (const callerNode of callersSorted) {
+    const callerChunk = chunkMap.get(callerNode.chunkId);
+    if (!callerChunk) continue;
 
-      const callerResult = storedChunkToSearchResult(callerChunk, 0.8);
-      const callerText = formatChunk(callerResult);
-      const callerTokens = countTokens(callerText);
+    const callerResult = storedChunkToSearchResult(callerChunk, 0.8);
+    const callerText = formatChunk(callerResult);
+    const callerTokens = countTokens(callerText);
 
-      if (totalTokens + callerTokens > tokenBudget - SUMMARY_RESERVE) break;
+    if (totalTokens + callerTokens > tokenBudget - SUMMARY_RESERVE) break;
 
-      totalTokens += callerTokens;
-      callerParts.push(callerText);
-      callerResults.push(callerResult);
-    }
+    totalTokens += callerTokens;
+    callerParts.push(callerText);
+    callerResults.push(callerResult);
+  }
 
-    // Build callees section (sorted by depth ascending: nearest first)
-    const calleesSorted = [...tree.downTree].sort((a, b) => a.depth - b.depth);
-    const calleeParts: string[] = [];
-    const calleeResults: SearchResult[] = [];
+  // Build callees section (sorted by depth ascending: nearest first)
+  const calleesSorted = [...tree.downTree].sort((a, b) => a.depth - b.depth);
+  const calleeParts: string[] = [];
+  const calleeResults: SearchResult[] = [];
 
-    for (const calleeNode of calleesSorted) {
-      const calleeChunk = chunkMap.get(calleeNode.chunkId);
-      if (!calleeChunk) continue;
+  for (const calleeNode of calleesSorted) {
+    const calleeChunk = chunkMap.get(calleeNode.chunkId);
+    if (!calleeChunk) continue;
 
-      const calleeResult = storedChunkToSearchResult(calleeChunk, 0.7);
-      const calleeText = formatChunk(calleeResult);
-      const calleeTokens = countTokens(calleeText);
+    const calleeResult = storedChunkToSearchResult(calleeChunk, 0.7);
+    const calleeText = formatChunk(calleeResult);
+    const calleeTokens = countTokens(calleeText);
 
-      if (totalTokens + calleeTokens > tokenBudget - SUMMARY_RESERVE) break;
+    if (totalTokens + calleeTokens > tokenBudget - SUMMARY_RESERVE) break;
 
-      totalTokens += calleeTokens;
-      calleeParts.push(calleeText);
-      calleeResults.push(calleeResult);
-    }
+    totalTokens += calleeTokens;
+    calleeParts.push(calleeText);
+    calleeResults.push(calleeResult);
+  }
 
-    // Assemble in order: callers -> seed -> callees
-    if (callerParts.length > 0) {
-      parts.push(`### Callers (who invokes this)\n`);
-      parts.push(...callerParts);
-      included.push(...callerResults);
-    }
+  // Assemble in order: callers -> seed -> callees
+  if (callerParts.length > 0) {
+    parts.push(`### Callers (who invokes this)\n`);
+    parts.push(...callerParts);
+    included.push(...callerResults);
+  }
 
-    parts.push(seedSection);
+  parts.push(seedSection);
 
-    if (calleeParts.length > 0) {
-      parts.push(`### Callees (what this invokes)\n`);
-      parts.push(...calleeParts);
-      included.push(...calleeResults);
-    }
+  if (calleeParts.length > 0) {
+    parts.push(`### Callees (what this invokes)\n`);
+    parts.push(...calleeParts);
+    included.push(...calleeResults);
   }
 
   parts.push("");

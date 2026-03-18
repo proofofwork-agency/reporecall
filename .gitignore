@@ -8,4 +8,3 @@ dist/
 .DS_Store
 skills-lock.json
 .agents/
-scripts/benchmarks/

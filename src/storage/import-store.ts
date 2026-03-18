@@ -38,13 +38,19 @@ export class ImportStore {
     `);
 
     // Deduplicate before creating unique index (handles databases from before the index existed)
-    this.db.exec(`
-      DELETE FROM imports WHERE id NOT IN (
-        SELECT MIN(id) FROM imports
-        GROUP BY file_path, imported_name, source_module, is_default, is_namespace
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_unique ON imports(file_path, imported_name, source_module, is_default, is_namespace);
-    `);
+    // Only run the expensive DELETE if the unique index doesn't exist yet
+    const indexExists = this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_imports_unique'`)
+      .get();
+    if (!indexExists) {
+      this.db.exec(`
+        DELETE FROM imports WHERE id NOT IN (
+          SELECT MIN(id) FROM imports
+          GROUP BY file_path, imported_name, source_module, is_default, is_namespace
+        );
+      `);
+    }
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_unique ON imports(file_path, imported_name, source_module, is_default, is_namespace);`);
 
     // Cache prepared statements
     this.deleteByFileStmt = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);

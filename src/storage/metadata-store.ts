@@ -160,7 +160,7 @@ export class MetadataStore {
     targetName: string,
     limit?: number,
     targetFilePath?: string
-  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; receiver?: string }> {
+  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; callerKind?: string; receiver?: string }> {
     return this.callEdges.findCallers(targetName, limit, targetFilePath);
   }
 
