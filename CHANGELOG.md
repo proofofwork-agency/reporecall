@@ -45,7 +45,7 @@
 
 ### Tests
 
-- 561 tests across 43 test files (up from base v0.1.0 suite)
+- 572 tests across 43 test files (up from base v0.1.0 suite)
 - New test suites: `resolve.test.ts`, `imports.test.ts`, `seed.test.ts`, `tree-builder.test.ts`, `intent.test.ts`, `flow-context.test.ts`, `routing.test.ts`, `import-store.test.ts`, `mcp-server.test.ts`, `explain.test.ts`, `reranker.test.ts`, `prompt-context-routes.test.ts`
 - Self/super receiver test cases added
 - Reranker test reliability improved with proper timeouts
