@@ -54,7 +54,7 @@ const UserConfigSchema = z.object({
   embeddingDimensions: z.number().int().min(1).optional(),
   ollamaUrl: z.string().url().refine((u) => {
     const h = new URL(u).hostname;
-    return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
   }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or ::1)" }).optional(),
   extensions: z.array(z.string()).optional(),
   ignorePatterns: z.array(z.string()).optional(),
@@ -221,6 +221,21 @@ export function loadConfig(projectRoot: string): MemoryConfig {
       ...DEFAULTS.searchWeights,
       ...(userConfig.searchWeights ?? {}),
     },
+    // Append user conceptBundles to defaults (dedup by kind)
+    conceptBundles: (() => {
+      const base = DEFAULTS.conceptBundles;
+      const user = userConfig.conceptBundles;
+      if (!user || user.length === 0) return base;
+      const baseKinds = new Set(base.map((b) => b.kind));
+      const overrides = user.filter((u) => baseKinds.has(u.kind));
+      const additions = user.filter((u) => !baseKinds.has(u.kind));
+      // Replace defaults that share a kind with user overrides, keep the rest
+      const merged = base.map((b) => {
+        const override = overrides.find((o) => o.kind === b.kind);
+        return override ?? b;
+      });
+      return [...merged, ...additions];
+    })(),
   };
 
   // Validate search weight sum

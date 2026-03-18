@@ -250,7 +250,7 @@ export function createDaemonServer(
   const hookLog = new RotatingLog(hookLogPath);
   function logHook(message: string): void {
     const timestamp = new Date().toISOString().slice(11, 19);
-    hookLog.append(`[${timestamp}] ${message}\n`).catch(() => {});
+    hookLog.append(`[${timestamp}] ${message}\n`).catch((e) => log.warn({ err: e }, "hook log write failed"));
   }
 
   const server = createServer(async (req, res) => {

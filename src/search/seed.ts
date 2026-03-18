@@ -1,7 +1,7 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { StoredChunk } from "../storage/types.js";
-import { isTestFile } from "./utils.js";
+import { isTestFile, STOP_WORDS } from "./utils.js";
 
 export interface SeedCandidate {
   chunkId: string;
@@ -28,24 +28,6 @@ const PASCAL_CASE_RE = /\b([A-Z][a-z][a-zA-Z0-9]*)\b/g;
 const CAMEL_CASE_RE = /\b([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g;
 const FILE_PATH_RE = /[\w/.-]+\.\w{1,10}/g;
 const DOTTED_PATH_RE = /\b([A-Za-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*)\b/g;
-
-// Common English words to filter out of camelCase false positives
-const STOP_WORDS = new Set([
-  "the", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would",
-  "could", "should", "may", "might", "shall", "can", "need",
-  "dare", "ought", "used", "to", "of", "in", "for", "on",
-  "with", "at", "by", "from", "as", "into", "through", "during",
-  "before", "after", "above", "below", "between", "out", "off",
-  "over", "under", "again", "further", "then", "once", "here",
-  "there", "when", "where", "why", "how", "all", "each",
-  "every", "both", "few", "more", "most", "other", "some",
-  "such", "no", "nor", "not", "only", "own", "same", "so",
-  "than", "too", "very", "just", "because", "but", "and",
-  "if", "or", "while", "about", "what", "which", "who",
-  "whom", "this", "that", "these", "those", "am", "an", "a",
-  "it", "its", "my", "your", "his", "her", "our", "their",
-]);
 
 // Extended stop words for FTS content term filtering (common verbs in navigational queries)
 const FTS_STOP_WORDS = new Set([

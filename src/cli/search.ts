@@ -41,7 +41,7 @@ export function searchCommand(): Command {
           }
           if (options.maxChunks !== undefined) {
             const parsed = parseInt(options.maxChunks, 10)
-            if (!isNaN(parsed)) config.maxContextChunks = parsed
+            if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
           }
           const context = await search.searchWithContext(query, budget)
 

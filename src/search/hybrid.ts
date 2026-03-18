@@ -275,12 +275,14 @@ export class HybridSearch {
 
   private prependConceptTargetResults(
     query: string,
-    results: SearchResult[]
+    results: SearchResult[],
+    seedResult?: SeedResult
   ): SearchResult[] {
     const conceptSymbols = this.getConceptSymbols(query);
     if (conceptSymbols.length === 0) return results;
 
-    const hasResolvedExplicitTarget = resolveSeeds(query, this.metadata, this.fts).seeds
+    const resolved = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const hasResolvedExplicitTarget = resolved.seeds
       .some((seed) => seed.reason === "explicit_target");
     if (hasResolvedExplicitTarget) return results;
 

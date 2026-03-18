@@ -29,8 +29,7 @@ export function serveCommand(): Command {
     .option('--mcp', 'Also start MCP server on stdio')
     .option(
       '--max-chunks <n>',
-      'Max context chunks per query (0 = dynamic)',
-      '0'
+      'Max context chunks per query (0 = dynamic)'
     )
     .option('--debug', 'Enable debug logging for hook/retrieval diagnostics')
     .action(async (options) => {
@@ -62,7 +61,7 @@ export function serveCommand(): Command {
       }
       if (options.maxChunks !== undefined) {
         const parsed = parseInt(options.maxChunks, 10)
-        if (!isNaN(parsed)) config.maxContextChunks = parsed
+        if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
       }
 
       // Health check for Ollama

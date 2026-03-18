@@ -185,80 +185,91 @@ export function buildStackTree(
     }
   }
 
-  function buildDirection(
-    dir: "up" | "down",
-    sourceName: string,
-    sourceChunkId: string,
-    _sourceFilePath: string,
-    depth: number
+  /** BFS-based downward traversal that processes callees level by level. */
+  function buildDownBFS(
+    startName: string,
+    startChunkId: string
   ): void {
-    if (depth > maxDepth) return;
-    if (totalNodes >= maxNodes) return;
+    let frontier: Array<{ name: string; chunkId: string; filePath: string }> = [
+      { name: startName, chunkId: startChunkId, filePath: seed.filePath },
+    ];
+    let currentDepth = 1;
 
-    if (dir === "up") {
-      // Handled by buildUpBFS — this branch should not be reached
-      return;
-    } else {
-      const calleeRecords = metadata.findCalleesForChunk
-        ? metadata.findCalleesForChunk(sourceChunkId, maxBranchFactor * 2)
-        : metadata.findCallees(sourceName, maxBranchFactor * 2);
+    while (currentDepth <= maxDepth && totalNodes < maxNodes && frontier.length > 0) {
+      const nextFrontier: Array<{ name: string; chunkId: string; filePath: string }> = [];
 
-      const callees = calleeRecords.sort((a, b) => {
-        const aResolved = a.targetFilePath ? 1 : 0;
-        const bResolved = b.targetFilePath ? 1 : 0;
-        return bResolved - aResolved;
-      });
+      for (const source of frontier) {
+        if (totalNodes >= maxNodes) break;
 
-      const resolved: Array<{
-        targetName: string;
-        callType: string;
-        chunkId: string;
-        name: string;
-        filePath: string;
-        kind: string;
-      }> = [];
+        const calleeRecords = metadata.findCalleesForChunk
+          ? metadata.findCalleesForChunk(source.chunkId, maxBranchFactor * 2)
+          : metadata.findCallees(source.name, maxBranchFactor * 2);
 
-      for (const callee of callees) {
-        const match = resolveCalleeChunkId(
-          callee.targetName,
-          callee.filePath,
-          callee.targetFilePath
-        );
-        if (match) {
-          resolved.push({
-            targetName: callee.targetName,
-            callType: callee.callType,
-            ...match,
+        const callees = calleeRecords.sort((a, b) => {
+          const aResolved = a.targetFilePath ? 1 : 0;
+          const bResolved = b.targetFilePath ? 1 : 0;
+          return bResolved - aResolved;
+        });
+
+        const resolved: Array<{
+          targetName: string;
+          callType: string;
+          chunkId: string;
+          name: string;
+          filePath: string;
+          kind: string;
+        }> = [];
+
+        for (const callee of callees) {
+          const match = resolveCalleeChunkId(
+            callee.targetName,
+            callee.filePath,
+            callee.targetFilePath
+          );
+          if (match) {
+            resolved.push({
+              targetName: callee.targetName,
+              callType: callee.callType,
+              ...match,
+            });
+          }
+        }
+
+        resolved.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
+
+        for (const r of resolved) {
+          if (totalNodes >= maxNodes) break;
+          if (visited.has(r.chunkId)) continue;
+
+          visited.add(r.chunkId);
+          totalNodes++;
+
+          const node: TreeNode = {
+            chunkId: r.chunkId,
+            name: r.name,
+            filePath: r.filePath,
+            kind: r.kind,
+            depth: currentDepth,
+            direction: "down",
+          };
+          downTree.push(node);
+
+          edges.push({
+            from: source.chunkId,
+            to: r.chunkId,
+            callType: r.callType,
+          });
+
+          nextFrontier.push({
+            name: r.name,
+            chunkId: r.chunkId,
+            filePath: r.filePath,
           });
         }
       }
 
-      resolved.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
-      for (const r of resolved) {
-        if (totalNodes >= maxNodes) break;
-        if (visited.has(r.chunkId)) continue;
-
-        visited.add(r.chunkId);
-        totalNodes++;
-
-        const node: TreeNode = {
-          chunkId: r.chunkId,
-          name: r.name,
-          filePath: r.filePath,
-          kind: r.kind,
-          depth,
-          direction: "down",
-        };
-        downTree.push(node);
-
-        edges.push({
-          from: sourceChunkId,
-          to: r.chunkId,
-          callType: r.callType,
-        });
-
-        buildDirection(dir, r.name, r.chunkId, r.filePath, depth + 1);
-      }
+      frontier = nextFrontier;
+      currentDepth++;
     }
   }
 
@@ -267,7 +278,7 @@ export function buildStackTree(
   }
 
   if (direction === "down" || direction === "both") {
-    buildDirection("down", seed.name, seed.chunkId, seed.filePath, 1);
+    buildDownBFS(seed.name, seed.chunkId);
   }
 
   // Import-level fallback: if call graph produced no edges, resolve facade/dispatch patterns

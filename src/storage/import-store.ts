@@ -13,7 +13,6 @@ export interface ImportRecord {
 export class ImportStore {
   private deleteByFileStmt!: Statement;
   private insertStmt!: Statement;
-  private removeByFileStmt!: Statement;
   private getImportsStmt!: Statement;
   private findImporterFilesStmt!: Statement;
   private findByNameStmt!: Statement;
@@ -52,7 +51,6 @@ export class ImportStore {
     this.insertStmt = this.db.prepare(
       `INSERT OR IGNORE INTO imports (file_path, imported_name, source_module, resolved_path, is_default, is_namespace) VALUES (?, ?, ?, ?, ?, ?)`
     );
-    this.removeByFileStmt = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);
     this.getImportsStmt = this.db.prepare(
       `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
        FROM imports WHERE file_path = ?`
@@ -87,7 +85,7 @@ export class ImportStore {
   }
 
   removeImportsForFile(filePath: string): void {
-    this.removeByFileStmt.run(filePath);
+    this.deleteByFileStmt.run(filePath);
   }
 
   getImportsForFile(filePath: string): ImportRecord[] {

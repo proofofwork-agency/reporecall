@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { resolve, sep } from 'path'
+import { realpathSync } from 'fs'
 import type { HybridSearch } from '../search/hybrid.js'
 import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
@@ -29,7 +30,15 @@ const version = loadVersion()
 
 function isPathSafe(projectRoot: string, p: string): boolean {
   const abs = resolve(projectRoot, p)
-  return abs.startsWith(projectRoot + sep) || abs === projectRoot
+  if (!abs.startsWith(projectRoot + sep) && abs !== projectRoot) return false
+  try {
+    const realRoot = realpathSync(projectRoot)
+    const realAbs = realpathSync(abs)
+    return realAbs.startsWith(realRoot + sep) || realAbs === realRoot
+  } catch {
+    // Path does not exist yet — lexical check already passed
+    return true
+  }
 }
 
 function errorResult(err: unknown) {
@@ -274,7 +283,7 @@ export function createMCPServer(
           .string()
           .min(1)
           .describe('Name of the function to find callers for'),
-        limit: z.number().max(500).optional().describe('Max results (default 20)')
+        limit: z.number().int().min(1).max(500).optional().describe('Max results (default 20)')
       },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
@@ -307,7 +316,7 @@ export function createMCPServer(
           .string()
           .min(1)
           .describe('Name of the function to find callees for'),
-        limit: z.number().max(500).optional().describe('Max results (default 20)')
+        limit: z.number().int().min(1).max(500).optional().describe('Max results (default 20)')
       },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
@@ -382,6 +391,8 @@ export function createMCPServer(
           .describe('Function or method name to use as the tree seed'),
         depth: z
           .number()
+          .int()
+          .min(1)
           .max(10)
           .optional()
           .describe('Maximum tree depth (default: 2)'),
@@ -554,6 +565,8 @@ export function createMCPServer(
           .describe('Tree direction (default: both)'),
         maxDepth: z
           .number()
+          .int()
+          .min(1)
           .max(10)
           .optional()
           .describe('Maximum tree depth (default: 2)')

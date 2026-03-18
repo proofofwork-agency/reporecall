@@ -3,12 +3,12 @@ import type { CallEdge } from "../analysis/call-graph.js";
 
 export class CallEdgeStore {
   private insertStmt!: Database.Statement;
-  private deleteStmt!: Database.Statement;
-  private removeFileStmt!: Database.Statement;
+  private deleteByFileStmt!: Database.Statement;
   private findCallersStmt!: Database.Statement;
   private findCallersWithFileStmt!: Database.Statement;
   private findCalleesStmt!: Database.Statement;
   private findCalleesForChunkStmt!: Database.Statement;
+  private getTopCallTargetsStmt!: Database.Statement;
 
   constructor(private readonly db: Database.Database) {}
 
@@ -46,8 +46,7 @@ export class CallEdgeStore {
     this.insertStmt = this.db.prepare(
       `INSERT INTO call_edges (source_chunk_id, target_name, call_type, file_path, line, receiver, target_file_path) VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
-    this.deleteStmt = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
-    this.removeFileStmt = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
+    this.deleteByFileStmt = this.db.prepare(`DELETE FROM call_edges WHERE file_path = ?`);
     this.findCallersStmt = this.db.prepare(
       `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
        FROM call_edges ce
@@ -77,13 +76,16 @@ export class CallEdgeStore {
        WHERE ce.source_chunk_id = ?
        LIMIT ?`
     );
+    this.getTopCallTargetsStmt = this.db.prepare(
+      `SELECT target_name, COUNT(*) as c FROM call_edges GROUP BY target_name ORDER BY c DESC LIMIT ?`
+    );
   }
 
   upsertCallEdges(edges: CallEdge[]): void {
     if (edges.length === 0) return;
     const filePaths = [...new Set(edges.map(e => e.filePath))];
     this.db.transaction(() => {
-      for (const fp of filePaths) this.deleteStmt.run(fp);
+      for (const fp of filePaths) this.deleteByFileStmt.run(fp);
       for (const edge of edges) {
         this.insertStmt.run(edge.sourceChunkId, edge.targetName, edge.callType, edge.filePath, edge.line, edge.receiver ?? null, edge.targetFilePath ?? null);
       }
@@ -91,7 +93,7 @@ export class CallEdgeStore {
   }
 
   removeCallEdgesForFile(filePath: string): void {
-    this.removeFileStmt.run(filePath);
+    this.deleteByFileStmt.run(filePath);
   }
 
   findCallers(
@@ -169,11 +171,7 @@ export class CallEdgeStore {
   }
 
   getTopCallTargets(limit = 10): string[] {
-    const rows = this.db
-      .prepare(
-        `SELECT target_name, COUNT(*) as c FROM call_edges GROUP BY target_name ORDER BY c DESC LIMIT ?`
-      )
-      .all(limit) as Array<{ target_name: string; c: number }>;
+    const rows = this.getTopCallTargetsStmt.all(limit) as Array<{ target_name: string; c: number }>;
     return rows.map((r) => r.target_name);
   }
 }

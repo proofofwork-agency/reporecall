@@ -124,6 +124,10 @@ export function initCommand(): Command {
         // Uses $CLAUDE_PROJECT_DIR for portability — Claude Code provides this
         // automatically at hook runtime with the absolute path to the project root.
         const relPath = relative(projectRoot, tokenPath)
+        if (!/^[\w./\-]+$/.test(relPath)) {
+          console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
+          process.exit(1)
+        }
         const command = [
           `TOKEN=$(cat "$CLAUDE_PROJECT_DIR/${relPath}" 2>/dev/null || echo "");`,
           `curl -s -X POST`,
