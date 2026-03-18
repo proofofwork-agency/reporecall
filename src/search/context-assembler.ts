@@ -59,7 +59,7 @@ export function assembleContext(
   totalTokens += countTokens(header);
 
   // Drop results scoring below scoreFloorRatio of the top result
-  const scoreFloor = results.length > 0 ? results[0].score * scoreFloorRatio : 0;
+  const scoreFloor = results.length > 0 ? (results[0]?.score ?? 0) * scoreFloorRatio : 0;
 
   // Track file headers already emitted
   const emittedHeaders = new Set<string>();
@@ -225,9 +225,11 @@ function buildBuiltinFacts(
     included.length > 0
   ) {
     const primary = included[0];
-    facts.push(
-      `- Primary location: \`${primary.name}\` is defined in \`${primary.filePath}:${primary.startLine}-${primary.endLine}\`.`
-    );
+    if (primary) {
+      facts.push(
+        `- Primary location: \`${primary.name}\` is defined in \`${primary.filePath}:${primary.startLine}-${primary.endLine}\`.`
+      );
+    }
   }
 
   return facts;
@@ -521,7 +523,7 @@ const DEEP_ROUTE_HEADER =
   `## Relevant codebase context (low confidence)\n\n` +
   `> The retrieval engine could not identify a clear entry point for this query.\n` +
   `> Repository tools are allowed here because the injected bundle is low confidence.\n` +
-  `> Use \`explain_flow\` for one-shot flow analysis, or \`resolve_seeds\` and \`build_stack_tree\` for step-by-step navigation.\n\n`;
+  `> Use \`explain_flow\` for one-shot flow analysis, or \`resolve_seed\` and \`build_stack_tree\` for step-by-step navigation.\n\n`;
 
 /**
  * Assemble context for the R2 (deep) route. Wraps the regular chunk-based

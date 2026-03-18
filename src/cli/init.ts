@@ -1,5 +1,5 @@
 import { Command } from 'commander'
-import { resolve } from 'path'
+import { resolve, relative } from 'path'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
@@ -19,6 +19,13 @@ export function initCommand(): Command {
       'Embedding provider (local, ollama, openai, or keyword)',
       'local'
     )
+    .option('--port <n>', 'Daemon port (1-65535)', (v: string) => {
+      const n = parseInt(v, 10)
+      if (isNaN(n) || n < 1 || n > 65535) {
+        throw new Error('Port must be a number between 1 and 65535')
+      }
+      return n
+    })
     .option('--project <path>', 'Project root path')
     .action(async (options) => {
       const projectRoot = options.project
@@ -34,15 +41,33 @@ export function initCommand(): Command {
       // Write default config
       const configPath = resolve(dataDir, 'config.json')
       if (!existsSync(configPath)) {
-        writeFileSync(
-          configPath,
-          JSON.stringify(
-            { embeddingProvider: options.embeddingProvider },
-            null,
-            2
-          )
-        )
+        const configData: Record<string, unknown> = {
+          embeddingProvider: options.embeddingProvider,
+        }
+        if (options.port != null) {
+          configData.port = options.port
+        }
+        writeFileSync(configPath, JSON.stringify(configData, null, 2))
         console.log(`  Created ${configPath}`)
+      } else if (options.port != null) {
+        // Config already exists — merge the port into it
+        try {
+          const existing = JSON.parse(readFileSync(configPath, 'utf-8'))
+          existing.port = options.port
+          writeFileSync(configPath, JSON.stringify(existing, null, 2))
+          console.log(`  Updated port in ${configPath}`)
+        } catch {
+          // If config is corrupt, overwrite with port
+          writeFileSync(
+            configPath,
+            JSON.stringify(
+              { embeddingProvider: options.embeddingProvider, port: options.port },
+              null,
+              2
+            )
+          )
+          console.log(`  Recreated ${configPath} with port`)
+        }
       }
 
       // Create .memoryignore if it doesn't exist
@@ -79,8 +104,9 @@ export function initCommand(): Command {
         // use default port
       }
 
-      // Token file path — hooks read this at runtime so they work even if
-      // the daemon hasn't started yet (the token file is created on daemon start).
+      // Token file path — use $CLAUDE_PROJECT_DIR so hooks work across team members
+      // on different machines. Claude Code automatically provides this environment
+      // variable with the absolute path to the project root at hook runtime.
       const tokenPath = resolve(configDataDir, 'daemon.token')
 
       const existingHooks = (settings.hooks ?? {}) as Record<string, unknown[]>
@@ -95,9 +121,11 @@ export function initCommand(): Command {
         // If the token file is absent (daemon not started), $TOKEN is empty
         // and the header becomes "Authorization: Bearer " — the daemon
         // will reject it, which is safe.
-        const safeTokenPath = escapeShell(tokenPath)
+        // Uses $CLAUDE_PROJECT_DIR for portability — Claude Code provides this
+        // automatically at hook runtime with the absolute path to the project root.
+        const relPath = relative(projectRoot, tokenPath)
         const command = [
-          `TOKEN=$(cat "${safeTokenPath}" 2>/dev/null || echo "");`,
+          `TOKEN=$(cat "$CLAUDE_PROJECT_DIR/${relPath}" 2>/dev/null || echo "");`,
           `curl -s -X POST`,
           `  -H "Authorization: Bearer $TOKEN"`,
           `  -H "Content-Type: application/json"`,
@@ -120,14 +148,25 @@ export function initCommand(): Command {
 
       // Remove any existing Reporecall hooks before re-adding.
       // Matches both old-style HTTP hooks (url field) and new command hooks (curl command).
-      const isMemoryHook = (h: any) =>
-        h?.hooks?.some?.(
-          (inner: any) =>
-            inner?.url?.includes?.('/hooks/session-start') ||
-            inner?.url?.includes?.('/hooks/prompt-context') ||
-            inner?.command?.includes?.('/hooks/session-start') ||
-            inner?.command?.includes?.('/hooks/prompt-context')
-        )
+      const isMemoryHook = (h: unknown): boolean => {
+        if (!h || typeof h !== 'object') return false;
+        const hooks = (h as Record<string, unknown>).hooks;
+        if (!Array.isArray(hooks)) return false;
+        return hooks.some((inner: unknown) => {
+          if (!inner || typeof inner !== 'object') return false;
+          const entry = inner as Record<string, unknown>;
+          return (
+            (typeof entry.url === 'string' && (
+              entry.url.includes('/hooks/session-start') ||
+              entry.url.includes('/hooks/prompt-context')
+            )) ||
+            (typeof entry.command === 'string' && (
+              entry.command.includes('/hooks/session-start') ||
+              entry.command.includes('/hooks/prompt-context')
+            ))
+          );
+        });
+      }
 
       settings.hooks = {
         ...existingHooks,
@@ -143,6 +182,31 @@ export function initCommand(): Command {
 
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
       console.log(`  Created Claude Code hooks in ${settingsPath}`)
+
+      // Auto-generate .mcp.json with Reporecall server config
+      const mcpJsonPath = resolve(projectRoot, '.mcp.json')
+      let mcpConfig: Record<string, unknown> = {}
+      if (existsSync(mcpJsonPath)) {
+        try {
+          mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
+        } catch {
+          // start fresh
+        }
+      }
+
+      // Ensure reporecall server is configured with relative paths
+      if (!mcpConfig.mcpServers) {
+        mcpConfig.mcpServers = {}
+      }
+      const mcpServers = mcpConfig.mcpServers as Record<string, unknown>
+      mcpServers.reporecall = {
+        command: 'npx',
+        args: ['reporecall', 'mcp', '--project', '.']
+      }
+      mcpConfig.mcpServers = mcpServers
+
+      writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2))
+      console.log(`  Created MCP configuration in ${mcpJsonPath}`)
 
       // Add Reporecall instruction to CLAUDE.md
       const claudeMdPath = resolve(projectRoot, 'CLAUDE.md')
@@ -176,6 +240,10 @@ ${MEMORY_MARKER}`
 
       // Auto-start with macOS launch agent
       if (options.autostart) {
+        if (process.platform !== 'darwin') {
+          console.error('Error: --autostart is only supported on macOS')
+          process.exit(1)
+        }
         setupLaunchAgent(projectRoot)
       }
 
@@ -199,15 +267,6 @@ ${MEMORY_MARKER}`
         )
       }
     })
-}
-
-// Shell-escape characters that are special inside double-quoted strings
-function escapeShell(str: string): string {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, '\\$')
-    .replace(/`/g, '\\`')
 }
 
 // H-2: XML-escape interpolated values in plist to prevent injection

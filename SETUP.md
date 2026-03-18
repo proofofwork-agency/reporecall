@@ -67,13 +67,15 @@ Adds MCP server on stdio alongside the HTTP server.
 
 ### Hook Configuration
 
-`reporecall init` automatically configures hooks in `.claude/settings.json`.
+`reporecall init` automatically configures hooks in `.claude/settings.json` and commits them to git.
 
 Current behavior:
 
 - hooks are written as `command` hooks, not raw `http` hooks
-- the command reads the bearer token from `.memory/daemon.token` at runtime
-- this avoids baking secrets into `settings.json` and works after the daemon starts
+- the command reads the bearer token from `.memory/daemon.token` at runtime using **`$CLAUDE_PROJECT_DIR`**
+- this avoids baking secrets into `settings.json`, works after the daemon starts, and is portable across team members
+- `.claude/settings.json` is version-controlled so hooks work automatically when teammates clone the repo
+- `$CLAUDE_PROJECT_DIR` is automatically provided by Claude Code at hook runtime (absolute path to project root)
 
 Representative generated shape:
 
@@ -85,7 +87,7 @@ Representative generated shape:
         "hooks": [
           {
             "type": "command",
-            "command": "TOKEN=$(cat \"/absolute/path/to/project/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" -d \"$(cat)\" \"http://127.0.0.1:37222/hooks/session-start\" 2>/dev/null || true"
+            "command": "TOKEN=$(cat \"$CLAUDE_PROJECT_DIR/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:37222/hooks/session-start\" 2>/dev/null || true"
           }
         ]
       }
@@ -95,7 +97,7 @@ Representative generated shape:
         "hooks": [
           {
             "type": "command",
-            "command": "TOKEN=$(cat \"/absolute/path/to/project/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" -d \"$(cat)\" \"http://127.0.0.1:37222/hooks/prompt-context\" 2>/dev/null || true"
+            "command": "TOKEN=$(cat \"$CLAUDE_PROJECT_DIR/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:37222/hooks/prompt-context\" 2>/dev/null || true"
           }
         ]
       }
@@ -104,27 +106,41 @@ Representative generated shape:
 }
 ```
 
-If you configure hooks manually, keep the token-read pattern and use the daemon port from `.memory/config.json` if you changed it from the default `37222`.
+If you configure hooks manually, use `$CLAUDE_PROJECT_DIR` for the project path so they work across team members on different machines, and use the daemon port from `.memory/config.json` if you changed it from the default `37222`.
 
-### MCP Configuration (Claude Desktop)
+### MCP Configuration
 
-Add to `claude_desktop_config.json`:
+`reporecall init` automatically creates `.mcp.json` with Reporecall server configuration.
+
+**For Claude Code:**
+The `.mcp.json` file is automatically used by Claude Code and includes:
 
 ```json
 {
   "mcpServers": {
     "reporecall": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/dist/memory.js",
-        "mcp",
-        "--project",
-        "/absolute/path/to/project"
-      ]
+      "command": "npx",
+      "args": ["reporecall", "mcp", "--project", "."]
     }
   }
 }
 ```
+
+**For Claude Desktop:**
+Copy the reporecall server config to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "reporecall": {
+      "command": "npx",
+      "args": ["reporecall", "mcp", "--project", "/path/to/project"]
+    }
+  }
+}
+```
+
+Use relative paths (`.`) in `.mcp.json` for team portability. Use absolute paths in Claude Desktop's config if you prefer, as Claude Desktop config is machine-specific.
 
 ## Configuration Reference
 

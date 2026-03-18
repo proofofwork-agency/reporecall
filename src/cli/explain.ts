@@ -218,6 +218,7 @@ export function explainCommand(): Command {
           console.log('Seed candidates:')
           for (let i = 0; i < result.seedCandidates.length; i++) {
             const seed = result.seedCandidates[i]
+            if (!seed) continue
             console.log(
               `  ${i + 1}. ${seed.name} (${seed.kind}, ${seed.filePath}) confidence=${seed.confidence.toFixed(2)}`
             )
@@ -229,6 +230,7 @@ export function explainCommand(): Command {
           console.log('Chunks:')
           for (let i = 0; i < result.chunks.length; i++) {
             const chunk = result.chunks[i]
+            if (!chunk) continue
             console.log(
               `  ${i + 1}. ${chunk.name} (${chunk.kind}, ${chunk.filePath}:${chunk.lines}) score=${chunk.score.toFixed(2)}`
             )

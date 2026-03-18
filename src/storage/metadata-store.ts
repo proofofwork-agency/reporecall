@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 import type { StoredChunk, ChunkScoringInfo } from "./types.js";
 import type { CallEdge } from "../analysis/call-graph.js";
 import type { ConventionsReport } from "../analysis/conventions.js";
-import { openSqliteWithRecovery } from "./sqlite-utils.js";
+import { openSqliteWithRecovery, migrateIfNeeded } from "./sqlite-utils.js";
 import { ChunkStore } from "./chunk-store.js";
 import { CallEdgeStore } from "./call-edge-store.js";
 import { StatsStore } from "./stats-store.js";
@@ -37,6 +37,7 @@ export class MetadataStore {
     const dbPath = resolve(dataDir, "metadata.db");
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = openSqliteWithRecovery(dbPath);
+    migrateIfNeeded(this.db, {});
 
     this.chunks = new ChunkStore(this.db);
     this.callEdges = new CallEdgeStore(this.db);
@@ -57,9 +58,11 @@ export class MetadataStore {
   }
 
   removeFile(path: string): void {
-    this.chunks.removeFile(path);
-    this.callEdges.removeCallEdgesForFile(path);
-    this.imports.removeImportsForFile(path);
+    this.db.transaction(() => {
+      this.chunks.removeFile(path);
+      this.callEdges.removeCallEdgesForFile(path);
+      this.imports.removeImportsForFile(path);
+    })();
   }
 
   upsertChunk(chunk: StoredChunk): void {

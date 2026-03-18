@@ -60,8 +60,10 @@ export function serveCommand(): Command {
         }
         config.port = parsed
       }
-      if (options.maxChunks)
-        config.maxContextChunks = parseInt(options.maxChunks, 10)
+      if (options.maxChunks !== undefined) {
+        const parsed = parseInt(options.maxChunks, 10)
+        if (!isNaN(parsed)) config.maxContextChunks = parsed
+      }
 
       // Health check for Ollama
       if (config.embeddingProvider === 'ollama') {
@@ -203,6 +205,11 @@ export function serveCommand(): Command {
         console.error('Daemon will continue without initial index.')
       }
 
+      // Pre-warm embedder (non-blocking)
+      if (config.embeddingProvider === 'local') {
+        pipeline.getEmbedder().embed(['warmup']).catch(() => {})
+      }
+
       // Set up search with read-write lock
       const rwLock = new ReadWriteLock()
       const search = new HybridSearch(
@@ -214,31 +221,46 @@ export function serveCommand(): Command {
         rwLock
       )
 
-      // Start file watcher
+      // Track actual FTS initialization state via a mutable container so that
+      // re-index events after startup can update the flag and the server closure
+      // will observe the new value without a restart.
+      const ftsState = { initialized: false }
+      try {
+        // If FTSStore constructor succeeded (no throw), FTS is ready
+        pipeline.getFTSStore().search('__probe__', 1)
+        ftsState.initialized = true
+      } catch {
+        // FTS not ready yet; will be re-probed after successful index operations
+      }
+
+      // Start file watcher — re-probe FTS after each flush so that a recovery
+      // re-index (e.g. after a corrupted startup) makes the server aware.
       const scheduler = new IndexScheduler(pipeline, rwLock)
       const watcher = new FileWatcher(config, (changes) => {
         console.log(`File changes detected: ${changes.length} files`)
         scheduler.enqueue(changes)
+        if (!ftsState.initialized) {
+          try {
+            pipeline.getFTSStore().search('__probe__', 1)
+            ftsState.initialized = true
+          } catch {
+            // Still not ready
+          }
+        }
       })
       watcher.start()
       console.log('File watcher active')
-
-      // Track actual FTS initialization state
-      let ftsInitialized = false
-      try {
-        // If FTSStore constructor succeeded (no throw), FTS is ready
-        pipeline.getFTSStore().search('__probe__', 1)
-        ftsInitialized = true
-      } catch {
-        ftsInitialized = false
-      }
 
       // Start HTTP server
       const { server, metrics } = createDaemonServer(
         config,
         search,
         pipeline.getMetadataStore(),
-        { ftsInitialized, debugMode: !!options.debug, ftsStore: ftsInitialized ? pipeline.getFTSStore() : undefined }
+        {
+          get ftsInitialized() { return ftsState.initialized },
+          debugMode: !!options.debug,
+          get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined }
+        }
       )
 
       const tokenPath = resolve(config.dataDir, 'daemon.token')
@@ -270,7 +292,8 @@ export function serveCommand(): Command {
           search,
           pipeline,
           pipeline.getMetadataStore(),
-          config
+          config,
+          rwLock
         )
 
         const { StdioServerTransport } =

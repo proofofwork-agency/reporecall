@@ -31,6 +31,7 @@ export class CallEdgeStore {
       CREATE INDEX IF NOT EXISTS idx_call_edges_source ON call_edges(source_chunk_id);
       CREATE INDEX IF NOT EXISTS idx_call_edges_target ON call_edges(target_name);
       CREATE INDEX IF NOT EXISTS idx_call_edges_target_file ON call_edges(target_name, target_file_path);
+      CREATE INDEX IF NOT EXISTS idx_call_edges_file ON call_edges(file_path);
     `);
   }
 
@@ -57,12 +58,12 @@ export class CallEdgeStore {
     targetName: string,
     limit = 20,
     targetFilePath?: string
-  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; receiver?: string }> {
+  ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; callerKind?: string; receiver?: string }> {
     const rows = (
       targetFilePath
         ? this.db
             .prepare(
-              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name
+              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
                FROM call_edges ce
                LEFT JOIN chunks c ON c.id = ce.source_chunk_id
                WHERE ce.target_name = ?
@@ -73,7 +74,7 @@ export class CallEdgeStore {
             .all(targetName, targetFilePath, targetFilePath, limit)
         : this.db
             .prepare(
-              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name
+              `SELECT ce.source_chunk_id, ce.file_path, ce.line, ce.receiver, c.name as caller_name, c.kind as caller_kind
                FROM call_edges ce
                LEFT JOIN chunks c ON c.id = ce.source_chunk_id
                WHERE ce.target_name = ?
@@ -86,6 +87,7 @@ export class CallEdgeStore {
       line: number;
       receiver: string | null;
       caller_name: string | null;
+      caller_kind: string | null;
     }>;
 
     return rows.map((r) => ({
@@ -93,6 +95,7 @@ export class CallEdgeStore {
       filePath: r.file_path,
       line: r.line,
       callerName: r.caller_name ?? "<unknown>",
+      ...(r.caller_kind != null ? { callerKind: r.caller_kind } : {}),
       ...(r.receiver != null ? { receiver: r.receiver } : {}),
     }));
   }

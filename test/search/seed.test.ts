@@ -351,8 +351,13 @@ describe("resolveSeeds", () => {
       );
 
       // With multi-signal scoring, low rank + no name match + generic kind
-      // should still produce a candidate but potentially below 0.55
-      expect(result.seeds.length).toBeGreaterThanOrEqual(0);
+      // should still produce a candidate but potentially below 0.55.
+      // The meaningful invariant: seeds is always an array, and if bestSeed is
+      // set its confidence must meet the 0.55 threshold.
+      expect(Array.isArray(result.seeds)).toBe(true);
+      if (result.bestSeed !== null) {
+        expect(result.bestSeed.confidence).toBeGreaterThanOrEqual(0.55);
+      }
     });
   });
 });

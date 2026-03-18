@@ -35,8 +35,10 @@ export function searchCommand(): Command {
         // If --budget is specified, use searchWithContext for token-budgeted results
         if (options.budget) {
           const budget = parseInt(options.budget, 10)
-          if (options.maxChunks)
-            config.maxContextChunks = parseInt(options.maxChunks, 10)
+          if (options.maxChunks !== undefined) {
+            const parsed = parseInt(options.maxChunks, 10)
+            if (!isNaN(parsed)) config.maxContextChunks = parsed
+          }
           const context = await search.searchWithContext(query, budget)
 
           if (context.chunks.length === 0) {

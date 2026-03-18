@@ -69,21 +69,23 @@ export class FTSStore {
     content: string;
     kind: string;
   }): void {
-    // Delete existing entry if any
-    this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`).run(chunk.id);
-    this.db
-      .prepare(
-        `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        chunk.id,
-        splitIdentifiers(chunk.name),
-        splitIdentifiers(chunk.filePath),
-        splitIdentifiers(chunk.content),
-        chunk.kind,
-        chunk.filePath
-      );
+    this.db.transaction(() => {
+      // Delete existing entry if any
+      this.db.prepare(`DELETE FROM chunks_fts WHERE id = ?`).run(chunk.id);
+      this.db
+        .prepare(
+          `INSERT INTO chunks_fts (id, name, file_path, content, kind, raw_file_path)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          chunk.id,
+          splitIdentifiers(chunk.name),
+          splitIdentifiers(chunk.filePath),
+          splitIdentifiers(chunk.content),
+          chunk.kind,
+          chunk.filePath
+        );
+    })();
   }
 
   removeByFile(filePath: string): void {

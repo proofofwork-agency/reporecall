@@ -5,6 +5,7 @@ import { loadConfig } from "../core/config.js";
 import { IndexingPipeline } from "../indexer/pipeline.js";
 import { HybridSearch } from "../search/hybrid.js";
 import { createMCPServer } from "../daemon/mcp-server.js";
+import { ReadWriteLock } from "../core/rwlock.js";
 
 export function mcpCommand(): Command {
   return new Command("mcp")
@@ -23,19 +24,23 @@ export function mcpCommand(): Command {
 
       const pipeline = new IndexingPipeline(config);
 
+      const rwLock = new ReadWriteLock();
+
       const search = new HybridSearch(
         pipeline.getEmbedder(),
         pipeline.getVectorStore(),
         pipeline.getFTSStore(),
         pipeline.getMetadataStore(),
-        config
+        config,
+        rwLock
       );
 
       const server = createMCPServer(
         search,
         pipeline,
         pipeline.getMetadataStore(),
-        config
+        config,
+        rwLock
       );
 
       await server.connect(
@@ -46,7 +51,7 @@ export function mcpCommand(): Command {
 
       const shutdown = async () => {
         await server.close();
-        pipeline.close();
+        await pipeline.closeAsync();
         process.exit(0);
       };
 

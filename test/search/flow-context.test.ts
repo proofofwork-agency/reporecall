@@ -295,7 +295,7 @@ describe("assembleDeepRouteContext", () => {
 
     expect(result.text).toContain("## Relevant codebase context (low confidence)");
     expect(result.text).toContain("retrieval engine could not identify a clear entry point");
-    expect(result.text).toContain("`resolve_seeds`");
+    expect(result.text).toContain("`resolve_seed`");
     expect(result.text).toContain("`build_stack_tree`");
   });
 

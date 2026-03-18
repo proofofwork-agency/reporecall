@@ -39,6 +39,12 @@ export interface MemoryConfig {
   port: number;
   implementationPaths: string[];
   factExtractors: Array<{ keyword: string; pattern: string; label: string }>;
+  conceptBundles: Array<{
+    kind: string;
+    pattern: string;
+    symbols: string[];
+    maxChunks: number;
+  }>;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -79,6 +85,14 @@ const UserConfigSchema = z.object({
       try { new RegExp(p); return true; } catch { return false; }
     }, { message: "Invalid regex syntax" }),
     label: z.string(),
+  })).optional(),
+  conceptBundles: z.array(z.object({
+    kind: z.string(),
+    pattern: z.string().refine((p) => {
+      try { new RegExp(p, "i"); return true; } catch { return false; }
+    }, { message: "Invalid regex syntax" }),
+    symbols: z.array(z.string()).min(1),
+    maxChunks: z.number().int().min(1).default(4),
   })).optional(),
 }).strict();
 
@@ -124,6 +138,26 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   port: 37222,
   implementationPaths: ["src/", "lib/", "bin/"],
   factExtractors: [],
+  conceptBundles: [
+    {
+      kind: "ast",
+      pattern: "\\b(ast|tree[- ]?sitter)\\b",
+      symbols: ["initTreeSitter", "createParser", "chunkFileWithCalls", "walkForExtractables", "extractName"],
+      maxChunks: 4,
+    },
+    {
+      kind: "call_graph",
+      pattern: "\\bcall\\s+graph\\b|\\bwho\\s+calls\\b|\\bcalled\\s+by\\b|\\bcaller(?:s)?\\b|\\bcallee(?:s)?\\b",
+      symbols: ["extractCallEdges", "extractCalleeInfo", "extractReceiver", "graphCommand", "buildStackTree"],
+      maxChunks: 4,
+    },
+    {
+      kind: "search_pipeline",
+      pattern: "\\bsearch\\s+pipeline\\b|\\bretrieval\\s+pipeline\\b|\\bintent\\s+classification\\s+route\\b|\\bhybrid\\s+search\\b|\\bsearch\\s+routing\\b|\\bquery\\s+routing\\b|\\broute\\s+selection\\b",
+      symbols: ["classifyIntent", "deriveRoute", "handlePromptContextDetailed", "searchWithContext", "search", "resolveSeeds"],
+      maxChunks: 5,
+    },
+  ],
 };
 
 export function loadConfig(projectRoot: string): MemoryConfig {

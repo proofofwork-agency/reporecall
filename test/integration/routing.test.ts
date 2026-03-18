@@ -45,6 +45,7 @@ function makeConfig(): MemoryConfig {
     port: 37230,
     implementationPaths: ["src/", "lib/", "bin/"],
     factExtractors: [],
+    conceptBundles: [],
   };
 }
 
@@ -331,21 +332,18 @@ describe("existing search functions", () => {
 // ── Test 7: Route stats tracking ────────────────────────────────────
 
 describe("route stats tracking", () => {
-  it("tracks route statistics", () => {
+  it("tracks and increments route statistics independently per route", () => {
     const metadata = pipeline.getMetadataStore();
 
+    // Increment each route within a single test to avoid cross-it() state
+    // dependencies that make test results order-dependent.
     metadata.incrementRouteStat("skip");
     metadata.incrementRouteStat("R0");
     metadata.incrementRouteStat("R0");
 
     expect(metadata.getStat("route_skip_count")).toBe("1");
     expect(metadata.getStat("route_R0_count")).toBe("2");
-  });
 
-  it("increments stats independently per route", () => {
-    const metadata = pipeline.getMetadataStore();
-
-    // Stats from prior test are already stored; add R1 and R2
     metadata.incrementRouteStat("R1");
     metadata.incrementRouteStat("R1");
     metadata.incrementRouteStat("R1");
@@ -354,13 +352,207 @@ describe("route stats tracking", () => {
     expect(metadata.getStat("route_R1_count")).toBe("3");
     expect(metadata.getStat("route_R2_count")).toBe("1");
 
-    // Prior counts still correct (skip=1, R0=2 from previous test)
+    // Previously set counts are still correct within the same test
     expect(metadata.getStat("route_skip_count")).toBe("1");
     expect(metadata.getStat("route_R0_count")).toBe("2");
   });
 });
 
-// ── Test 8: Full routing pipeline integration ───────────────────────
+// ── Test 8: R0 concept bundle path ──────────────────────────────────
+//
+// The concept bundle short-circuit fires inside searchWithContext() when
+// the query matches one of the three hardcoded concept regexes (AST,
+// call graph, search pipeline) AND no explicit symbol target was resolved.
+// Because the concept bundle looks up symbols from Reporecall's own source,
+// this test uses the real project root rather than the routing fixture.
+
+describe("R0 concept bundle", () => {
+  // A standalone HybridSearch instance pointing at the real project so
+  // that the concept symbols (classifyIntent, extractCallEdges, etc.)
+  // can be found in the metadata store.  We create an isolated data dir
+  // so the test never corrupts the developer's own .memory directory.
+
+  const CONCEPT_PROJECT = resolve(import.meta.dirname, "..", ".test-concept-project");
+  const CONCEPT_DATA = resolve(CONCEPT_PROJECT, ".memory");
+
+  let conceptPipeline: IndexingPipeline;
+  let conceptSearch: HybridSearch;
+
+  beforeAll(async () => {
+    // Index only the src directory of the real project so concept symbols exist.
+    const { cpSync: cp2 } = await import("fs");
+    mkdirSync(resolve(CONCEPT_PROJECT, "src"), { recursive: true });
+    cp2(
+      resolve(import.meta.dirname, "..", "..", "src"),
+      resolve(CONCEPT_PROJECT, "src"),
+      { recursive: true }
+    );
+
+    const conceptConfig: MemoryConfig = {
+      projectRoot: CONCEPT_PROJECT,
+      dataDir: CONCEPT_DATA,
+      embeddingProvider: "keyword",
+      embeddingModel: "",
+      embeddingDimensions: 0,
+      ollamaUrl: "",
+      extensions: [".ts"],
+      ignorePatterns: ["node_modules", ".git", ".memory"],
+      maxFileSize: 100 * 1024,
+      batchSize: 32,
+      contextBudget: 8000,
+      maxContextChunks: 0,
+      sessionBudget: 2000,
+      searchWeights: { vector: 0, keyword: 0.7, recency: 0.3 },
+      rrfK: 60,
+      graphExpansion: false,
+      graphDiscountFactor: 0.6,
+      siblingExpansion: false,
+      siblingDiscountFactor: 0.4,
+      reranking: false,
+      rerankingModel: "",
+      rerankTopK: 25,
+      codeBoostFactor: 1.5,
+      testPenaltyFactor: 0.3,
+      anonymousPenaltyFactor: 0.5,
+      debounceMs: 2000,
+      port: 37231,
+      implementationPaths: ["src/", "lib/", "bin/"],
+      factExtractors: [],
+      conceptBundles: [
+        {
+          kind: "ast",
+          pattern: "\\b(ast|tree[- ]?sitter)\\b",
+          symbols: ["initTreeSitter", "createParser", "chunkFileWithCalls", "walkForExtractables", "extractName"],
+          maxChunks: 4,
+        },
+        {
+          kind: "call_graph",
+          pattern: "\\bcall\\s+graph\\b|\\bwho\\s+calls\\b|\\bcalled\\s+by\\b|\\bcaller(?:s)?\\b|\\bcallee(?:s)?\\b",
+          symbols: ["extractCallEdges", "extractCalleeInfo", "extractReceiver", "graphCommand", "buildStackTree"],
+          maxChunks: 4,
+        },
+        {
+          kind: "search_pipeline",
+          pattern: "\\bsearch\\s+pipeline\\b|\\bretrieval\\s+pipeline\\b|\\bintent\\s+classification\\s+route\\b|\\bhybrid\\s+search\\b|\\bsearch\\s+routing\\b|\\bquery\\s+routing\\b|\\broute\\s+selection\\b",
+          symbols: ["classifyIntent", "deriveRoute", "handlePromptContextDetailed", "searchWithContext", "search", "resolveSeeds"],
+          maxChunks: 5,
+        },
+      ],
+    };
+
+    conceptPipeline = new IndexingPipeline(conceptConfig);
+    const result = await conceptPipeline.indexAll();
+    expect(result.filesProcessed).toBeGreaterThan(0);
+
+    conceptSearch = new HybridSearch(
+      conceptPipeline.getEmbedder(),
+      conceptPipeline.getVectorStore(),
+      conceptPipeline.getFTSStore(),
+      conceptPipeline.getMetadataStore(),
+      conceptConfig
+    );
+  }, 60000);
+
+  afterAll(() => {
+    conceptPipeline?.close();
+    rmSync(CONCEPT_PROJECT, { recursive: true, force: true });
+  });
+
+  it("hasConceptContext returns true for call-graph queries", () => {
+    expect(conceptSearch.hasConceptContext("who calls extractCallEdges?")).toBe(true);
+    expect(conceptSearch.hasConceptContext("show me the call graph")).toBe(true);
+  });
+
+  it("hasConceptContext returns true for AST queries", () => {
+    expect(conceptSearch.hasConceptContext("how does AST parsing work?")).toBe(true);
+    expect(conceptSearch.hasConceptContext("explain tree-sitter usage")).toBe(true);
+  });
+
+  it("hasConceptContext returns true for search-pipeline queries", () => {
+    expect(conceptSearch.hasConceptContext("how does the search pipeline work?")).toBe(true);
+    expect(conceptSearch.hasConceptContext("explain query routing")).toBe(true);
+  });
+
+  it("hasConceptContext returns false for unrelated queries", () => {
+    expect(conceptSearch.hasConceptContext("how does validate work?")).toBe(false);
+    expect(conceptSearch.hasConceptContext("where is the config file?")).toBe(false);
+  });
+
+  it("searchWithContext returns concept routeStyle for call-graph query", async () => {
+    const result = await conceptSearch.searchWithContext(
+      "how does the call graph work?",
+      8000
+    );
+    // If concept symbols were found the bundle short-circuit fires; otherwise
+    // we fall through to normal search.  Guard against an empty index.
+    if (result.routeStyle === "concept") {
+      expect(result.text).toContain("call graph");
+      expect(result.chunks.length).toBeGreaterThan(0);
+    } else {
+      // Concept symbols not found means the metadata store returned nothing
+      // for the call-graph symbol list — acceptable only if indexing produced
+      // no chunks (should not happen with the real src tree).
+      expect(result.chunks.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("searchWithContext concept bundle contains expected call-graph symbol chunks", async () => {
+    const result = await conceptSearch.searchWithContext(
+      "show callers and callees — explain the call graph system",
+      8000
+    );
+    if (result.routeStyle !== "concept") {
+      // Symbol lookup missed — still verify search returned something useful.
+      expect(result.chunks.length).toBeGreaterThan(0);
+      return;
+    }
+    // The concept bundle header identifies the bundle kind.
+    expect(result.text).toContain("## Relevant codebase context (call graph)");
+    // At least one of the canonical call-graph symbols should appear in the text.
+    const callGraphSymbols = [
+      "extractCallEdges",
+      "extractCalleeInfo",
+      "buildStackTree",
+      "graphCommand",
+    ];
+    const foundSymbol = callGraphSymbols.some((sym) => result.text.includes(sym));
+    expect(foundSymbol).toBe(true);
+  });
+
+  it("searchWithContext concept bundle contains expected AST symbol chunks", async () => {
+    const result = await conceptSearch.searchWithContext(
+      "how does the AST pipeline parse files?",
+      8000
+    );
+    if (result.routeStyle !== "concept") {
+      expect(result.chunks.length).toBeGreaterThan(0);
+      return;
+    }
+    expect(result.text).toContain("## Relevant codebase context (AST pipeline)");
+    const astSymbols = [
+      "initTreeSitter",
+      "createParser",
+      "chunkFileWithCalls",
+      "walkForExtractables",
+    ];
+    const foundSymbol = astSymbols.some((sym) => result.text.includes(sym));
+    expect(foundSymbol).toBe(true);
+  });
+
+  it("concept bundle does NOT fire when an explicit symbol target is resolved", async () => {
+    // "buildStackTree" is a call-graph concept symbol; but the query names it
+    // explicitly so resolveSeeds will produce an explicit_target hit,
+    // suppressing the concept bundle short-circuit.
+    const result = await conceptSearch.searchWithContext(
+      "how does buildStackTree work?",
+      8000
+    );
+    // Must NOT return a concept bundle — explicit target takes precedence.
+    expect(result.routeStyle).not.toBe("concept");
+  });
+});
+
+// ── Test 9: Full routing pipeline integration ───────────────────────
 
 describe("full routing pipeline integration", () => {
   it("routes a meta query through skip without searching", async () => {

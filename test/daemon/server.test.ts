@@ -214,9 +214,9 @@ describe("daemon HTTP server (3F)", () => {
       query: "",
     }, token);
     expect(status).toBe(200);
-    expect(body.additionalContext).toBe("");
-    expect(body._debug).toBeDefined();
-    expect(body._debug.route).toBe("skip");
+    expect(body).toHaveProperty("hookSpecificOutput");
+    expect(body.hookSpecificOutput.additionalContext).toBe("");
+    expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
   });
 
   it("GET /unknown returns 404", async () => {
@@ -250,9 +250,9 @@ describe("daemon HTTP server (3F)", () => {
       token
     );
     expect(status).toBe(200);
-    expect(body.additionalContext).toBe("");
-    expect(body._debug).toBeDefined();
-    expect(body._debug.route).toBe("skip");
+    expect(body).toHaveProperty("hookSpecificOutput");
+    expect(body.hookSpecificOutput.additionalContext).toBe("");
+    expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
   });
 
   it("sanitizeQuery: handles multi-line natural language", async () => {

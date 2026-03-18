@@ -225,9 +225,13 @@ export function createDaemonServer(
   metadata: MetadataStore,
   options?: DaemonServerOptions
 ): { server: ReturnType<typeof createServer>; token: string; metrics: MetricsCollector } {
-  const ftsInitialized = options?.ftsInitialized ?? true;
+  // Keep a live reference to the options object so that getter properties
+  // (e.g. ftsInitialized, ftsStore) are re-evaluated on each access rather
+  // than captured as a snapshot at construction time.  This allows callers in
+  // serve.ts to use object getter accessors to reflect post-startup state
+  // changes (e.g. FTS becoming available after a recovery re-index).
+  const liveOptions = options ?? {};
   const debugMode = options?.debugMode ?? false;
-  const ftsStore = options?.ftsStore;
   const log = getLogger();
   const hookLogDir = resolve(config.dataDir, "logs");
   mkdirSync(hookLogDir, { recursive: true });
@@ -243,9 +247,9 @@ export function createDaemonServer(
   const metrics = new MetricsCollector((msg) => log.info(msg));
 
   const hookLog = new RotatingLog(hookLogPath);
-  async function logHook(message: string): Promise<void> {
+  function logHook(message: string): void {
     const timestamp = new Date().toISOString().slice(11, 19);
-    await hookLog.append(`[${timestamp}] ${message}\n`);
+    hookLog.append(`[${timestamp}] ${message}\n`).catch(() => {});
   }
 
   const server = createServer(async (req, res) => {
@@ -303,7 +307,7 @@ export function createDaemonServer(
           try {
             const stats = metadata.getStats();
             const hasChunks = stats.totalChunks > 0;
-            const storesReady = ftsInitialized;
+            const storesReady = liveOptions.ftsInitialized ?? true;
 
             log.debug({ ready: hasChunks && storesReady, chunks: stats.totalChunks, ftsInitialized: storesReady }, "readiness check");
 
@@ -394,12 +398,12 @@ export function createDaemonServer(
       ) {
         await withTimeout(async (_signal) => {
           const startTime = Date.now();
-          await logHook(`[${requestId}] SESSION_START`);
+          logHook(`[${requestId}] SESSION_START`);
 
           const context = await handleSessionStart(search, config, metadata);
 
           const elapsed = Date.now() - startTime;
-          await logHook(
+          logHook(
             `[${requestId}] SESSION_START RESULT ${context.chunks.length} chunks (${context.tokenCount} tokens) in ${elapsed}ms`
           );
 
@@ -414,7 +418,7 @@ export function createDaemonServer(
           }, "session-start hook complete");
 
           for (const chunk of context.chunks) {
-            await logHook(
+            logHook(
               `  -> ${chunk.filePath}:${chunk.startLine}-${chunk.endLine} (${chunk.name}) [score: ${chunk.score.toFixed(2)}]`
             );
           }
@@ -483,7 +487,7 @@ export function createDaemonServer(
               query: rawQuery,
               sanitizedQuery: query,
             };
-            await logHook(`[${requestId}] SKIP reason="empty query after sanitization" debug=${JSON.stringify(skipDebug)}`);
+            logHook(`[${requestId}] SKIP reason="empty query after sanitization" debug=${JSON.stringify(skipDebug)}`);
             if (debugMode) {
               res.setHeader("X-Memory-Debug", JSON.stringify({
                 requestId,
@@ -497,15 +501,20 @@ export function createDaemonServer(
               }));
             }
             json(res, {
-              additionalContext: "",
-              _debug: {
-                route: "skip" as const,
-                tokensInjected: 0,
-                chunksInjected: 0,
-                queryClassification: { isCodeQuery: false, needsNavigation: false },
-                skipReason: "empty query after sanitization",
-                latencyMs: 0,
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: "",
               },
+              ...(debugMode ? {
+                _debug: {
+                  route: "skip" as const,
+                  tokensInjected: 0,
+                  chunksInjected: 0,
+                  queryClassification: { isCodeQuery: false, needsNavigation: false },
+                  skipReason: "empty query after sanitization",
+                  latencyMs: 0,
+                },
+              } : {}),
             });
             return;
           }
@@ -514,12 +523,16 @@ export function createDaemonServer(
           const intent = classifyIntent(query);
           let route = deriveRoute(intent);
 
-          // For navigational queries, attempt seed resolution to determine R1 vs R2
+          // For navigational queries, attempt seed resolution to determine R1 vs R2.
+          // The seedResult is captured and threaded through to downstream handlers
+          // so that resolveSeeds is only called once per request.
           let seedCandidate: string | null = null;
           let seedConfidence: number | null = null;
-          if (intent.needsNavigation && route === "R0" && ftsStore) {
+          let cachedSeedResult: import("../search/seed.js").SeedResult | undefined;
+          if (intent.needsNavigation && route === "R0" && liveOptions.ftsStore) {
             const { resolveSeeds } = await import("../search/seed.js");
-            const seedResult = resolveSeeds(query, metadata, ftsStore);
+            const seedResult = resolveSeeds(query, metadata, liveOptions.ftsStore);
+            cachedSeedResult = seedResult;
             if (seedResult.bestSeed) {
               seedCandidate = seedResult.bestSeed.name;
               seedConfidence = seedResult.bestSeed.confidence;
@@ -540,7 +553,7 @@ export function createDaemonServer(
               query: rawQuery,
               sanitizedQuery: query,
             };
-            await logHook(
+            logHook(
               `[${requestId}] SKIP query="${query.slice(0, 100)}" reason="${intent.skipReason ?? "non-code query"}" debug=${JSON.stringify(skipDebug)}`
             );
             metadata.incrementRouteStat("skip");
@@ -561,20 +574,22 @@ export function createDaemonServer(
                 hookEventName: "UserPromptSubmit",
                 additionalContext: "",
               },
-              _debug: {
-                route: "skip",
-                tokensInjected: 0,
-                chunksInjected: 0,
-                queryClassification: intent,
-                skipReason: intent.skipReason,
-                latencyMs: 0,
-              },
+              ...(debugMode ? {
+                _debug: {
+                  route: "skip",
+                  tokensInjected: 0,
+                  chunksInjected: 0,
+                  queryClassification: intent,
+                  skipReason: intent.skipReason,
+                  latencyMs: 0,
+                },
+              } : {}),
             });
             return;
           }
 
           const startTime = Date.now();
-          await logHook(`[${requestId}] SEARCH route=${route} query="${query.slice(0, 100)}"`);
+          logHook(`[${requestId}] SEARCH route=${route} query="${query.slice(0, 100)}"`);
 
           const promptContext = await handlePromptContextDetailed(
             query,
@@ -583,8 +598,9 @@ export function createDaemonServer(
             activeFiles,
             signal,
             route,
-            ftsStore ? metadata : undefined,
-            ftsStore
+            liveOptions.ftsStore ? metadata : undefined,
+            liveOptions.ftsStore,
+            cachedSeedResult
           );
           route = promptContext.resolvedRoute;
           const context = promptContext.context;
@@ -604,7 +620,7 @@ export function createDaemonServer(
               query: rawQuery,
               sanitizedQuery: query,
             };
-            await logHook(`[${requestId}] SKIP reason="no context returned" debug=${JSON.stringify(skipDebug)}`);
+            logHook(`[${requestId}] SKIP reason="no context returned" debug=${JSON.stringify(skipDebug)}`);
             if (debugMode) {
               res.setHeader("X-Memory-Debug", JSON.stringify({
                 requestId,
@@ -618,15 +634,20 @@ export function createDaemonServer(
               }));
             }
             json(res, {
-              additionalContext: "",
-              _debug: {
-                route: "skip" as const,
-                tokensInjected: 0,
-                chunksInjected: 0,
-                queryClassification: intent,
-                skipReason: "no context returned",
-                latencyMs: skipElapsed,
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: "",
               },
+              ...(debugMode ? {
+                _debug: {
+                  route: "skip" as const,
+                  tokensInjected: 0,
+                  chunksInjected: 0,
+                  queryClassification: intent,
+                  skipReason: "no context returned",
+                  latencyMs: skipElapsed,
+                },
+              } : {}),
             });
             return;
           }
@@ -646,7 +667,7 @@ export function createDaemonServer(
             sanitizedQuery: query,
           };
 
-          await logHook(
+          logHook(
             `[${requestId}] RESULT ${context.chunks.length} chunks (${context.tokenCount} tokens) in ${elapsed}ms route=${route}`
           );
 
@@ -666,12 +687,12 @@ export function createDaemonServer(
           }, "prompt-context hook complete");
 
           for (const chunk of context.chunks) {
-            await logHook(
+            logHook(
               `  -> ${chunk.filePath}:${chunk.startLine}-${chunk.endLine} (${chunk.name}) [score: ${chunk.score.toFixed(2)}]`
             );
           }
 
-          await logHook(
+          logHook(
             `[${requestId}] BUDGET ${context.tokenCount} / ${config.contextBudget} tokens (${((context.tokenCount / config.contextBudget) * 100).toFixed(1)}%)`
           );
 
@@ -704,14 +725,16 @@ export function createDaemonServer(
               hookEventName: "UserPromptSubmit",
               additionalContext: context.text,
             },
-            _debug: {
-              route,
-              tokensInjected: context.tokenCount,
-              chunksInjected: context.chunks.length,
-              queryClassification: intent,
-              latencyMs: elapsed,
-              ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
-            },
+            ...(debugMode ? {
+              _debug: {
+                route,
+                tokensInjected: context.tokenCount,
+                chunksInjected: context.chunks.length,
+                queryClassification: intent,
+                latencyMs: elapsed,
+                ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
+              },
+            } : {}),
           });
         }, res, 30000, "/hooks/prompt-context");
         metrics.recordLatency(endpoint, Date.now() - requestStart);

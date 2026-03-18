@@ -32,6 +32,7 @@ export function reciprocalRankFusion(
   // Vector scores — standard RRF: 1/(k + rank) with 1-indexed rank
   for (let i = 0; i < vectorResults.length; i++) {
     const item = vectorResults[i];
+    if (!item) continue;
     const rank = i + 1; // 1-indexed
     const existing = scores.get(item.id) ?? {
       id: item.id,
@@ -45,6 +46,7 @@ export function reciprocalRankFusion(
   // Keyword scores — standard RRF: 1/(k + rank) with 1-indexed rank
   for (let i = 0; i < keywordResults.length; i++) {
     const item = keywordResults[i];
+    if (!item) continue;
     const rank = i + 1; // 1-indexed
     const existing = scores.get(item.id) ?? {
       id: item.id,

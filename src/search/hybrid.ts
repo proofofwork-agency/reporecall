@@ -4,6 +4,7 @@ import type { VectorStore } from "../storage/vector-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { reciprocalRankFusion } from "./ranker.js";
+import { isTestFile } from "./utils.js";
 import {
   assembleConceptContext,
   assembleContext,
@@ -14,6 +15,7 @@ import { LocalReranker } from "./reranker.js";
 import type { SearchResult, SearchOptions, AssembledContext } from "./types.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
 import { resolveSeeds } from "./seed.js";
+import type { SeedResult } from "./seed.js";
 import type { StoredChunk } from "../storage/types.js";
 
 const IMPL_BOOST = 1.25;
@@ -23,42 +25,24 @@ const DOC_PENALTY_NO_IMPL = 0.8;
 const TERM_MATCH_BOOST = 1.15;
 const CONCEPT_BOOST = 0.9;
 
-const AST_CONCEPT_RE = /\b(ast|tree[- ]?sitter)\b/i;
-const CALL_GRAPH_CONCEPT_RE =
-  /\bcall\s+graph\b|\bwho\s+calls\b|\bcalled\s+by\b|\bcaller(?:s)?\b|\bcallee(?:s)?\b/i;
-const SEARCH_PIPELINE_CONCEPT_RE =
-  /\bsearch\s+pipeline\b|\bretrieval\s+pipeline\b|\bintent\s+classification\s+route\b|\bhybrid\s+search\b|\bsearch\s+routing\b|\bquery\s+routing\b|\broute\s+selection\b/i;
+interface CompiledConceptBundle {
+  kind: string;
+  pattern: RegExp;
+  symbols: string[];
+  maxChunks: number;
+}
 
-const AST_CONCEPT_SYMBOLS = [
-  "initTreeSitter",
-  "createParser",
-  "chunkFileWithCalls",
-  "walkForExtractables",
-  "extractName",
-];
-
-const CALL_GRAPH_CONCEPT_SYMBOLS = [
-  "extractCallEdges",
-  "extractCalleeInfo",
-  "extractReceiver",
-  "graphCommand",
-  "buildStackTree",
-];
-
-const SEARCH_PIPELINE_CONCEPT_SYMBOLS = [
-  "classifyIntent",
-  "deriveRoute",
-  "handlePromptContextDetailed",
-  "searchWithContext",
-  "search",
-  "resolveSeeds",
-];
-
-const CONCEPT_MAX_CHUNKS: Record<ConceptContextKind, number> = {
-  ast: 4,
-  call_graph: 4,
-  search_pipeline: 5,
-};
+function compileConceptBundles(
+  bundles: Array<{ kind: string; pattern: string; symbols: string[]; maxChunks: number }>
+): CompiledConceptBundle[] {
+  if (!bundles) return [];
+  return bundles.map((b) => ({
+    kind: b.kind,
+    pattern: new RegExp(b.pattern, "i"),
+    symbols: b.symbols,
+    maxChunks: b.maxChunks,
+  }));
+}
 
 interface ScoringMaps {
   chunkDates: Map<string, string>;
@@ -76,6 +60,7 @@ export class HybridSearch {
   private config: MemoryConfig;
   private reranker: LocalReranker | null = null;
   private lock: ReadWriteLock | undefined;
+  private conceptBundles: CompiledConceptBundle[];
 
   constructor(
     embedder: EmbeddingProvider,
@@ -91,6 +76,7 @@ export class HybridSearch {
     this.metadata = metadata;
     this.config = config;
     this.lock = lock;
+    this.conceptBundles = compileConceptBundles(config.conceptBundles);
   }
 
   updateStores(
@@ -149,10 +135,12 @@ export class HybridSearch {
     query: string,
     tokenBudget?: number,
     activeFiles?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    seedResult?: SeedResult
   ): Promise<AssembledContext> {
     const budget = tokenBudget ?? this.config.contextBudget;
-    const conceptContext = this.buildConceptContext(query, budget);
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const conceptContext = this.buildConceptContext(query, budget, seeds);
     if (conceptContext) return conceptContext;
 
     const maxContextChunks = this.config.maxContextChunks > 0
@@ -167,7 +155,7 @@ export class HybridSearch {
       rerank: false,
       signal,
     });
-    const exactAware = this.prependExplicitTargetResults(query, results);
+    const exactAware = this.prependExplicitTargetResults(query, results, seeds);
     const prioritized = this.prioritizeForHookContext(query, exactAware);
 
     const log = getLogger();
@@ -194,18 +182,21 @@ export class HybridSearch {
 
   private buildConceptContext(
     query: string,
-    tokenBudget: number
+    tokenBudget: number,
+    seedResult?: SeedResult
   ): AssembledContext | null {
     const conceptKind = this.getConceptKind(query);
     if (!conceptKind) return null;
 
-    const hasResolvedExplicitTarget = resolveSeeds(query, this.metadata, this.fts).seeds
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const hasResolvedExplicitTarget = seeds.seeds
       .some((seed) => seed.reason === "explicit_target");
     if (hasResolvedExplicitTarget) return null;
 
+    const bundle = this.getConceptBundle(conceptKind);
     const selectedChunks = this.selectConceptChunks(
       this.getConceptSymbolsForKind(conceptKind),
-      CONCEPT_MAX_CHUNKS[conceptKind]
+      bundle?.maxChunks ?? 4
     );
     if (selectedChunks.length === 0) return null;
 
@@ -244,10 +235,11 @@ export class HybridSearch {
 
   private prependExplicitTargetResults(
     query: string,
-    results: SearchResult[]
+    results: SearchResult[],
+    seedResult?: SeedResult
   ): SearchResult[] {
-    const seedResult = resolveSeeds(query, this.metadata, this.fts);
-    const explicitSeeds = seedResult.seeds
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const explicitSeeds = seeds.seeds
       .filter((seed) => seed.reason === "explicit_target")
       .slice(0, 5);
 
@@ -264,6 +256,7 @@ export class HybridSearch {
 
     for (let i = 0; i < explicitSeeds.length; i++) {
       const seed = explicitSeeds[i];
+      if (!seed) continue;
       const chunk = chunkMap.get(seed.chunkId);
       if (!chunk) continue;
 
@@ -299,6 +292,7 @@ export class HybridSearch {
 
     for (let i = 0; i < selectedChunks.length; i++) {
       const chunk = selectedChunks[i];
+      if (!chunk) continue;
       const existing = byId.get(chunk.id);
       const boostedScore = topScore + CONCEPT_BOOST - i * 0.001;
       byId.set(
@@ -317,12 +311,8 @@ export class HybridSearch {
   }
 
   private getConceptKind(query: string): ConceptContextKind | null {
-    const ast = AST_CONCEPT_RE.test(query);
-    const callGraph = CALL_GRAPH_CONCEPT_RE.test(query);
-    const searchPipeline = SEARCH_PIPELINE_CONCEPT_RE.test(query);
-    if (searchPipeline && !ast && !callGraph) return "search_pipeline";
-    if (ast && !callGraph) return "ast";
-    if (callGraph && !ast) return "call_graph";
+    const matched = this.conceptBundles.filter((b) => b.pattern.test(query));
+    if (matched.length === 1) return (matched[0]?.kind ?? null) as ConceptContextKind | null;
     return null;
   }
 
@@ -331,10 +321,12 @@ export class HybridSearch {
     return kind ? this.getConceptSymbolsForKind(kind) : [];
   }
 
+  private getConceptBundle(kind: ConceptContextKind): CompiledConceptBundle | undefined {
+    return this.conceptBundles.find((b) => b.kind === kind);
+  }
+
   private getConceptSymbolsForKind(kind: ConceptContextKind): string[] {
-    if (kind === "ast") return AST_CONCEPT_SYMBOLS;
-    if (kind === "call_graph") return CALL_GRAPH_CONCEPT_SYMBOLS;
-    return SEARCH_PIPELINE_CONCEPT_SYMBOLS;
+    return this.getConceptBundle(kind)?.symbols ?? [];
   }
 
   private selectConceptChunks(symbols: string[], maxChunks?: number): StoredChunk[] {
@@ -362,8 +354,8 @@ export class HybridSearch {
       - Number(this.isImplementationPath(a.filePath));
     if (implDiff !== 0) return implDiff;
 
-    const testDiff = Number(this.isTestPath(a.filePath))
-      - Number(this.isTestPath(b.filePath));
+    const testDiff = Number(isTestFile(a.filePath))
+      - Number(isTestFile(b.filePath));
     if (testDiff !== 0) return testDiff;
 
     return a.filePath.localeCompare(b.filePath);
@@ -406,12 +398,6 @@ export class HybridSearch {
     const lowerPath = filePath.toLowerCase();
     const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
     return implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()));
-  }
-
-  private isTestPath(filePath: string): boolean {
-    return /(?:^|\/)(test|spec|__tests__|__fixtures__|fixtures|benchmark|examples)\//.test(
-      filePath.toLowerCase()
-    );
   }
 
   private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
@@ -695,7 +681,9 @@ export class HybridSearch {
     limit: number
   ): Promise<Array<{ id: string; score: number }>> {
     try {
-      const [queryVector] = await this.embedder.embed([query]);
+      const embedResults = await this.embedder.embed([query]);
+      const queryVector = embedResults[0];
+      if (!queryVector) return [];
       return this.vectors.search(queryVector, limit);
     } catch (err) {
       getLogger().warn(`Vector search failed: ${err}`);

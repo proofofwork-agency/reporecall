@@ -5,6 +5,7 @@ import type { RouteDecision } from "../search/intent.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import { resolveSeeds } from "../search/seed.js";
+import type { SeedResult } from "../search/seed.js";
 import { buildStackTree } from "../search/tree-builder.js";
 import { assembleFlowContext, assembleDeepRouteContext } from "../search/context-assembler.js";
 
@@ -18,9 +19,10 @@ async function buildDeepRouteContext(
   search: HybridSearch,
   config: MemoryConfig,
   activeFiles?: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  seedResult?: SeedResult
 ): Promise<AssembledContext | null> {
-  const baseContext = await search.searchWithContext(query, config.contextBudget, activeFiles, signal);
+  const baseContext = await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult);
   if (!baseContext) return null;
   if (baseContext.routeStyle === "concept") {
     return baseContext;
@@ -36,7 +38,8 @@ export async function handlePromptContextDetailed(
   signal?: AbortSignal,
   route?: RouteDecision,
   metadata?: MetadataStore,
-  fts?: FTSStore
+  fts?: FTSStore,
+  seedResult?: SeedResult
 ): Promise<PromptContextResult> {
   if (!query.trim()) {
     return { context: null, resolvedRoute: "skip" };
@@ -49,7 +52,7 @@ export async function handlePromptContextDetailed(
   // R0 or fallback: existing behavior
   if (!route || route === "R0") {
     return {
-      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal),
+      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
       resolvedRoute: "R0",
     };
   }
@@ -59,14 +62,14 @@ export async function handlePromptContextDetailed(
     // Concept queries should not attempt R1 — they resolve via R0 (concept bundle)
     if (search.hasConceptContext(query)) {
       return {
-        context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal),
+        context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
         resolvedRoute: "R0",
       };
     }
-    const seedResult = resolveSeeds(query, metadata, fts);
-    if (seedResult.bestSeed) {
+    const resolvedSeeds = seedResult ?? resolveSeeds(query, metadata, fts);
+    if (resolvedSeeds.bestSeed) {
       const tree = buildStackTree(metadata, {
-        seed: seedResult.bestSeed,
+        seed: resolvedSeeds.bestSeed,
         direction: "both",
         maxDepth: 2,
         maxBranchFactor: 3,
@@ -77,7 +80,7 @@ export async function handlePromptContextDetailed(
       // the flow route succeeded with only the seed node.
       if (tree.nodeCount <= 1) {
         return {
-          context: await buildDeepRouteContext(query, search, config, activeFiles, signal),
+          context: await buildDeepRouteContext(query, search, config, activeFiles, signal, resolvedSeeds),
           resolvedRoute: "R2",
         };
       }
@@ -85,7 +88,7 @@ export async function handlePromptContextDetailed(
       const flowContext = assembleFlowContext(tree, metadata, config.contextBudget, query);
       if (flowContext.chunks.length === 0 || !flowContext.text.trim()) {
         return {
-          context: await buildDeepRouteContext(query, search, config, activeFiles, signal),
+          context: await buildDeepRouteContext(query, search, config, activeFiles, signal, resolvedSeeds),
           resolvedRoute: "R2",
         };
       }
@@ -93,7 +96,7 @@ export async function handlePromptContextDetailed(
       return { context: flowContext, resolvedRoute: "R1" };
     }
     return {
-      context: await buildDeepRouteContext(query, search, config, activeFiles, signal),
+      context: await buildDeepRouteContext(query, search, config, activeFiles, signal, resolvedSeeds),
       resolvedRoute: "R2",
     };
   }
@@ -101,14 +104,14 @@ export async function handlePromptContextDetailed(
   // R1 without metadata/fts falls back to R0
   if (route === "R1" && (!metadata || !fts)) {
     return {
-      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal),
+      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
       resolvedRoute: "R0",
     };
   }
 
   // R2: deep route — chunk context + MCP guidance
   return {
-    context: await buildDeepRouteContext(query, search, config, activeFiles, signal),
+    context: await buildDeepRouteContext(query, search, config, activeFiles, signal, seedResult),
     resolvedRoute: "R2",
   };
 }
@@ -121,7 +124,8 @@ export async function handlePromptContext(
   signal?: AbortSignal,
   route?: RouteDecision,
   metadata?: MetadataStore,
-  fts?: FTSStore
+  fts?: FTSStore,
+  seedResult?: SeedResult
 ): Promise<AssembledContext | null> {
   const result = await handlePromptContextDetailed(
     query,
@@ -131,7 +135,8 @@ export async function handlePromptContext(
     signal,
     route,
     metadata,
-    fts
+    fts,
+    seedResult
   );
   return result.context;
 }

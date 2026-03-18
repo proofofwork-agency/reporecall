@@ -62,7 +62,7 @@ export function createMCPServer(
     {
       description: 'Search the codebase using hybrid vector + keyword search',
       inputSchema: {
-        query: z.string().describe('Search query'),
+        query: z.string().min(1).describe('Search query'),
         limit: z
           .number()
           .max(500)
@@ -116,17 +116,27 @@ export function createMCPServer(
           .max(1000)
           .optional()
           .describe('Specific file paths to re-index (omit for full index)')
-      }
+      },
+      annotations: { destructiveHint: true }
     },
     async ({ paths }) => {
       try {
-        let result
-        if (paths && paths.length > 0) {
-          const safePaths = paths.filter((p: string) => isPathSafe(config.projectRoot, p))
-          result = await pipeline.indexChanged(safePaths)
-        } else {
-          result = await pipeline.indexAll()
+        let result: unknown
+        const doIndex = async () => {
+          if (paths && paths.length > 0) {
+            const safePaths = paths.filter((p: string) => isPathSafe(config.projectRoot, p))
+            result = await pipeline.indexChanged(safePaths)
+          } else {
+            result = await pipeline.indexAll()
+          }
         }
+
+        if (lock) {
+          await lock.withWrite(doIndex)
+        } else {
+          await doIndex()
+        }
+
         return {
           content: [
             {
@@ -192,7 +202,7 @@ export function createMCPServer(
 
         const doClear = async () => {
           // Close stores and wipe merkle state before deleting files
-          pipeline.closeAndClearMerkle()
+          await pipeline.closeAndClearMerkle()
 
           const { rmSync } = await import('fs')
           const { resolve } = await import('path')
@@ -254,6 +264,7 @@ export function createMCPServer(
       inputSchema: {
         functionName: z
           .string()
+          .min(1)
           .describe('Name of the function to find callers for'),
         limit: z.number().max(500).optional().describe('Max results (default 20)')
       },
@@ -283,6 +294,7 @@ export function createMCPServer(
       inputSchema: {
         functionName: z
           .string()
+          .min(1)
           .describe('Name of the function to find callees for'),
         limit: z.number().max(500).optional().describe('Max results (default 20)')
       },
@@ -311,7 +323,7 @@ export function createMCPServer(
       description:
         'Resolve a query to seed candidates for stack tree building. Returns ranked code symbols that best match the query.',
       inputSchema: {
-        query: z.string().describe('Natural language query or code symbol name')
+        query: z.string().min(1).describe('Natural language query or code symbol name')
       },
       annotations: { readOnlyHint: true }
     },
@@ -349,6 +361,7 @@ export function createMCPServer(
       inputSchema: {
         seed: z
           .string()
+          .min(1)
           .describe('Function or method name to use as the tree seed'),
         depth: z
           .number()
@@ -418,6 +431,7 @@ export function createMCPServer(
       inputSchema: {
         filePath: z
           .string()
+          .min(1)
           .describe('Relative file path (e.g., src/auth/handler.ts)')
       },
       annotations: { readOnlyHint: true }
@@ -463,7 +477,7 @@ export function createMCPServer(
       description:
         'Look up code symbols (functions, classes, methods) by name. Returns matching chunks with file path, lines, and kind.',
       inputSchema: {
-        name: z.string().describe('Symbol name to look up (e.g., "authenticate", "UserService")')
+        name: z.string().min(1).describe('Symbol name to look up (e.g., "authenticate", "UserService")')
       },
       annotations: { readOnlyHint: true }
     },
@@ -507,7 +521,7 @@ export function createMCPServer(
       description:
         'Explain the call flow around a query or function name. Resolves a seed symbol, builds a bidirectional call tree, and returns assembled flow context with callers, seed, and callees.',
       inputSchema: {
-        query: z.string().describe('Natural language query or function name'),
+        query: z.string().min(1).describe('Natural language query or function name'),
         direction: z
           .enum(['up', 'down', 'both'])
           .optional()

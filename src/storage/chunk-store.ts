@@ -20,6 +20,21 @@ export interface ChunkLightweight {
 export class ChunkStore {
   private static readonly SQLITE_PARAM_LIMIT = 900;
 
+  // Cached prepared statements — initialised in initSchema() after the schema
+  // is guaranteed to exist.
+  private upsertFileStmt!: Database.Statement;
+  private deleteFileStmt!: Database.Statement;
+  private deleteChunksByFileStmt!: Database.Statement;
+  private upsertChunkStmt!: Database.Statement;
+  private selectChunkByIdStmt!: Database.Statement;
+  private selectAllChunksStmt!: Database.Statement;
+  private selectChunksLightweightStmt!: Database.Statement;
+  private selectFileCountStmt!: Database.Statement;
+  private selectChunkCountStmt!: Database.Statement;
+  private selectLanguageCountsStmt!: Database.Statement;
+  private selectSiblingsStmt!: Database.Statement;
+  private selectChunksByFilePathStmt!: Database.Statement;
+
   constructor(private readonly db: Database.Database) {}
 
   initSchema(): void {
@@ -59,53 +74,73 @@ export class ChunkStore {
     if (!cols.some((c) => c.name === "is_exported")) {
       this.db.exec("ALTER TABLE chunks ADD COLUMN is_exported INTEGER NOT NULL DEFAULT 0");
     }
+
+    // Prepare statements after schema is confirmed to exist.
+    this.upsertFileStmt = this.db.prepare(
+      `INSERT OR REPLACE INTO files (path, hash, last_modified) VALUES (?, ?, ?)`
+    );
+    this.deleteFileStmt = this.db.prepare(`DELETE FROM files WHERE path = ?`);
+    this.deleteChunksByFileStmt = this.db.prepare(`DELETE FROM chunks WHERE file_path = ?`);
+    this.upsertChunkStmt = this.db.prepare(
+      `INSERT OR REPLACE INTO chunks
+       (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime, is_exported)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.selectChunkByIdStmt = this.db.prepare(`SELECT * FROM chunks WHERE id = ?`);
+    this.selectAllChunksStmt = this.db.prepare(`SELECT * FROM chunks`);
+    this.selectChunksLightweightStmt = this.db.prepare(
+      `SELECT file_path, name, kind, language, start_line, end_line, docstring FROM chunks`
+    );
+    this.selectFileCountStmt = this.db.prepare(`SELECT COUNT(*) as c FROM files`);
+    this.selectChunkCountStmt = this.db.prepare(`SELECT COUNT(*) as c FROM chunks`);
+    this.selectLanguageCountsStmt = this.db.prepare(
+      `SELECT language, COUNT(*) as c FROM chunks GROUP BY language ORDER BY c DESC`
+    );
+    this.selectSiblingsStmt = this.db.prepare(
+      `SELECT * FROM chunks
+       WHERE parent_name = ? AND file_path = ? AND id != ?
+       LIMIT ?`
+    );
+    this.selectChunksByFilePathStmt = this.db.prepare(
+      `SELECT * FROM chunks WHERE file_path = ?
+       AND kind != 'file' AND name != '<anonymous>'
+       ORDER BY start_line ASC`
+    );
   }
 
   upsertFile(path: string, hash: string): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO files (path, hash, last_modified) VALUES (?, ?, ?)`
-      )
-      .run(path, hash, new Date().toISOString());
+    this.upsertFileStmt.run(path, hash, new Date().toISOString());
   }
 
   removeFile(path: string): void {
-    this.db.prepare(`DELETE FROM files WHERE path = ?`).run(path);
-    this.db.prepare(`DELETE FROM chunks WHERE file_path = ?`).run(path);
+    this.deleteFileStmt.run(path);
+    this.deleteChunksByFileStmt.run(path);
   }
 
   upsertChunk(chunk: StoredChunk): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO chunks
-         (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime, is_exported)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        chunk.id,
-        chunk.filePath,
-        chunk.name,
-        chunk.kind,
-        chunk.startLine,
-        chunk.endLine,
-        chunk.content,
-        chunk.docstring ?? null,
-        chunk.parentName ?? null,
-        chunk.language,
-        chunk.indexedAt,
-        chunk.fileMtime ?? null,
-        chunk.isExported ? 1 : 0
-      );
+    this.upsertChunkStmt.run(
+      chunk.id,
+      chunk.filePath,
+      chunk.name,
+      chunk.kind,
+      chunk.startLine,
+      chunk.endLine,
+      chunk.content,
+      chunk.docstring ?? null,
+      chunk.parentName ?? null,
+      chunk.language,
+      chunk.indexedAt,
+      chunk.fileMtime ?? null,
+      chunk.isExported ? 1 : 0
+    );
   }
 
   removeChunksForFile(filePath: string): void {
-    this.db.prepare(`DELETE FROM chunks WHERE file_path = ?`).run(filePath);
+    this.deleteChunksByFileStmt.run(filePath);
   }
 
   getChunk(id: string): StoredChunk | undefined {
-    const row = this.db
-      .prepare(`SELECT * FROM chunks WHERE id = ?`)
-      .get(id) as Record<string, unknown> | undefined;
+    const row = this.selectChunkByIdStmt.get(id) as Record<string, unknown> | undefined;
     if (!row) return undefined;
     return this.mapRow(row);
   }
@@ -150,19 +185,12 @@ export class ChunkStore {
   }
 
   getAllChunks(): StoredChunk[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM chunks`)
-      .all() as Array<Record<string, unknown>>;
+    const rows = this.selectAllChunksStmt.all() as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapRow(row));
   }
 
   getChunksLightweight(): ChunkLightweight[] {
-    const rows = this.db
-      .prepare(
-        `SELECT file_path, name, kind, language, start_line, end_line, docstring
-         FROM chunks`
-      )
-      .all() as Array<Record<string, unknown>>;
+    const rows = this.selectChunksLightweightStmt.all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       filePath: row.file_path as string,
       name: row.name as string,
@@ -175,23 +203,15 @@ export class ChunkStore {
   }
 
   getFileCount(): number {
-    return (
-      this.db.prepare(`SELECT COUNT(*) as c FROM files`).get() as { c: number }
-    ).c;
+    return (this.selectFileCountStmt.get() as { c: number }).c;
   }
 
   getChunkCount(): number {
-    return (
-      this.db.prepare(`SELECT COUNT(*) as c FROM chunks`).get() as { c: number }
-    ).c;
+    return (this.selectChunkCountStmt.get() as { c: number }).c;
   }
 
   getLanguageCounts(): Record<string, number> {
-    const langRows = this.db
-      .prepare(
-        `SELECT language, COUNT(*) as c FROM chunks GROUP BY language ORDER BY c DESC`
-      )
-      .all() as Array<{ language: string; c: number }>;
+    const langRows = this.selectLanguageCountsStmt.all() as Array<{ language: string; c: number }>;
     const languages: Record<string, number> = {};
     for (const row of langRows) {
       languages[row.language] = row.c;
@@ -219,36 +239,19 @@ export class ChunkStore {
     excludeId: string,
     limit = 5
   ): StoredChunk[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM chunks
-         WHERE parent_name = ? AND file_path = ? AND id != ?
-         LIMIT ?`
-      )
-      .all(parentName, filePath, excludeId, limit) as Array<Record<string, unknown>>;
+    const rows = this.selectSiblingsStmt.all(parentName, filePath, excludeId, limit) as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapRow(row));
   }
 
   findChunksByFilePath(filePath: string): StoredChunk[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM chunks WHERE file_path = ?
-         AND kind != 'file' AND name != '<anonymous>'
-         ORDER BY start_line ASC`
-      )
-      .all(filePath) as Array<Record<string, unknown>>;
+    const rows = this.selectChunksByFilePathStmt.all(filePath) as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapRow(row));
   }
 
   bulkUpsertChunks(chunks: StoredChunk[]): void {
-    const stmt = this.db.prepare(
-      `INSERT OR REPLACE INTO chunks
-       (id, file_path, name, kind, start_line, end_line, content, docstring, parent_name, language, indexed_at, file_mtime, is_exported)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
     this.db.transaction(() => {
       for (const chunk of chunks) {
-        stmt.run(
+        this.upsertChunkStmt.run(
           chunk.id,
           chunk.filePath,
           chunk.name,

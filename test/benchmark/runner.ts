@@ -1,8 +1,12 @@
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync } from "fs";
 import { join } from "path";
 import type { MemoryConfig } from "../../src/core/config.js";
 import { IndexingPipeline } from "../../src/indexer/pipeline.js";
 import { HybridSearch } from "../../src/search/hybrid.js";
+import { sanitizeQuery } from "../../src/daemon/server.js";
+import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
+import { resolveSeeds } from "../../src/search/seed.js";
+import { handlePromptContextDetailed } from "../../src/hooks/prompt-context.js";
 import {
   generateSmallCodebase,
   generateMediumCodebase,
@@ -15,12 +19,31 @@ import { promptsBySize, type BenchmarkPrompt } from "./prompts.js";
 export type CodebaseSize = "small" | "medium" | "large";
 export type Mode = "baseline" | "keyword" | "semantic";
 
+export interface QueryMetrics {
+  query: string;
+  category: string;
+  expectedRoute: string;
+  actualRoute: string;
+  routeMatch: boolean;
+  searchLatencyMs: number;
+  resultsFound: number;
+  top1Hit: boolean;
+  top5Hits: number;
+  top5Expected: number;
+  contextTokens: number;
+  contextChunks: number;
+  budgetUtilization: number;
+  seedName: string | null;
+  seedConfidence: number | null;
+}
+
 export interface ModeMetrics {
   mode: Mode;
   indexTimeMs: number;
   filesProcessed: number;
   chunksCreated: number;
   queries: QueryMetrics[];
+  // Aggregate stats
   avgSearchLatencyMs: number;
   p50SearchLatencyMs: number;
   p95SearchLatencyMs: number;
@@ -30,19 +53,11 @@ export interface ModeMetrics {
   avgContextTokens: number;
   avgContextChunks: number;
   avgBudgetUtilization: number;
-}
-
-export interface QueryMetrics {
-  query: string;
-  category: string;
-  searchLatencyMs: number;
-  resultsFound: number;
-  top1Hit: boolean;
-  top5Hits: number;
-  top5Expected: number;
-  contextTokens: number;
-  contextChunks: number;
-  budgetUtilization: number;
+  // v0.2.0 routing stats
+  routeAccuracy: number;
+  avgLatencyByRoute: Record<string, number>;
+  avgTokensByRoute: Record<string, number>;
+  routeDistribution: Record<string, number>;
 }
 
 export interface BenchmarkResults {
@@ -98,6 +113,7 @@ function makeConfig(
     port: 37222,
     implementationPaths: ["src/", "lib/", "bin/"],
     factExtractors: [],
+    conceptBundles: [],
   };
 }
 
@@ -127,6 +143,48 @@ function evaluateResults(
   return { top1Hit, top5Hits };
 }
 
+function computeRouteStats(queryMetrics: QueryMetrics[]): {
+  routeAccuracy: number;
+  avgLatencyByRoute: Record<string, number>;
+  avgTokensByRoute: Record<string, number>;
+  routeDistribution: Record<string, number>;
+} {
+  const totalQueries = queryMetrics.length;
+  const routeAccuracy = totalQueries > 0
+    ? Math.round(
+        (queryMetrics.filter((q) => q.routeMatch).length / totalQueries) * 10000
+      ) / 100
+    : 0;
+
+  const latenciesByRoute: Record<string, number[]> = {};
+  const tokensByRoute: Record<string, number[]> = {};
+  const routeDistribution: Record<string, number> = {};
+
+  for (const q of queryMetrics) {
+    const route = q.actualRoute;
+    if (!latenciesByRoute[route]) latenciesByRoute[route] = [];
+    latenciesByRoute[route].push(q.searchLatencyMs);
+    if (!tokensByRoute[route]) tokensByRoute[route] = [];
+    tokensByRoute[route].push(q.contextTokens);
+    routeDistribution[route] = (routeDistribution[route] ?? 0) + 1;
+  }
+
+  const avg = (arr: number[]) =>
+    arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100) / 100 : 0;
+
+  const avgLatencyByRoute: Record<string, number> = {};
+  for (const [route, lats] of Object.entries(latenciesByRoute)) {
+    avgLatencyByRoute[route] = avg(lats);
+  }
+
+  const avgTokensByRoute: Record<string, number> = {};
+  for (const [route, toks] of Object.entries(tokensByRoute)) {
+    avgTokensByRoute[route] = avg(toks);
+  }
+
+  return { routeAccuracy, avgLatencyByRoute, avgTokensByRoute, routeDistribution };
+}
+
 // ─── Benchmark runner for a single mode ───
 
 async function benchmarkMode(
@@ -136,23 +194,29 @@ async function benchmarkMode(
 ): Promise<ModeMetrics> {
   // Baseline mode: no memory, return zeros
   if (mode === "baseline") {
+    const queries = prompts.map((p) => ({
+      query: p.query,
+      category: p.category,
+      expectedRoute: p.expectedRoute,
+      actualRoute: "skip",
+      routeMatch: false,
+      searchLatencyMs: 0,
+      resultsFound: 0,
+      top1Hit: false,
+      top5Hits: 0,
+      top5Expected: p.expectedChunks.length,
+      contextTokens: 0,
+      contextChunks: 0,
+      budgetUtilization: 0,
+      seedName: null,
+      seedConfidence: null,
+    }));
     return {
       mode: "baseline",
       indexTimeMs: 0,
       filesProcessed: 0,
       chunksCreated: 0,
-      queries: prompts.map((p) => ({
-        query: p.query,
-        category: p.category,
-        searchLatencyMs: 0,
-        resultsFound: 0,
-        top1Hit: false,
-        top5Hits: 0,
-        top5Expected: p.expectedChunks.length,
-        contextTokens: 0,
-        contextChunks: 0,
-        budgetUtilization: 0,
-      })),
+      queries,
       avgSearchLatencyMs: 0,
       p50SearchLatencyMs: 0,
       p95SearchLatencyMs: 0,
@@ -162,6 +226,10 @@ async function benchmarkMode(
       avgContextTokens: 0,
       avgContextChunks: 0,
       avgBudgetUtilization: 0,
+      routeAccuracy: 0,
+      avgLatencyByRoute: {},
+      avgTokensByRoute: {},
+      routeDistribution: {},
     };
   }
 
@@ -186,30 +254,88 @@ async function benchmarkMode(
     config
   );
 
+  const metadata = pipeline.getMetadataStore();
+  const fts = pipeline.getFTSStore();
+
   // Run queries
   const queryMetrics: QueryMetrics[] = [];
   const TOKEN_BUDGET = config.contextBudget;
 
   for (const prompt of prompts) {
     const searchStart = performance.now();
-    const context = await search.searchWithContext(prompt.query, TOKEN_BUDGET);
-    const searchLatencyMs = Math.round((performance.now() - searchStart) * 100) / 100;
 
-    const resultNames = context.chunks.map((r) => r.name);
+    let actualRoute = "skip";
+    let contextTokens = 0;
+    let contextChunks = 0;
+    let resultsFound = 0;
+    let resultNames: string[] = [];
+    let seedName: string | null = null;
+    let seedConfidence: number | null = null;
+
+    try {
+      // Step 1: Sanitize and classify
+      const sanitized = sanitizeQuery(prompt.query);
+      const queryText = sanitized || prompt.query;
+      const intent = classifyIntent(queryText);
+      let route = deriveRoute(intent);
+
+      // Step 2: For navigational queries on R0, try seed resolution to upgrade
+      if (intent.needsNavigation && route === "R0") {
+        const seedResult = resolveSeeds(queryText, metadata, fts);
+        if (seedResult.bestSeed) {
+          seedName = seedResult.bestSeed.name;
+          seedConfidence = seedResult.bestSeed.confidence;
+        }
+        route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
+      }
+
+      // Step 3: Run through the full prompt context pipeline
+      if (route !== "skip") {
+        const promptContext = await handlePromptContextDetailed(
+          queryText,
+          search,
+          config,
+          undefined,
+          undefined,
+          route,
+          metadata,
+          fts
+        );
+        actualRoute = promptContext.resolvedRoute;
+        const context = promptContext.context;
+        if (context) {
+          contextTokens = context.tokenCount;
+          contextChunks = context.chunks.length;
+          resultsFound = context.chunks.length;
+          resultNames = context.chunks.map((r) => r.name);
+        }
+      } else {
+        actualRoute = "skip";
+      }
+    } catch {
+      // On error, keep defaults (skip, zero results)
+    }
+
+    const searchLatencyMs = Math.round((performance.now() - searchStart) * 100) / 100;
     const { top1Hit, top5Hits } = evaluateResults(resultNames, prompt.expectedChunks);
 
     queryMetrics.push({
       query: prompt.query,
       category: prompt.category,
+      expectedRoute: prompt.expectedRoute,
+      actualRoute,
+      routeMatch: actualRoute === prompt.expectedRoute,
       searchLatencyMs,
-      resultsFound: context.chunks.length,
+      resultsFound,
       top1Hit,
       top5Hits,
       top5Expected: prompt.expectedChunks.length,
-      contextTokens: context.tokenCount,
-      contextChunks: context.chunks.length,
+      contextTokens,
+      contextChunks,
       budgetUtilization:
-        Math.round((context.tokenCount / TOKEN_BUDGET) * 10000) / 100,
+        Math.round((contextTokens / TOKEN_BUDGET) * 10000) / 100,
+      seedName,
+      seedConfidence,
     });
   }
 
@@ -220,6 +346,9 @@ async function benchmarkMode(
     .map((q) => q.searchLatencyMs)
     .sort((a, b) => a - b);
   const totalQueries = queryMetrics.length;
+
+  const { routeAccuracy, avgLatencyByRoute, avgTokensByRoute, routeDistribution } =
+    computeRouteStats(queryMetrics);
 
   return {
     mode,
@@ -244,7 +373,7 @@ async function benchmarkMode(
       ) / 100,
     top5Recall:
       Math.round(
-        (queryMetrics.reduce((s, q) => s + q.top5Hits / q.top5Expected, 0) /
+        (queryMetrics.reduce((s, q) => s + q.top5Hits / Math.max(q.top5Expected, 1), 0) /
           totalQueries) *
           10000
       ) / 100,
@@ -263,6 +392,10 @@ async function benchmarkMode(
           totalQueries) *
           100
       ) / 100,
+    routeAccuracy,
+    avgLatencyByRoute,
+    avgTokensByRoute,
+    routeDistribution,
   };
 }
 
@@ -412,6 +545,12 @@ export function printResults(allResults: BenchmarkResults[]): void {
         `${keyword.avgBudgetUtilization}%`,
         `${semantic.avgBudgetUtilization}%`,
       ],
+      [
+        "Route accuracy",
+        "N/A",
+        `${keyword.routeAccuracy}%`,
+        `${semantic.routeAccuracy}%`,
+      ],
     ];
 
     for (const row of rows) {
@@ -420,7 +559,26 @@ export function printResults(allResults: BenchmarkResults[]): void {
 
     console.log(formatSeparator(widths, "bot"));
 
-    // Per-category breakdown
+    // Per-route latency/tokens breakdown
+    console.log(`\n  Per-route breakdown (${result.size}):`);
+    const allRoutes = ["skip", "R0", "R1", "R2"];
+    for (const route of allRoutes) {
+      const kwLat = keyword.avgLatencyByRoute[route];
+      const semLat = semantic.avgLatencyByRoute[route];
+      const kwTok = keyword.avgTokensByRoute[route];
+      const semTok = semantic.avgTokensByRoute[route];
+      const kwCount = keyword.routeDistribution[route] ?? 0;
+      const semCount = semantic.routeDistribution[route] ?? 0;
+      if (kwCount === 0 && semCount === 0) continue;
+
+      console.log(
+        `    ${pad(route, 6)} ` +
+        `Keyword: ${pad(kwCount + "q", 4)} ${pad(kwLat !== undefined ? kwLat + "ms" : "-", 10)} ${pad(kwTok !== undefined ? kwTok + "tok" : "-", 10)} ` +
+        `Semantic: ${pad(semCount + "q", 4)} ${pad(semLat !== undefined ? semLat + "ms" : "-", 10)} ${pad(semTok !== undefined ? semTok + "tok" : "-", 10)}`
+      );
+    }
+
+    // Per-category recall breakdown
     console.log(`\n  Per-category Top-5 recall (${result.size}):`);
     const categories = [
       "exact",
@@ -429,6 +587,8 @@ export function printResults(allResults: BenchmarkResults[]): void {
       "debugging",
       "architecture",
       "refactoring",
+      "r2-deep",
+      "skip",
     ];
     for (const cat of categories) {
       const kwQueries = keyword.queries.filter((q) => q.category === cat);
@@ -437,13 +597,13 @@ export function printResults(allResults: BenchmarkResults[]): void {
 
       const kwRecall =
         Math.round(
-          (kwQueries.reduce((s, q) => s + q.top5Hits / q.top5Expected, 0) /
+          (kwQueries.reduce((s, q) => s + q.top5Hits / Math.max(q.top5Expected, 1), 0) /
             kwQueries.length) *
             10000
         ) / 100;
       const semRecall =
         Math.round(
-          (semQueries.reduce((s, q) => s + q.top5Hits / q.top5Expected, 0) /
+          (semQueries.reduce((s, q) => s + q.top5Hits / Math.max(q.top5Expected, 1), 0) /
             semQueries.length) *
             10000
         ) / 100;
@@ -452,6 +612,28 @@ export function printResults(allResults: BenchmarkResults[]): void {
         `    ${pad(cat, 15)} Keyword: ${pad(kwRecall + "%", 8)} Semantic: ${semRecall}%`
       );
     }
+
+    // Per-category route accuracy breakdown
+    console.log(`\n  Per-category route accuracy (${result.size}):`);
+    for (const cat of categories) {
+      const kwQueries = keyword.queries.filter((q) => q.category === cat);
+      const semQueries = semantic.queries.filter((q) => q.category === cat);
+      if (kwQueries.length === 0) continue;
+
+      const kwRouteAcc =
+        Math.round(
+          (kwQueries.filter((q) => q.routeMatch).length / kwQueries.length) * 10000
+        ) / 100;
+      const semRouteAcc =
+        Math.round(
+          (semQueries.filter((q) => q.routeMatch).length / semQueries.length) * 10000
+        ) / 100;
+
+      console.log(
+        `    ${pad(cat, 15)} Keyword: ${pad(kwRouteAcc + "%", 8)} Semantic: ${semRouteAcc}%`
+      );
+    }
+
     console.log("");
   }
 }
@@ -478,6 +660,10 @@ export function resultsToJson(
         avgContextTokens: m.avgContextTokens,
         avgContextChunks: m.avgContextChunks,
         avgBudgetUtilization: m.avgBudgetUtilization,
+        routeAccuracy: m.routeAccuracy,
+        avgLatencyByRoute: m.avgLatencyByRoute,
+        avgTokensByRoute: m.avgTokensByRoute,
+        routeDistribution: m.routeDistribution,
         queries: m.queries,
       })),
     })),

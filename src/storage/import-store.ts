@@ -28,6 +28,19 @@ export class ImportStore {
       CREATE INDEX IF NOT EXISTS idx_imports_resolved ON imports(resolved_path);
       CREATE INDEX IF NOT EXISTS idx_imports_name_file ON imports(imported_name, file_path);
     `);
+
+    // Deduplicate before creating unique index (handles databases from before the index existed)
+    try {
+      this.db.exec(`
+        DELETE FROM imports WHERE id NOT IN (
+          SELECT MIN(id) FROM imports
+          GROUP BY file_path, imported_name, source_module, is_default, is_namespace
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_unique ON imports(file_path, imported_name, source_module, is_default, is_namespace);
+      `);
+    } catch {
+      // Index already exists — nothing to do
+    }
   }
 
   upsertImports(imports: ImportRecord[]): void {
@@ -35,7 +48,7 @@ export class ImportStore {
     const filePaths = [...new Set(imports.map((i) => i.filePath))];
     const del = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);
     const ins = this.db.prepare(
-      `INSERT INTO imports (file_path, imported_name, source_module, resolved_path, is_default, is_namespace) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO imports (file_path, imported_name, source_module, resolved_path, is_default, is_namespace) VALUES (?, ?, ?, ?, ?, ?)`
     );
     this.db.transaction(() => {
       for (const fp of filePaths) del.run(fp);

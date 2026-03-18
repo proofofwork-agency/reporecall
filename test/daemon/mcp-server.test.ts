@@ -444,6 +444,197 @@ describe("MCP server tools (3G)", () => {
     expect(result.content[0].text).toContain("No matching code symbol");
   });
 
+  it("get_imports returns import records for a known file", async () => {
+    const metadata = makeMockMetadata({
+      getImportsForFile: (filePath: string) => {
+        if (filePath === "src/server.ts") {
+          return [
+            {
+              importedName: "processRequest",
+              sourceModule: "./handler",
+              resolvedPath: "src/handler.ts",
+              isDefault: false,
+              isNamespace: false,
+            },
+            {
+              importedName: "createServer",
+              sourceModule: "http",
+              resolvedPath: undefined,
+              isDefault: false,
+              isNamespace: false,
+            },
+          ];
+        }
+        return [];
+      },
+    });
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      metadata,
+      makeConfig()
+    );
+    const handler = handlers.get("get_imports");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ filePath: "src/server.ts" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.filePath).toBe("src/server.ts");
+    expect(parsed.count).toBe(2);
+    expect(Array.isArray(parsed.imports)).toBe(true);
+
+    const first = parsed.imports[0];
+    expect(first.name).toBe("processRequest");
+    expect(first.from).toBe("./handler");
+    expect(first.resolvedPath).toBe("src/handler.ts");
+    expect(first.isDefault).toBe(false);
+    expect(first.isNamespace).toBe(false);
+
+    const second = parsed.imports[1];
+    expect(second.name).toBe("createServer");
+    expect(second.from).toBe("http");
+    expect(second.resolvedPath).toBeUndefined();
+  });
+
+  it("get_imports returns empty imports for a file with no imports", async () => {
+    const metadata = makeMockMetadata({
+      getImportsForFile: () => [],
+    });
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      metadata,
+      makeConfig()
+    );
+    const handler = handlers.get("get_imports");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ filePath: "src/empty.ts" });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.filePath).toBe("src/empty.ts");
+    expect(parsed.count).toBe(0);
+    expect(parsed.imports).toEqual([]);
+  });
+
+  it("get_imports rejects a path outside the project root", async () => {
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig()
+    );
+    const handler = handlers.get("get_imports");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ filePath: "../../etc/passwd" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Error");
+  });
+
+  it("resolve_seed returns bestSeed and candidates for a known symbol", async () => {
+    const chunk = {
+      id: "chunk-processRequest",
+      name: "processRequest",
+      kind: "function_declaration" as const,
+      filePath: "src/server.ts",
+      startLine: 10,
+      endLine: 25,
+      content: "function processRequest(req) { return req; }",
+      language: "typescript",
+      confidence: 0.95,
+    };
+
+    const metadata = makeMockMetadata({
+      findChunksByNames: (names: string[]) => {
+        if (names.includes("processRequest")) return [chunk];
+        return [];
+      },
+    });
+
+    const ftsStore = {
+      search: (query: string) => {
+        if (query.toLowerCase().includes("processrequest")) {
+          return [
+            {
+              id: "chunk-processRequest",
+              name: "processRequest",
+              filePath: "src/server.ts",
+              kind: "function_declaration",
+            },
+          ];
+        }
+        return [];
+      },
+    };
+
+    const pipeline = makeMockPipeline({
+      getFTSStore: () => ftsStore,
+      getMetadataStore: () => metadata,
+    });
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      pipeline,
+      metadata,
+      makeConfig()
+    );
+    const handler = handlers.get("resolve_seed");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ query: "processRequest" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+
+    // Must expose the three top-level keys the MCP tool documents
+    expect(parsed).toHaveProperty("bestSeed");
+    expect(parsed).toHaveProperty("candidates");
+    expect(parsed).toHaveProperty("count");
+
+    expect(typeof parsed.count).toBe("number");
+    expect(Array.isArray(parsed.candidates)).toBe(true);
+
+    // With a matching chunk the best seed should be resolved
+    if (parsed.bestSeed !== null) {
+      expect(parsed.bestSeed.name).toBe("processRequest");
+      expect(typeof parsed.bestSeed.confidence).toBe("number");
+      expect(parsed.bestSeed.confidence).toBeGreaterThan(0);
+    }
+  });
+
+  it("resolve_seed returns null bestSeed for an unknown symbol", async () => {
+    const metadata = makeMockMetadata({
+      findChunksByNames: () => [],
+    });
+
+    const ftsStore = { search: () => [] };
+
+    const pipeline = makeMockPipeline({
+      getFTSStore: () => ftsStore,
+      getMetadataStore: () => metadata,
+    });
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      pipeline,
+      metadata,
+      makeConfig()
+    );
+    const handler = handlers.get("resolve_seed");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ query: "completelyUnknownSymbolXYZ" });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.bestSeed).toBeNull();
+    expect(parsed.count).toBe(0);
+    expect(parsed.candidates).toEqual([]);
+  });
+
   it("build_stack_tree includes coverage in response", async () => {
     const seedChunk = {
       id: "seed-1",

@@ -1,4 +1,5 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
+import { isTestFile } from "./utils.js";
 
 type TreeMetadata = Pick<
   MetadataStore,
@@ -45,12 +46,6 @@ export interface StackTree {
   edges: TreeEdge[];
   nodeCount: number;
   coverage: CoverageScore;
-}
-
-function isTestFile(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  return /(?:^|\/)(test|spec|__tests__|__fixtures__|fixtures|benchmark|examples)\//.test(lower)
-    || /\.(test|spec)\.[^.]+$/.test(lower);
 }
 
 /**
@@ -103,6 +98,7 @@ export function buildStackTree(
 
     const sameFile = matches.find((m) => m.filePath === sourceFilePath);
     const chosen = sameFile ?? matches[0];
+    if (!chosen) return null;
     return {
       chunkId: chosen.id,
       name: chosen.name,
@@ -111,59 +107,97 @@ export function buildStackTree(
     };
   }
 
-  function buildDirection(
-    dir: "up" | "down",
-    sourceName: string,
-    sourceChunkId: string,
-    sourceFilePath: string,
-    depth: number
+  /** BFS-based upward traversal that batches getChunksByIds per level. */
+  function buildUpBFS(
+    startName: string,
+    startChunkId: string,
+    startFilePath: string
   ): void {
-    if (depth > maxDepth) return;
-    if (totalNodes >= maxNodes) return;
+    // Queue entries: nodes whose callers we need to explore at the next depth
+    let frontier: Array<{ name: string; chunkId: string; filePath: string }> = [
+      { name: startName, chunkId: startChunkId, filePath: startFilePath },
+    ];
+    let currentDepth = 1;
 
-    if (dir === "up") {
-      const callers = metadata.findCallers(
-        sourceName,
-        maxBranchFactor * 2,
-        sourceFilePath
-      );
-      callers.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
-      for (const caller of callers) {
+    while (currentDepth <= maxDepth && totalNodes < maxNodes && frontier.length > 0) {
+      // Collect all callers for the entire frontier at this depth
+      const pendingCallers: Array<{
+        caller: { chunkId: string; filePath: string; line: number; callerName: string };
+        sourceChunkId: string;
+      }> = [];
+
+      for (const source of frontier) {
+        const callers = metadata.findCallers(
+          source.name,
+          maxBranchFactor * 2,
+          source.filePath
+        );
+        callers.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
+        for (const caller of callers) {
+          if (visited.has(caller.chunkId)) continue;
+          pendingCallers.push({ caller, sourceChunkId: source.chunkId });
+        }
+      }
+
+      if (pendingCallers.length === 0) break;
+
+      // Batch-fetch chunk info for all callers at this level
+      const callerIds = pendingCallers.map((p) => p.caller.chunkId);
+      const callerChunks = metadata.getChunksByIds(callerIds);
+      const kindMap = new Map(callerChunks.map((c) => [c.id, c.kind]));
+
+      const nextFrontier: Array<{ name: string; chunkId: string; filePath: string }> = [];
+
+      for (const { caller, sourceChunkId: srcId } of pendingCallers) {
         if (totalNodes >= maxNodes) break;
         if (visited.has(caller.chunkId)) continue;
 
         visited.add(caller.chunkId);
         totalNodes++;
 
-        // Look up chunk info for the caller to get its kind
-        const callerChunks = metadata.getChunksByIds([caller.chunkId]);
-        const callerKind =
-          callerChunks.length > 0 ? callerChunks[0].kind : "unknown";
+        const callerKind = kindMap.get(caller.chunkId) ?? "unknown";
 
         const node: TreeNode = {
           chunkId: caller.chunkId,
           name: caller.callerName,
           filePath: caller.filePath,
           kind: callerKind,
-          depth,
+          depth: currentDepth,
           direction: "up",
         };
         upTree.push(node);
 
         edges.push({
           from: caller.chunkId,
-          to: sourceChunkId,
+          to: srcId,
           callType: "call",
         });
 
-        buildDirection(
-          dir,
-          caller.callerName,
-          caller.chunkId,
-          caller.filePath,
-          depth + 1
-        );
+        nextFrontier.push({
+          name: caller.callerName,
+          chunkId: caller.chunkId,
+          filePath: caller.filePath,
+        });
       }
+
+      frontier = nextFrontier;
+      currentDepth++;
+    }
+  }
+
+  function buildDirection(
+    dir: "up" | "down",
+    sourceName: string,
+    sourceChunkId: string,
+    _sourceFilePath: string,
+    depth: number
+  ): void {
+    if (depth > maxDepth) return;
+    if (totalNodes >= maxNodes) return;
+
+    if (dir === "up") {
+      // Handled by buildUpBFS — this branch should not be reached
+      return;
     } else {
       const calleeRecords = metadata.findCalleesForChunk
         ? metadata.findCalleesForChunk(sourceChunkId, maxBranchFactor * 2)
@@ -229,7 +263,7 @@ export function buildStackTree(
   }
 
   if (direction === "up" || direction === "both") {
-    buildDirection("up", seed.name, seed.chunkId, seed.filePath, 1);
+    buildUpBFS(seed.name, seed.chunkId, seed.filePath);
   }
 
   if (direction === "down" || direction === "both") {

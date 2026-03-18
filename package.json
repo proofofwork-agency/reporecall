@@ -34,7 +34,7 @@
     "README.md",
     "LICENSE"
   ],
-  "author": "Danillo Felixd",
+  "author": "Danillo Felix*",
   "bin": {
     "reporecall": "./dist/memory.js",
     "memory": "./dist/memory.js"
@@ -45,6 +45,7 @@
     "test": "vitest",
     "lint": "tsc --noEmit",
     "benchmark": "tsx benchmark.ts",
+    "smoke": "node scripts/smoke-test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {

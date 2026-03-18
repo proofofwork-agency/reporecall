@@ -40,6 +40,7 @@ function makeConfig(): MemoryConfig {
     port: 37230,
     implementationPaths: ['src/', 'lib/', 'bin/'],
     factExtractors: [],
+    conceptBundles: [],
   }
 }
 

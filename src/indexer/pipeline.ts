@@ -17,6 +17,7 @@ import { resolveImportPath } from "../analysis/imports.js";
 import type { ImportRecord } from "../storage/import-store.js";
 import { analyzeConventions } from "../analysis/conventions.js";
 import { resolveCallTarget } from "../analysis/resolve.js";
+import { freeEncoder } from "../search/context-assembler.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -132,6 +133,7 @@ export class IndexingPipeline {
 
     for (let i = 0; i < toProcess.length; i++) {
       const change = toProcess[i];
+      if (!change) continue;
       const absPath = resolve(this.config.projectRoot, change.path);
 
       try {
@@ -199,7 +201,10 @@ export class IndexingPipeline {
         try {
           const vectors = await this.embedder.embed(texts);
           for (let j = 0; j < batch.length; j++) {
-            embeddedChunks.push({ chunk: batch[j], vector: vectors[j] });
+            const batchChunk = batch[j];
+            const batchVector = vectors[j];
+            if (!batchChunk || !batchVector) continue;
+            embeddedChunks.push({ chunk: batchChunk, vector: batchVector });
           }
         } catch (err) {
           log.warn(`Embedding batch failed, falling back to keyword-only for ${batch.length} chunks: ${err}`);
@@ -301,12 +306,12 @@ export class IndexingPipeline {
     }
 
     // Apply pending merkle state filtered to successful files and save
-    const filteredPendingState: Record<string, string> = {};
-    for (const [path, hash] of Object.entries(pendingState)) {
+    const filteredPendingState: Record<string, string | { hash: string; mtimeMs: number }> = {};
+    for (const [path, entry] of Object.entries(pendingState)) {
       // Keep existing state for unchanged files + successful files only
       const isChangedFile = toProcess.some((c) => c.path === path);
       if (!isChangedFile || successfulFiles.has(path)) {
-        filteredPendingState[path] = hash;
+        filteredPendingState[path] = entry;
       }
     }
     this.merkle.applyPendingState(filteredPendingState);
@@ -388,16 +393,20 @@ export class IndexingPipeline {
         this.fts.removeByFile(relPath);
         await this.vectors.removeByFile(relPath);
 
-        for (let i = 0; i < chunks.length; i++) {
-          this.metadata.upsertChunk({ ...chunks[i], indexedAt: now, fileMtime });
-          this.fts.upsert({
-            id: chunks[i].id,
-            name: chunks[i].name,
-            filePath: chunks[i].filePath,
-            content: chunks[i].content,
-            kind: chunks[i].kind,
-          });
-        }
+        // Bulk upsert chunks and FTS entries
+        const validChunks = chunks.filter((c): c is NonNullable<typeof c> => c != null);
+        this.metadata.bulkUpsertChunks(
+          validChunks.map((chunk) => ({ ...chunk, indexedAt: now, fileMtime }))
+        );
+        this.fts.bulkUpsert(
+          validChunks.map((chunk) => ({
+            id: chunk.id,
+            name: chunk.name,
+            filePath: chunk.filePath,
+            content: chunk.content,
+            kind: chunk.kind,
+          }))
+        );
 
         // Store import records (before call edges so resolution can query them)
         if (rawImports.length > 0) {
@@ -428,16 +437,21 @@ export class IndexingPipeline {
         }
 
         if (!isKeywordMode && vectors) {
+          const resolvedVectors = vectors;
           await this.vectors.upsert(
-            chunks.map((chunk, i) => ({
-              id: chunk.id,
-              vector: vectors![i],
-              filePath: chunk.filePath,
-              name: chunk.name,
-              kind: chunk.kind,
-              startLine: chunk.startLine,
-              endLine: chunk.endLine,
-            }))
+            chunks.flatMap((chunk, i) => {
+              const vector = resolvedVectors[i];
+              if (!vector) return [];
+              return [{
+                id: chunk.id,
+                vector,
+                filePath: chunk.filePath,
+                name: chunk.name,
+                kind: chunk.kind,
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+              }];
+            })
           );
         }
 
@@ -503,6 +517,7 @@ export class IndexingPipeline {
   }
 
   close(): void {
+    freeEncoder();
     this.metadata.close();
     this.fts.close();
     this.vectors.close().catch(() => {});
@@ -510,6 +525,7 @@ export class IndexingPipeline {
 
   /** Async close that awaits vector store shutdown to prevent native teardown races. */
   async closeAsync(): Promise<void> {
+    freeEncoder();
     // Close SQLite stores first (synchronous) while event loop is still alive
     this.fts.close();
     this.metadata.close();
@@ -518,8 +534,8 @@ export class IndexingPipeline {
   }
 
   /** Close stores AND wipe merkle state — used only by clear_index */
-  closeAndClearMerkle(): void {
-    this.close();
+  async closeAndClearMerkle(): Promise<void> {
+    await this.closeAsync();
     this.merkle.clear();
   }
 

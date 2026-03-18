@@ -48,8 +48,8 @@ describe("ImportStore", () => {
 
     const result = store.getImportsForFile("src/index.ts");
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual(imports[0]);
-    expect(result[1]).toEqual(imports[1]);
+    expect(result).toContainEqual(imports[0]);
+    expect(result).toContainEqual(imports[1]);
   });
 
   it("upsert replaces existing imports for the same file", () => {

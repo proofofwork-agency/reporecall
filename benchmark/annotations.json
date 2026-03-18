@@ -1,0 +1,595 @@
+{
+  "corpus": "reporecall",
+  "version": "0.2.0",
+  "annotatedAt": "2026-03-18",
+  "scale": {
+    "0": "not relevant",
+    "1": "marginally relevant",
+    "2": "relevant",
+    "3": "highly relevant"
+  },
+  "queries": [
+    {
+      "id": "what-does-sanitizequery-do",
+      "query": "what does sanitizeQuery do?",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "sanitizeQuery": 3,
+        "handlePromptContext": 1,
+        "handlePromptContextDetailed": 1
+      }
+    },
+    {
+      "id": "find-the-hybridsearch-class",
+      "query": "find the HybridSearch class",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "HybridSearch": 3,
+        "search": 1,
+        "searchWithContext": 1
+      }
+    },
+    {
+      "id": "show-me-the-metadatastore-constructor",
+      "query": "show me the MetadataStore constructor",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "MetadataStore": 3,
+        "src/storage/metadata-store.ts:constructor": 2
+      }
+    },
+    {
+      "id": "where-is-loadconfig-defined",
+      "query": "where is loadConfig defined?",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "loadConfig": 3,
+        "MemoryConfig": 2
+      }
+    },
+    {
+      "id": "what-is-the-memoryconfig-interface",
+      "query": "what is the MemoryConfig interface?",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "MemoryConfig": 3,
+        "loadConfig": 2
+      }
+    },
+    {
+      "id": "find-extractexplicittargets",
+      "query": "find extractExplicitTargets",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "extractExplicitTargets": 3,
+        "resolveSeeds": 2,
+        "SeedCandidate": 1
+      }
+    },
+    {
+      "id": "show-the-assembledcontext-type",
+      "query": "show the AssembledContext type",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "AssembledContext": 3,
+        "assembleContext": 2,
+        "assembleConceptContext": 1
+      }
+    },
+    {
+      "id": "find-the-indexingpipeline-class",
+      "query": "find the IndexingPipeline class",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "IndexingPipeline": 3,
+        "indexAll": 2
+      }
+    },
+    {
+      "id": "where-is-reciprocalrankfusion",
+      "query": "where is reciprocalRankFusion?",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "reciprocalRankFusion": 3,
+        "HybridSearch": 1
+      }
+    },
+    {
+      "id": "show-the-searchresult-interface",
+      "query": "show the SearchResult interface",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "SearchResult": 3,
+        "SearchOptions": 1,
+        "AssembledContext": 1
+      }
+    },
+    {
+      "id": "find-the-ftsstore-class",
+      "query": "find the FTSStore class",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "FTSStore": 3,
+        "keywordSearch": 2
+      }
+    },
+    {
+      "id": "show-the-storedchunk-type",
+      "query": "show the StoredChunk type definition",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "StoredChunk": 3,
+        "ChunkStore": 2,
+        "MetadataStore": 1
+      }
+    },
+    {
+      "id": "find-the-indexscheduler-class",
+      "query": "find the IndexScheduler class",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "IndexScheduler": 3,
+        "createDaemonServer": 1
+      }
+    },
+    {
+      "id": "where-is-classifyintent",
+      "query": "where is classifyIntent defined?",
+      "category": "exact_lookup",
+      "expectedRoute": "R0",
+      "relevance": {
+        "classifyIntent": 3,
+        "QueryIntent": 2,
+        "deriveRoute": 1
+      }
+    },
+    {
+      "id": "how-does-the-search-pipeline-work",
+      "query": "how does the search pipeline work?",
+      "category": "flow",
+      "expectedRoute": "R0",
+      "relevance": {
+        "HybridSearch": 3,
+        "search": 3,
+        "reciprocalRankFusion": 3,
+        "assembleContext": 2,
+        "classifyIntent": 2,
+        "deriveRoute": 2,
+        "resolveSeeds": 1
+      }
+    },
+    {
+      "id": "how-does-intent-classification-route-queries",
+      "query": "how does intent classification route queries?",
+      "category": "flow",
+      "expectedRoute": "R0",
+      "relevance": {
+        "classifyIntent": 3,
+        "deriveRoute": 3,
+        "QueryIntent": 2,
+        "RouteDecision": 2,
+        "handlePromptContextDetailed": 1
+      }
+    },
+    {
+      "id": "how-does-the-indexing-pipeline-process-files",
+      "query": "how does the indexing pipeline process files?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "IndexingPipeline": 3,
+        "indexAll": 3,
+        "scanFiles": 2,
+        "chunkFileWithCalls": 2,
+        "walkForExtractables": 2,
+        "MerkleTree": 1
+      }
+    },
+    {
+      "id": "how-is-the-call-graph-built-and-used",
+      "query": "how is the call graph built and used?",
+      "category": "flow",
+      "expectedRoute": "R0",
+      "relevance": {
+        "CallEdgeStore": 3,
+        "extractCallEdges": 3,
+        "buildStackTree": 2,
+        "findCallers": 2,
+        "findCallees": 2,
+        "assembleFlowContext": 1
+      }
+    },
+    {
+      "id": "what-happens-when-a-prompt-context-hook-fires",
+      "query": "what happens when a prompt-context hook fires?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "handlePromptContext": 3,
+        "handlePromptContextDetailed": 3,
+        "sanitizeQuery": 2,
+        "classifyIntent": 2,
+        "deriveRoute": 2,
+        "resolveSeeds": 1,
+        "assembleContext": 1
+      }
+    },
+    {
+      "id": "how-does-seed-resolution-determine-the-best-seed",
+      "query": "how does seed resolution determine the best seed?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "resolveSeeds": 3,
+        "extractExplicitTargets": 3,
+        "SeedCandidate": 2,
+        "SeedResult": 2,
+        "classifyIntent": 1,
+        "deriveRoute": 1
+      }
+    },
+    {
+      "id": "how-does-context-assembly-work",
+      "query": "how does context assembly build the final output?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "assembleContext": 3,
+        "assembleConceptContext": 3,
+        "assembleFlowContext": 2,
+        "AssembledContext": 2,
+        "handlePromptContextDetailed": 1
+      }
+    },
+    {
+      "id": "how-does-the-reranker-improve-results",
+      "query": "how does the reranker improve search results?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "LocalReranker": 3,
+        "rerank": 3,
+        "HybridSearch": 1,
+        "search": 1
+      }
+    },
+    {
+      "id": "how-does-the-mcp-server-handle-tool-calls",
+      "query": "how does the MCP server handle tool calls?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "createMCPServer": 3,
+        "captureToolHandlers": 2
+      }
+    },
+    {
+      "id": "who-calls-handlepromptcontext",
+      "query": "who calls handlePromptContext?",
+      "category": "flow",
+      "expectedRoute": "R0",
+      "relevance": {
+        "handlePromptContext": 3,
+        "handlePromptContextDetailed": 3,
+        "createDaemonServer": 2
+      }
+    },
+    {
+      "id": "what-is-called-by-buildstacktree",
+      "query": "what is called by buildStackTree?",
+      "category": "flow",
+      "expectedRoute": "R0",
+      "relevance": {
+        "buildStackTree": 3,
+        "findCallers": 2,
+        "findCallees": 2,
+        "assembleFlowContext": 1
+      }
+    },
+    {
+      "id": "how-does-tree-sitter-parsing-work",
+      "query": "how does tree-sitter parsing extract code chunks?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "initTreeSitter": 3,
+        "walkForExtractables": 3,
+        "chunkFileWithCalls": 2,
+        "IndexingPipeline": 2,
+        "StoredChunk": 1
+      }
+    },
+    {
+      "id": "how-does-the-watcher-detect-file-changes",
+      "query": "how does the file watcher detect and process changes?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "IndexScheduler": 3,
+        "FileWatcher": 3,
+        "createDaemonServer": 2,
+        "IndexingPipeline": 2,
+        "MerkleTree": 1
+      }
+    },
+    {
+      "id": "how-does-sibling-expansion-work",
+      "query": "how does sibling expansion improve search results?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "expandSiblings": 3,
+        "HybridSearch": 2,
+        "search": 2,
+        "assembleContext": 1
+      }
+    },
+    {
+      "id": "how-does-the-conventions-detector-work",
+      "query": "how does the conventions detector analyze a codebase?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "ConventionsStore": 3,
+        "analyzeConventions": 3,
+        "ConventionsReport": 2,
+        "classifyNaming": 1
+      }
+    },
+    {
+      "id": "how-does-graph-expansion-add-related-chunks",
+      "query": "how does graph expansion add related chunks to results?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "expandGraph": 3,
+        "HybridSearch": 2,
+        "search": 2,
+        "CallEdgeStore": 2,
+        "findCallers": 1,
+        "findCallees": 1
+      }
+    },
+    {
+      "id": "how-does-the-import-store-track-dependencies",
+      "query": "how does the import store track file dependencies?",
+      "category": "flow",
+      "expectedRoute": "R1",
+      "relevance": {
+        "ImportStore": 3,
+        "getImportsForFile": 2,
+        "extractImports": 2,
+        "IndexingPipeline": 1
+      }
+    },
+    {
+      "id": "how-is-the-project-structured",
+      "query": "how is the project structured?",
+      "category": "architecture",
+      "expectedRoute": "R1",
+      "relevance": {
+        "IndexingPipeline": 2,
+        "HybridSearch": 2,
+        "MetadataStore": 1,
+        "FTSStore": 1,
+        "MemoryConfig": 1
+      }
+    },
+    {
+      "id": "what-is-the-overall-design-of-the-storage-layer",
+      "query": "what is the overall design of the storage layer?",
+      "category": "architecture",
+      "expectedRoute": "R1",
+      "relevance": {
+        "MetadataStore": 3,
+        "FTSStore": 3,
+        "ChunkStore": 3,
+        "CallEdgeStore": 2,
+        "ImportStore": 2,
+        "StatsStore": 1,
+        "ConventionsStore": 1
+      }
+    },
+    {
+      "id": "what-is-the-daemon-architecture",
+      "query": "what is the daemon HTTP server architecture?",
+      "category": "architecture",
+      "expectedRoute": "R1",
+      "relevance": {
+        "createDaemonServer": 3,
+        "handlePromptContext": 2,
+        "sanitizeQuery": 2,
+        "IndexScheduler": 1,
+        "MemoryConfig": 1
+      }
+    },
+    {
+      "id": "how-is-embedding-handled-across-providers",
+      "query": "how is embedding handled across different providers?",
+      "category": "architecture",
+      "expectedRoute": "R1",
+      "relevance": {
+        "EmbeddingProvider": 3,
+        "LocalEmbedder": 3,
+        "NullEmbedder": 2,
+        "OllamaEmbedder": 2,
+        "createEmbedder": 2,
+        "IndexingPipeline": 1
+      }
+    },
+    {
+      "id": "what-is-the-cli-command-structure",
+      "query": "what is the CLI command structure?",
+      "category": "architecture",
+      "expectedRoute": "R0",
+      "relevance": {
+        "createCLI": 3,
+        "initCommand": 2,
+        "searchCommand": 2,
+        "serveCommand": 2,
+        "explainCommand": 1,
+        "mcpCommand": 1
+      }
+    },
+    {
+      "id": "what-is-the-token-budgeting-strategy",
+      "query": "what is the token budgeting strategy for context assembly?",
+      "category": "architecture",
+      "expectedRoute": "R1",
+      "relevance": {
+        "assembleContext": 3,
+        "assembleConceptContext": 2,
+        "AssembledContext": 2,
+        "countTokens": 2,
+        "MemoryConfig": 1
+      }
+    },
+    {
+      "id": "why-does-the-fts-search-return-empty-results",
+      "query": "why does the FTS search return empty results?",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "FTSStore": 3,
+        "keywordSearch": 3,
+        "HybridSearch": 2,
+        "search": 2,
+        "reciprocalRankFusion": 1
+      }
+    },
+    {
+      "id": "why-is-the-daemon-failing-to-start",
+      "query": "why is the daemon failing to start?",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "createDaemonServer": 3,
+        "IndexScheduler": 2,
+        "loadConfig": 2,
+        "IndexingPipeline": 1
+      }
+    },
+    {
+      "id": "trace-the-error-when-embedding-fails",
+      "query": "trace the error when embedding fails",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "LocalEmbedder": 3,
+        "EmbeddingProvider": 2,
+        "IndexingPipeline": 2,
+        "indexAll": 1
+      }
+    },
+    {
+      "id": "why-does-sanitizequery-strip-too-much",
+      "query": "why does sanitizeQuery strip too much from the prompt?",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "sanitizeQuery": 3,
+        "handlePromptContext": 2,
+        "handlePromptContextDetailed": 2,
+        "classifyIntent": 1
+      }
+    },
+    {
+      "id": "debug-the-rate-limiter",
+      "query": "debug the rate limiter — it blocks all requests",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "checkRateLimit": 3,
+        "createDaemonServer": 2,
+        "handlePromptContext": 1
+      }
+    },
+    {
+      "id": "why-does-merkle-skip-changed-files",
+      "query": "why does the Merkle check skip files that actually changed?",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "MerkleTree": 3,
+        "computeChanges": 3,
+        "IndexingPipeline": 2,
+        "indexAll": 1
+      }
+    },
+    {
+      "id": "why-does-resolveseeds-return-wrong-seed",
+      "query": "why does resolveSeeds return the wrong seed for my query?",
+      "category": "debugging",
+      "expectedRoute": "R1",
+      "relevance": {
+        "resolveSeeds": 3,
+        "extractExplicitTargets": 3,
+        "SeedCandidate": 2,
+        "classifyIntent": 1,
+        "deriveRoute": 1
+      }
+    },
+    {
+      "id": "hello",
+      "query": "hello",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "thanks",
+      "query": "thanks!",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "tell-me-a-joke",
+      "query": "tell me a joke",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "what-model-are-you-using",
+      "query": "what model are you using?",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "how-many-tokens-were-injected",
+      "query": "how many tokens were injected?",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "summarize-our-conversation",
+      "query": "summarize our conversation",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    },
+    {
+      "id": "did-reporecall-run",
+      "query": "did reporecall run?",
+      "category": "meta",
+      "expectedRoute": "skip",
+      "relevance": {}
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { StoredChunk } from "../storage/types.js";
+import { isTestFile } from "./utils.js";
 
 export interface SeedCandidate {
   chunkId: string;
@@ -59,6 +60,17 @@ const MEANINGFUL_KINDS = new Set([
   "function_declaration", "method_definition", "class_declaration",
   "interface_declaration", "type_alias_declaration", "export_statement",
 ]);
+
+// Tiebreak ranking for near-equal confidence seeds: prefer runtime constructs
+// over type-only definitions. Allocated once at module level.
+const KIND_RANK: Record<string, number> = {
+  function_declaration: 4,
+  class_declaration: 4,  // classes represent modules; equal priority to functions
+  method_definition: 2,  // internal methods are lower-priority seeds
+  export_statement: 1,
+  interface_declaration: 0,
+  type_alias_declaration: 0,
+};
 
 function tokenizeQueryTerms(query: string): string[] {
   return query
@@ -150,11 +162,10 @@ export function scoreFTSCandidate(
   // chunk's name or its file path, this is likely a content-only FTS false positive
   // (e.g. an English word like "overall" matching a code field name). Penalise it so
   // chunks that are in the right module or have a relevant name rank above noise.
-  const contentTerms2 = queryTermsLower.filter((t) => t.length >= 2 && !FTS_STOP_WORDS.has(t));
-  const hasNameLocality = contentTerms2.some(
+  const hasNameLocality = contentTerms.some(
     (t) => chunk.name.toLowerCase().includes(t) || t.includes(chunk.name.toLowerCase())
   );
-  const hasPathLocality = contentTerms2.some((t) => chunk.filePath.toLowerCase().includes(t));
+  const hasPathLocality = contentTerms.some((t) => chunk.filePath.toLowerCase().includes(t));
   const localityPenalty = hasNameLocality || hasPathLocality ? 0 : 0.10;
 
   return Math.min(0.85, Math.max(0, 0.35 + nameScore + rankContrib + pathContrib + kindScore - localityPenalty));
@@ -174,7 +185,9 @@ export function extractExplicitTargets(query: string): string[] {
 
   // Dotted paths: split into parts and add each
   for (const match of query.matchAll(DOTTED_PATH_RE)) {
-    const parts = match[1].split(".");
+    const group = match[1];
+    if (!group) continue;
+    const parts = group.split(".");
     for (const part of parts) {
       if (part.length >= 2 && !STOP_WORDS.has(part.toLowerCase())) {
         targets.add(part);
@@ -184,13 +197,14 @@ export function extractExplicitTargets(query: string): string[] {
 
   // PascalCase identifiers
   for (const match of query.matchAll(PASCAL_CASE_RE)) {
-    targets.add(match[1]);
+    const group = match[1];
+    if (group) targets.add(group);
   }
 
   // camelCase identifiers (must contain at least one uppercase after first char)
   for (const match of query.matchAll(CAMEL_CASE_RE)) {
     const candidate = match[1];
-    if (!STOP_WORDS.has(candidate.toLowerCase())) {
+    if (candidate && !STOP_WORDS.has(candidate.toLowerCase())) {
       targets.add(candidate);
     }
   }
@@ -205,15 +219,6 @@ export function extractExplicitTargets(query: string): string[] {
   }
 
   return Array.from(targets);
-}
-
-/**
- * Test file detection heuristic.
- */
-function isTestFile(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  return /(?:^|\/)(test|spec|__tests__|__fixtures__|fixtures|benchmark|examples)\//.test(lower)
-    || /\.(test|spec)\.[^.]+$/.test(lower);
 }
 
 /**
@@ -266,7 +271,7 @@ function disambiguate(chunks: StoredChunk[], query: string): StoredChunk[] {
  */
 export function resolveSeeds(
   query: string,
-  metadata: Pick<MetadataStore, "findChunksByNames" | "getChunk">,
+  metadata: Pick<MetadataStore, "findChunksByNames" | "getChunk" | "getChunksByIds">,
   fts: Pick<FTSStore, "search">
 ): SeedResult {
   const candidates: SeedCandidate[] = [];
@@ -295,6 +300,7 @@ export function resolveSeeds(
         if (matchedChunks.length === 1) {
           // Single match — high confidence
           const chunk = matchedChunks[0];
+          if (!chunk) continue;
           candidates.push({
             chunkId: chunk.id,
             name: chunk.name,
@@ -306,21 +312,25 @@ export function resolveSeeds(
         } else {
           // Multiple matches — disambiguate
           const sorted = disambiguate(matchedChunks, query);
+          const top = sorted[0];
+          if (!top) continue;
           candidates.push({
-            chunkId: sorted[0].id,
-            name: sorted[0].name,
-            filePath: sorted[0].filePath,
-            kind: sorted[0].kind,
+            chunkId: top.id,
+            name: top.name,
+            filePath: top.filePath,
+            kind: top.kind,
             confidence: 0.85,
             reason: "explicit_target",
           });
           // Add remaining as lower-confidence alternatives
           for (let i = 1; i < sorted.length; i++) {
+            const alt = sorted[i];
+            if (!alt) continue;
             candidates.push({
-              chunkId: sorted[i].id,
-              name: sorted[i].name,
-              filePath: sorted[i].filePath,
-              kind: sorted[i].kind,
+              chunkId: alt.id,
+              name: alt.name,
+              filePath: alt.filePath,
+              kind: alt.kind,
               confidence: 0.7,
               reason: "explicit_target",
             });
@@ -334,8 +344,13 @@ export function resolveSeeds(
     if (filePaths.length > 0 && candidates.length === 0) {
       for (const fp of filePaths) {
         const ftsResults = fts.search(fp, 5);
+        const ftsIds = ftsResults.map((r) => r.id);
+        const chunks = metadata.getChunksByIds
+          ? metadata.getChunksByIds(ftsIds)
+          : ftsIds.map((id) => metadata.getChunk(id)).filter((c): c is StoredChunk => c !== undefined);
+        const chunksById = new Map(chunks.map((c) => [c.id, c]));
         for (const ftsResult of ftsResults) {
-          const chunk = metadata.getChunk?.(ftsResult.id);
+          const chunk = chunksById.get(ftsResult.id);
           if (!chunk) continue;
           // Check if the chunk actually lives in the mentioned file
           if (chunk.filePath === fp || chunk.filePath.endsWith(fp) || fp.endsWith(chunk.filePath)) {
@@ -377,8 +392,15 @@ export function resolveSeeds(
       const nonTestCandidates: SeedCandidate[] = [];
       const testFallbackCandidates: SeedCandidate[] = [];
 
+      // Batch-fetch all chunks in one query instead of N individual getChunk calls
+      const ftsIds = ftsResults.map((r) => r.id);
+      const ftsChunks = metadata.getChunksByIds
+        ? metadata.getChunksByIds(ftsIds)
+        : ftsIds.map((id) => metadata.getChunk(id)).filter((c): c is StoredChunk => c !== undefined);
+      const ftsChunksById = new Map(ftsChunks.map((c) => [c.id, c]));
+
       for (const ftsResult of ftsResults) {
-        const chunk = metadata.getChunk?.(ftsResult.id);
+        const chunk = ftsChunksById.get(ftsResult.id);
         if (!chunk) continue;
         if (chunk.kind === "file") continue;
         if (chunk.name === "<anonymous>") continue;
@@ -417,14 +439,6 @@ export function resolveSeeds(
   // (function_declaration, method_definition) over type-only definitions
   // (interface_declaration, type_alias_declaration) — execution queries want
   // to trace behaviour, not data shapes.
-  const KIND_RANK: Record<string, number> = {
-    function_declaration: 4,
-    class_declaration: 4,  // classes represent modules; equal priority to functions
-    method_definition: 2,  // internal methods are lower-priority seeds
-    export_statement: 1,
-    interface_declaration: 0,
-    type_alias_declaration: 0,
-  };
   candidates.sort((a, b) => {
     const diff = b.confidence - a.confidence;
     if (Math.abs(diff) > 0.03) return diff;
