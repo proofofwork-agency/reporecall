@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.2.5] — 2026-03-19
+
+### Fixes
+
+- **Kotlin parser** — Grammar doesn't expose `name` field on declarations. Added fallback in `extractName()` to scan for `simple_identifier`/`type_identifier` children. All Kotlin classes, objects, interfaces, and functions now produce named chunks instead of `<anonymous>`.
+- **Zig parser** — `extractableTypes` listed non-existent node names (`FnProto`, `TestDecl`, `ContainerDecl`). Fixed to `function_declaration`, `test_declaration` matching the actual tree-sitter-zig grammar.
+- **Lua parser** — Same issue: `function_declaration`/`local_function` don't exist in tree-sitter-lua. Fixed to `function_definition_statement`, `local_function_definition_statement`.
+- **Zig test names** — `test_declaration` nodes now extract the test name from the string child instead of producing `<anonymous>`.
+- **Kotlin parent names** — `extractParentName()` now uses `extractName()` for consistent name resolution, and recognizes `object_declaration` as a parent container.
+- **`object_declaration` container** — Added to `CONTAINER_TYPES` so methods inside Kotlin objects are extracted as individual chunks.
+
+### Improvements
+
+- Chunk count increased (745 → 755 on self-index) due to Zig/Lua now producing proper function-level chunks instead of whole-file fallbacks.
+- Benchmark scores improved: NDCG 0.530 → 0.548 (+3.4%), MRR 0.750 → 0.777 (+3.6%).
+
+### Tests
+
+- 618 tests across 45 test files (up from 594/44)
+- **22-language chunker tests** — fixture files and assertions for every supported language: TypeScript, TSX, JavaScript, Python, Go, Rust, Java, Ruby, C, C++, C#, PHP, Swift, Kotlin, Scala, Zig, Bash, Lua, HTML, Vue, CSS, TOML. Plus cross-language invariant checks (stable IDs, required fields).
+- **22-language full pipeline integration tests** — end-to-end index → FTS search → chunk retrieval for every language, verifying chunks are not just parseable but actually searchable and retrievable.
+
+## [0.2.4] — 2026-03-19
+
+### Fixes
+
+- **Graph expansion in hook context** — `searchWithContext()` now enables graph expansion (`graphTopN: 5`), surfacing callers/callees in hook-injected context. Previously hardcoded to `graphExpansion: false`.
+- **Test file penalty unification** — Replaced directory-only regex with `isTestFile()` utility (catches `.test.ts`/`.spec.ts` suffixes). Replaced hardcoded `TEST_PENALTY = 0.35` with `config.testPenaltyFactor`.
+- **Score floor ratio** — Lowered from 0.7 to 0.55 to compensate for generally lower scores after new penalties.
+
+### Improvements
+
+- **Length penalty in RRF fusion** — Chunks >80 lines now penalized at the fusion stage (formula: `80 / (lineCount * 0.8 + 16)`), not just in hook priority. Prevents large chunks from dominating early ranking.
+- Added `chunkLineRanges` to `ScoringMaps` and `ChunkScoringInfo` for length-aware ranking.
+- Added `graphTopN` option to `SearchOptions` for configurable graph expansion limits.
+
 ## [0.2.3] — 2026-03-18
 
 ### Fixes

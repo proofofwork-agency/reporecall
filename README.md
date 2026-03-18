@@ -553,7 +553,7 @@ Caller/callee results are useful, but they are based on symbol names and extract
 
 ### Keep claims disciplined
 
-The live-repo benchmark (NDCG@10: 0.530, MRR: 0.750 in keyword mode) provides honest, community-standard numbers measured through the production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, and hook priority scoring). See the [Benchmark section](#benchmark) for full analysis.
+The live-repo benchmark (NDCG@10: 0.548, MRR: 0.777 in keyword mode) provides honest, community-standard numbers measured through the production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, and hook priority scoring). See the [Benchmark section](#benchmark) for full analysis.
 
 ## Operational Notes
 
@@ -617,18 +617,18 @@ npm run benchmark -- --provider semantic              # with vector embeddings
 npm run benchmark -- --output results.json            # custom output path
 ```
 
-### Current results (keyword mode, v0.2.4)
+### Current results (keyword mode, v0.2.5)
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
 ║  Reporecall Live Benchmark (keyword, 54 queries)              ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  NDCG@10: 0.530    MRR: 0.750    MAP: 0.278                   ║
-║  P@5: 0.226  P@10: 0.113  R@5: 0.291  R@10: 0.291             ║
+║  NDCG@10: 0.548    MRR: 0.777    MAP: 0.285                   ║
+║  P@5: 0.234  P@10: 0.117  R@5: 0.300  R@10: 0.300             ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  By Route        Count   NDCG@10   MRR                        ║
 ║    R0             20      0.706    0.950                      ║
-║    R1             24      0.443    0.667                      ║
+║    R1             24      0.478    0.719                      ║
 ║    skip            7       —        —                         ║
 ║    R2              3      0.058    0.083                      ║
 ╠═══════════════════════════════════════════════════════════════╣
@@ -640,8 +640,8 @@ npm run benchmark -- --output results.json            # custom output path
 
 | Metric             | Value | What it measures                                      | Interpretation                                                  |
 | ------------------ | ----- | ----------------------------------------------------- | --------------------------------------------------------------- |
-| **NDCG@10**        | 0.530 | Ranking quality of top 10 results (0-1)               | Competitive (CodeSearchNet SOTA: 0.4–0.7)                       |
-| **MRR**            | 0.750 | How quickly the first relevant result appears (0-1)   | Strong — first relevant result typically at rank 1              |
+| **NDCG@10**        | 0.548 | Ranking quality of top 10 results (0-1)               | Competitive (CodeSearchNet SOTA: 0.4–0.7)                       |
+| **MRR**            | 0.777 | How quickly the first relevant result appears (0-1)   | Strong — first relevant result typically at rank 1              |
 | **MAP**            | 0.278 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall                       |
 | **Route accuracy** | 81.5% | Correct routing (skip/R0/R1/R2) classification        | Good — intent classifier works with zero LLM tokens             |
 | **P@5**            | 0.226 | Fraction of top 5 that are relevant                   | Solid — concept bundles and seed boosting surface relevant code |
