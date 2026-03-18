@@ -1,7 +1,7 @@
 import { getLogger } from "../core/logger.js";
 import type { SearchResult } from "./types.js";
 
-/** Callable subset of the HuggingFace feature-extraction pipeline we rely on at runtime. */
+/** Callable subset of the HuggingFace text-classification pipeline we rely on at runtime. */
 type RerankerPipeline = (inputs: Array<{ text: string; text_pair: string }>) => Promise<Array<{ score: number }> | Array<Array<{ score: number }>>>;
 
 export class LocalReranker {
@@ -19,7 +19,7 @@ export class LocalReranker {
 
     try {
       const { pipeline } = await import("@huggingface/transformers");
-      this.pipe = await pipeline("feature-extraction", this.model, {
+      this.pipe = await pipeline("text-classification", this.model, {
         dtype: "fp32",
       }) as unknown as RerankerPipeline;
       return this.pipe;

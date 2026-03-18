@@ -587,15 +587,19 @@ export function assembleDeepRouteContext(
     query,
   });
 
-  // Replace the standard header in baseContext.text with our deep route header
+  // Replace the standard header in baseContext.text with our deep route header.
+  // parts.join("\n") in assembleContext appends a \n after the header, so strip
+  // up to three consecutive newlines to avoid a spurious blank line.
+  const baseHeader = "## Relevant codebase context\n\n";
+  const baseHeaderTokens = countTokens(baseHeader);
   const textWithoutHeader = baseContext.text.replace(
-    /^## Relevant codebase context\n\n/,
+    /^## Relevant codebase context\n\n\n?/,
     ""
   );
 
   return {
     text: DEEP_ROUTE_HEADER + textWithoutHeader,
-    tokenCount: markerTokens + baseContext.tokenCount - countTokens("## Relevant codebase context\n\n"),
+    tokenCount: markerTokens + baseContext.tokenCount - baseHeaderTokens,
     chunks: baseContext.chunks,
     routeStyle: "deep",
   };

@@ -240,7 +240,7 @@ export function explainCommand(): Command {
         console.error(`Explain failed: ${err}`)
         process.exit(1)
       } finally {
-        pipeline.close()
+        await pipeline.closeAsync()
       }
     })
 }
