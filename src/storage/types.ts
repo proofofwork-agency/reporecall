@@ -22,6 +22,8 @@ export interface ChunkScoringInfo {
   parentName?: string;
   indexedAt: string;
   fileMtime?: string;
+  startLine: number;
+  endLine: number;
 }
 
 

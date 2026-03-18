@@ -153,7 +153,7 @@ export class ChunkStore {
       const placeholders = batch.map(() => "?").join(",");
       const rows = this.db
         .prepare(
-          `SELECT id, file_path, name, kind, parent_name, indexed_at, file_mtime
+          `SELECT id, file_path, name, kind, parent_name, indexed_at, file_mtime, start_line, end_line
            FROM chunks WHERE id IN (${placeholders})`
         )
         .all(...batch) as Array<Record<string, unknown>>;
@@ -165,6 +165,8 @@ export class ChunkStore {
         parentName: (row.parent_name as string) ?? undefined,
         indexedAt: row.indexed_at as string,
         fileMtime: (row.file_mtime as string) ?? undefined,
+        startLine: row.start_line as number,
+        endLine: row.end_line as number,
       })));
     }
     return results;

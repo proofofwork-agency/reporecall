@@ -21,6 +21,7 @@ export interface SearchOptions {
   recencyWeight?: number;
   activeFiles?: string[];
   graphExpansion?: boolean;
+  graphTopN?: number;
   siblingExpansion?: boolean;
   rerank?: boolean;
   signal?: AbortSignal;

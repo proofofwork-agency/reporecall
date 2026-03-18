@@ -10,76 +10,91 @@
 
 **Local codebase memory for Claude Code and MCP clients**
 
-## Why Reporecall Exists
+## The Problem
 
-Reporecall solves a fundamental problem: when you ask Claude (or any AI) questions about your code, the AI doesn't have access to your codebase context. This means:
+You ask Claude: *"how does the credit refund work when a job fails?"*
 
-- Claude must ask you to share code snippets to answer questions
-- Claude can't look up how your code is organized or how functions relate
-- You can't benefit from Claude's intelligence for code navigation, understanding, or debugging
-- New team members can't ask Claude to help them understand your project structure
+Claude doesn't know your codebase. So it starts searching:
 
-Reporecall bridges this gap by building a **local search index** of your entire codebase that Claude can query. Everything stays on your machine.
-
-## What It Does
-
-Reporecall indexes a repository into code chunks, stores metadata and search indexes locally, and injects relevant context into Claude conversations through hooks. It can also expose the same index through MCP tools. It provides:
-
-- **Hybrid retrieval**: Vector search (when embeddings enabled) + SQLite FTS5 keyword search for finding code by meaning and by exact terms
-- **AST-based chunking**: Tree-sitter parses code into logical units (functions, classes, methods, interfaces, exports)
-- **Call graph extraction**: Tracks which functions call which other functions for relationship queries
-- **Import analysis**: Understands how files depend on each other
-- **Conventions detection**: Identifies coding patterns and naming conventions in your project
-- **Claude Code hook integration**: Automatically injects relevant code context when you ask questions
-- **MCP server integration**: Exposes the index through Model Context Protocol for use in Claude or other AI clients
-- **Incremental indexing**: Only re-indexes changed files, using Merkle-based change detection for efficiency
-
-## How This Helps
-
-| Capability | Enables |
-|-----------|---------|
-| **Local storage** | No cloud dependency; all code stays on your machine; works offline |
-| **AST-based understanding** | Claude can find and discuss code by function/class/type, not just keywords |
-| **Call graph queries** | "Show me all callers of X" or "what does X call?" — instant answers |
-| **Import relationships** | Understanding dependencies and module organization |
-| **Pattern detection** | Claude can identify and follow your team's coding conventions |
-| **Context injection** | Claude has relevant code ready when you ask questions, without copy-pasting |
-| **Search by meaning** | Find code by semantic intent ("error handling", "auth flow") not just matching strings |
-
-### Real-World Examples
-
-**Example 1: Code Navigation**
 ```
-You: "Where does the validateEmail() function get called?"
-Claude (without Reporecall): "I don't know, share some code"
-Claude (with Reporecall): Shows all 7 places it's called + surrounding context
+Grep "refundCredits"       → found credit-utils.ts
+Read credit-utils.ts       → ok, but who calls this?
+Grep "refundCredits"       → found job-completion.ts
+Read job-completion.ts     → found processJobCompletion, but what about failures?
+Grep "processJobFailure"   → found another file
+Read that file too         → finally has the picture
 ```
 
-**Example 2: Understanding a Flow**
+6 tool calls. 4 round-trips. ~15,000 tokens. And it still missed the error handler sites.
+
+## With Reporecall
+
+Same question. Claude asks, Reporecall's hook fires before the prompt reaches Claude:
+
 ```
-You: "Walk me through the payment processing flow"
-Claude (with Reporecall): Shows the entire call chain:
-  - checkoutHandler()
-    ├─ validateCard()
-    ├─ processPayment()
-    │  ├─ chargeCustomer()
-    │  └─ sendReceipt()
-    └─ updateInventory()
+→ Search index: "credit refund job fails"         (5ms, keyword + vector)
+→ Top hit: refundCredits()
+→ Call graph expansion: who calls refundCredits?
+  ├─ processJobCompletion()   (job-completion.ts)
+  └─ processJobFailure()     (job-completion.ts)
+→ Inject context into prompt                       (~2K tokens)
 ```
 
-**Example 3: Finding Related Code**
+0 tool calls. 1 round-trip. Claude already has the full picture — the function, its callers, and the failure path — before it writes a single word.
+
 ```
-You: "Find all error handling in this project"
-Claude (with Reporecall): Searches by semantic meaning + finds all related patterns
-  across your entire codebase (not just keyword matches)
+┌────────────────────┬──────────────────────┬─────────────────┐
+│                    │ Without Reporecall   │ With Reporecall │
+├────────────────────┼──────────────────────┼─────────────────┤
+│ Tool calls         │ 6                    │ 0               │
+│ Round-trips        │ 4                    │ 1               │
+│ Tokens consumed    │ ~15,000              │ ~2,000          │
+│ Latency            │ seconds              │ ~5ms            │
+│ Found the callers  │ after 3 extra greps  │ automatically   │
+│ Found error sites  │ no                   │ yes (10 files)  │
+└────────────────────┴──────────────────────┴─────────────────┘
 ```
 
-**Example 4: Debugging with Context**
-```
-You: "Why is this test failing? [paste error]"
-Claude (with Reporecall): Already knows your test structure, your error patterns,
-  your testing conventions. Gives a smarter answer immediately.
-```
+That's what Reporecall does. It builds a local index of your codebase — AST chunks, call graph, keyword + vector search — and injects the right context before Claude even starts thinking. The call graph is the key part: it doesn't just find the function you asked about, it finds the functions that *call* it and the functions *it calls*. That's the depth that grepping misses.
+
+## What It Solves and What It Doesn't
+
+**Solves:**
+
+- **Grep chains.** Claude doing 4-6 Grep/Read round-trips to understand code before answering. Reporecall eliminates this for code understanding questions — the context is already there.
+- **Token cost and API spend.** 3-8x fewer tokens per code question. Each grep/read round-trip resends the full conversation context — on a long session, that's the expensive part. Fewer round-trips means fewer API calls, each carrying less payload.
+- **Depth.** Grepping finds the function you asked about. It doesn't tell you who calls it, or what it calls. The call graph surfaces that automatically — no extra rounds needed.
+- **Round-trip latency.** One hook injection (~5ms) replaces multiple sequential tool calls (seconds).
+
+**Doesn't solve:**
+
+- **Claude's context window.** Reporecall injects into the same window. Long conversations still hit the limit. Smaller injections (2K vs 15K) help, but it's not infinite memory.
+- **Non-code tasks.** File edits, running tests, debugging runtime behavior — Claude still uses tools for those. Reporecall only covers "understand the codebase" questions.
+- **Vague queries.** If there's no symbol or keyword to anchor on ("make this faster"), retrieval is weak. The engine needs something concrete to search for.
+- **Type-resolved accuracy.** The call graph is name-based, not type-resolved. Two unrelated functions with the same name can produce false edges. Works well for typical codebases, but it's not a compiler.
+
+## How It Works
+
+You ask Claude a question. Before Claude sees it, Reporecall's hook:
+
+1. Classifies intent (rule-based, zero LLM tokens, <1ms)
+2. Searches the index (hybrid keyword + vector, ~5ms)
+3. Expands results through the call graph (callers and callees of top hits)
+4. Filters test files, penalizes oversized chunks, enforces a token budget
+5. Injects assembled context into the prompt
+
+Claude answers with full codebase context. No tool calls needed for the common case.
+
+### What it indexes
+
+- **AST chunks**: Tree-sitter parses 22 languages into functions, classes, methods, interfaces, exports
+- **Call graph**: Which functions call which — extracted from static AST, no language server needed
+- **Import graph**: File-level dependency relationships
+- **Keyword index**: FTS5 with Porter stemming and camelCase splitting
+- **Vector embeddings**: Optional semantic search (local ONNX, Ollama, or OpenAI)
+- **Conventions**: Detected coding patterns and naming conventions
+
+Everything stays on your machine. No cloud, no API calls during retrieval, no telemetry.
 
 ## Supported Languages
 
@@ -393,8 +408,8 @@ flowchart LR
     FTS5S["FTS5 keyword search<br/>phrase → AND →<br/>OR fallback"]
     VEC["Vector search<br/>cosine ANN<br/>(LanceDB)"]
     RRF["Reciprocal Rank<br/>Fusion<br/>1/(k+rank), k=60"]
-    Adj["Score adjustments<br/>impl +50% · test −70%<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +30%/term"]
-    Floor["Score floor filter<br/>≥ 70% of top score"]
+    Adj["Score adjustments<br/>impl +50% · test penalty<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +30%/term<br/>length penalty >80 lines"]
+    Floor["Score floor filter<br/>≥ 55% of top score"]
     Budget["Token budget<br/>assembly<br/>tiktoken gpt-4o<br/>counting<br/>auto-scaled budget"]
     Ctx["Assembled context<br/>markdown code blocks<br/>+ Direct Facts section"]
 
@@ -402,7 +417,7 @@ flowchart LR
     FTS5S & VEC --> RRF --> Adj --> Floor --> Budget --> Ctx
 ```
 
-**Design decision:** RRF fuses BM25 (FTS5) and cosine-similarity (LanceDB) scores without normalization - the two score spaces are incomparable, but rank positions are. k=60 follows the established RRF literature default. The 70% score floor prevents low-signal noise chunks from bloating context with irrelevant code.
+**Design decision:** RRF fuses BM25 (FTS5) and cosine-similarity (LanceDB) scores without normalization - the two score spaces are incomparable, but rank positions are. k=60 follows the established RRF literature default. A length penalty demotes chunks over 80 lines (80-line chunk = 1.0x, 150 lines = 0.59x, 300 lines = 0.32x) to prevent large chunks from dominating the token budget. The 55% score floor prevents low-signal noise chunks from bloating context with irrelevant code.
 
 #### R1 - Flow Path: Bidirectional Call Tree
 
@@ -437,7 +452,7 @@ The search pipeline is:
 7. optional reranking
 8. context assembly under a token budget
 
-Hook-oriented retrieval intentionally disables graph expansion, sibling expansion, and reranking for prompt-context injection, then prioritizes authoritative implementation chunks before assembling context.
+Hook-oriented retrieval enables graph expansion (top 5 results, `graphDiscountFactor` applied) but disables sibling expansion and reranking for prompt-context injection, then prioritizes authoritative implementation chunks before assembling context.
 
 ### Hooks
 
@@ -589,22 +604,22 @@ npm run benchmark -- --provider semantic              # with vector embeddings
 npm run benchmark -- --output results.json            # custom output path
 ```
 
-### Current results (keyword mode, v0.2.0)
+### Current results (keyword mode, v0.2.4)
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
 ║  Reporecall Live Benchmark (keyword, 54 queries)              ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  NDCG@10: 0.482    MRR: 0.670    MAP: 0.257                   ║
-║  P@5: 0.221  P@10: 0.111  R@5: 0.276  R@10: 0.276             ║
+║  NDCG@10: 0.530    MRR: 0.750    MAP: 0.278                   ║
+║  P@5: 0.226  P@10: 0.113  R@5: 0.291  R@10: 0.291             ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  By Route        Count   NDCG@10   MRR                        ║
-║    R0             20      0.630    0.850                        ║
-║    R1             24      0.412    0.594                        ║
+║    R0             20      0.706    0.950                        ║
+║    R1             24      0.443    0.667                        ║
 ║    skip            7       —        —                           ║
 ║    R2              3      0.058    0.083                        ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Route accuracy: 79.6%  Avg latency: 5.4ms (P50: 3.2ms)       ║
+║  Route accuracy: 81.5%  Avg latency: 4.79ms (P50: 3.69ms)     ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```
 
@@ -612,20 +627,20 @@ npm run benchmark -- --output results.json            # custom output path
 
 | Metric | Value | What it measures | Interpretation |
 |--------|-------|-----------------|----------------|
-| **NDCG@10** | 0.482 | Ranking quality of top 10 results (0-1) | Competitive (CodeSearchNet SOTA: 0.4–0.7) |
-| **MRR** | 0.670 | How quickly the first relevant result appears (0-1) | Good — first relevant result typically at rank 1-2 |
-| **MAP** | 0.257 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall |
-| **Route accuracy** | 79.6% | Correct routing (skip/R0/R1/R2) classification | Good — intent classifier works with zero LLM tokens |
-| **P@5** | 0.221 | Fraction of top 5 that are relevant | Solid — concept bundles and seed boosting surface relevant code |
-| **R@10** | 0.276 | Fraction of all relevant chunks found in top 10 | Moderate — recall improves with semantic embeddings |
+| **NDCG@10** | 0.530 | Ranking quality of top 10 results (0-1) | Competitive (CodeSearchNet SOTA: 0.4–0.7) |
+| **MRR** | 0.750 | How quickly the first relevant result appears (0-1) | Strong — first relevant result typically at rank 1 |
+| **MAP** | 0.278 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall |
+| **Route accuracy** | 81.5% | Correct routing (skip/R0/R1/R2) classification | Good — intent classifier works with zero LLM tokens |
+| **P@5** | 0.226 | Fraction of top 5 that are relevant | Solid — concept bundles and seed boosting surface relevant code |
+| **R@10** | 0.291 | Fraction of all relevant chunks found in top 10 | Moderate — recall improves with semantic embeddings |
 
 ### What this tells us
 
-**R0 queries are strong** (NDCG@10: 0.630, MRR: 0.850) — direct lookups and concept queries benefit most from seed boosting and concept bundles. The right symbol lands at rank 1 most of the time.
+**R0 queries are strong** (NDCG@10: 0.706, MRR: 0.950) — direct lookups and concept queries benefit most from seed boosting, length penalty, and call graph expansion. The right symbol lands at rank 1 nearly every time.
 
-**R1 flow queries are solid** (NDCG@10: 0.412, MRR: 0.594) — flow tree assembly provides relevant call graph context, though sparse edges limit recall.
+**R1 flow queries are solid** (NDCG@10: 0.443, MRR: 0.667) — flow tree assembly provides relevant call graph context, though sparse edges limit recall.
 
-**Architecture queries now work** (NDCG@10: 0.498, MRR: 0.607) — concept bundles map broad questions like "what is the storage layer?" directly to the relevant symbols without needing exact keyword matches.
+**Architecture queries now work** (NDCG@10: 0.564, MRR: 0.750) — concept bundles map broad questions like "what is the storage layer?" directly to the relevant symbols without needing exact keyword matches.
 
 **Remaining gap:** Keyword mode still struggles with queries that have no symbol name anchors at all. Semantic embeddings should close this gap.
 
@@ -633,10 +648,10 @@ npm run benchmark -- --output results.json            # custom output path
 
 | Category | Count | NDCG@10 | MRR | Notes |
 |----------|-------|---------|-----|-------|
-| exact_lookup | 14 | 0.636 | 0.786 | Strong — seed boosting surfaces the right symbol at rank 1 |
-| architecture | 7 | 0.498 | 0.607 | Good — concept bundles short-circuit broad questions to relevant code |
-| flow | 18 | 0.451 | 0.736 | Good — flow tree assembly provides call graph context |
-| debugging | 8 | 0.270 | 0.375 | Moderate — function names in queries help FTS matching |
+| exact_lookup | 14 | 0.753 | 0.929 | Strong — seed boosting surfaces the right symbol at rank 1 |
+| architecture | 7 | 0.564 | 0.750 | Good — concept bundles short-circuit broad questions to relevant code |
+| flow | 18 | 0.438 | 0.722 | Good — flow tree assembly provides call graph context |
+| debugging | 8 | 0.319 | 0.500 | Moderate — length penalty and test filtering improve signal |
 | meta | 7 | — | — | Skip route validation — greetings, thanks, meta-AI queries correctly skipped |
 
 ### What the benchmark does NOT measure
@@ -661,58 +676,6 @@ Annotations use the **0-3 graded relevance scale** from CodeSearchNet:
 Chunk matching uses **symbol names** (not content hashes), disambiguated with `filePath:name` where names collide (e.g., `constructor` appears in many classes).
 
 Results are written to [benchmark-results.json](benchmark-results.json).
-
-## Common Use Cases
-
-### Onboarding New Developers
-
-**Without Reporecall:**
-- Senior dev explains architecture (2 hours)
-- New dev explores codebase, gets lost, asks questions (multiple days)
-- Week 2: Still confused about relationships and patterns
-
-**With Reporecall:**
-- New dev runs `reporecall init` and gets instant project overview
-- Asks Claude: "What are the main modules?" → Gets overview in seconds
-- Asks Claude: "Where do I add a new API endpoint?" → Gets exact location + examples
-- Day 2 afternoon: New dev is productive
-
-### Emergency Bug Fixes
-
-**Scenario:** Production bug at 2 AM
-```
-On-call dev: "Walk me through the payment flow"
-Claude (with Reporecall): Shows entire flow with context in seconds
-  → Dev finds bug immediately
-Claude: "What might break if I change this line?"
-  → Shows all 12 places the code is used
-Result: Confident fix deployed quickly
-```
-
-### Understanding Unfamiliar Code
-
-**Scenario:** Taking over a project you didn't build
-```
-You: "Show me the main entry point"
-Claude: Traces from app startup through initialization
-You: "What does this function do?"
-Claude: Shows the function + all callers + all dependencies
-You: "Are there patterns I should follow?"
-Claude: Identifies your team's conventions and best practices
-Result: Faster comprehension without constant questioning
-```
-
-### Refactoring with Confidence
-
-**Scenario:** Need to change how authentication works
-```
-You: "Find all authentication code"
-Claude: Shows all auth-related functions across the codebase
-You: "What calls this auth function?"
-Claude: Lists all callers + shows how they use it
-You: Make changes with full understanding of impact
-Result: Refactoring with confidence instead of guessing
-```
 
 ## Development
 

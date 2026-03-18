@@ -19,7 +19,7 @@ import type { SeedResult } from "./seed.js";
 import type { StoredChunk } from "../storage/types.js";
 
 const IMPL_BOOST = 1.25;
-const TEST_PENALTY = 0.35;
+
 const DOC_PENALTY = 0.45;
 const DOC_PENALTY_NO_IMPL = 0.8;
 const TERM_MATCH_BOOST = 1.15;
@@ -50,6 +50,7 @@ interface ScoringMaps {
   chunkKinds: Map<string, string>;
   chunkNames: Map<string, string>;
   chunkParents: Map<string, { parentName?: string; filePath: string }>;
+  chunkLineRanges: Map<string, { startLine: number; endLine: number }>;
 }
 
 export class HybridSearch {
@@ -153,7 +154,8 @@ export class HybridSearch {
     const results = await this.search(query, {
       limit: hookLimit,
       activeFiles,
-      graphExpansion: false,
+      graphExpansion: true,
+      graphTopN: 5,
       siblingExpansion: false,
       rerank: false,
       signal,
@@ -176,7 +178,7 @@ export class HybridSearch {
       budget,
       {
         maxChunks: maxContextChunks,
-        scoreFloorRatio: 0.7,
+        scoreFloorRatio: 0.55,
         query,
         factExtractors: this.config.factExtractors,
       }
@@ -377,8 +379,8 @@ export class HybridSearch {
     const lowerName = result.name.toLowerCase();
 
     if (this.isImplementationChunk(result)) score *= IMPL_BOOST;
-    if (/(?:^|\/)(test|spec|__tests__|__fixtures__|fixtures|benchmark|examples)\//.test(lowerPath)) {
-      score *= TEST_PENALTY;
+    if (isTestFile(result.filePath)) {
+      score *= this.config.testPenaltyFactor;
     }
     if (/\.(md|mdx|txt)$/i.test(lowerPath) || /(?:^|\/)(docs?|audit|reports?)\//.test(lowerPath)) {
       score *= hasImplementationChunks ? DOC_PENALTY : DOC_PENALTY_NO_IMPL;
@@ -392,10 +394,10 @@ export class HybridSearch {
       score *= Math.pow(TERM_MATCH_BOOST, termMatches);
     }
 
-    // Length penalty: demote disproportionately large chunks
+    // Length penalty: demote disproportionately large chunks (same curve as RRF)
     const lineCount = result.endLine - result.startLine + 1;
-    if (lineCount > 100) {
-      score *= 100 / (lineCount * 0.5 + 50);
+    if (lineCount > 80) {
+      score *= 80 / (lineCount * 0.8 + 16);
     }
 
     return score;
@@ -472,6 +474,9 @@ export class HybridSearch {
       chunkParents: new Map(
         scoringInfo.map((c) => [c.id, { parentName: c.parentName, filePath: c.filePath }])
       ),
+      chunkLineRanges: new Map(
+        scoringInfo.map((c) => [c.id, { startLine: c.startLine, endLine: c.endLine }])
+      ),
     };
   }
 
@@ -503,6 +508,7 @@ export class HybridSearch {
       testPenaltyFactor: this.config.testPenaltyFactor,
       anonymousPenaltyFactor: this.config.anonymousPenaltyFactor,
       queryTerms,
+      chunkLineRanges: maps.chunkLineRanges,
     });
   }
 
@@ -518,7 +524,8 @@ export class HybridSearch {
     if (!doGraphExpansion) return;
 
     const rankedIds = new Set(ranked.map((r) => r.id));
-    const top10 = ranked.slice(0, 10);
+    const topN = options?.graphTopN ?? 10;
+    const top10 = ranked.slice(0, topN);
     const discoveredNames = new Set<string>();
     const nameScoreMap = new Map<string, number>();
 

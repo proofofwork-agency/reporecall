@@ -25,9 +25,10 @@ export function reciprocalRankFusion(
     testPenaltyFactor?: number;
     anonymousPenaltyFactor?: number;
     queryTerms?: string[];
+    chunkLineRanges?: Map<string, { startLine: number; endLine: number }>;
   }
 ): RankedItem[] {
-  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, anonymousPenaltyFactor, queryTerms } =
+  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, anonymousPenaltyFactor, queryTerms, chunkLineRanges } =
     options;
   const scores = new Map<string, RankedItem>();
 
@@ -139,6 +140,19 @@ export function reciprocalRankFusion(
         if (matchCount > 0) {
           // 1.3x per matching term, compounding
           item.score *= Math.pow(1.3, matchCount);
+        }
+      }
+    }
+  }
+
+  // Length penalty: demote disproportionately large chunks early in the pipeline
+  if (chunkLineRanges) {
+    for (const [id, item] of scores) {
+      const range = chunkLineRanges.get(id);
+      if (range) {
+        const lineCount = range.endLine - range.startLine + 1;
+        if (lineCount > 80) {
+          item.score *= 80 / (lineCount * 0.8 + 16);
         }
       }
     }
