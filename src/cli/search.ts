@@ -35,6 +35,10 @@ export function searchCommand(): Command {
         // If --budget is specified, use searchWithContext for token-budgeted results
         if (options.budget) {
           const budget = parseInt(options.budget, 10)
+          if (isNaN(budget) || budget < 1) {
+            console.error('Error: --budget must be a positive integer')
+            process.exit(1)
+          }
           if (options.maxChunks !== undefined) {
             const parsed = parseInt(options.maxChunks, 10)
             if (!isNaN(parsed)) config.maxContextChunks = parsed
@@ -89,7 +93,7 @@ export function searchCommand(): Command {
         console.error(`Search failed: ${err}`)
         process.exit(1)
       } finally {
-        pipeline.close()
+        await pipeline.closeAsync()
       }
     })
 }

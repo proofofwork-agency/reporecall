@@ -72,34 +72,38 @@ export function createMCPServer(
           .array(z.string())
           .optional()
           .describe('Currently open file paths for boosting')
-      }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ query, limit, activeFiles }) => {
       try {
-        const results = await search.search(query, { limit, activeFiles })
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                results.map((r) => ({
-                  name: r.name,
-                  filePath: r.filePath,
-                  kind: r.kind,
-                  startLine: r.startLine,
-                  endLine: r.endLine,
-                  score: r.score,
-                  content: r.content,
-                  docstring: r.docstring,
-                  parentName: r.parentName,
-                  language: r.language
-                })),
-                null,
-                2
-              )
-            }
-          ]
+        const doSearch = async () => {
+          const results = await search.search(query, { limit, activeFiles })
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  results.map((r) => ({
+                    name: r.name,
+                    filePath: r.filePath,
+                    kind: r.kind,
+                    startLine: r.startLine,
+                    endLine: r.endLine,
+                    score: r.score,
+                    content: r.content,
+                    docstring: r.docstring,
+                    parentName: r.parentName,
+                    language: r.language
+                  })),
+                  null,
+                  2
+                )
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(doSearch) : doSearch()
       } catch (err) {
         return errorResult(err)
       }
@@ -155,26 +159,30 @@ export function createMCPServer(
     'get_stats',
     {
       description: 'Get index statistics, conventions, and latency info',
-      inputSchema: {}
+      inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async () => {
       try {
-        const stats = metadata.getStats()
-        const conventions = metadata.getConventions()
-        const latency = metadata.getLatencyPercentiles()
-        const lastIndexed = metadata.getStat('lastIndexedAt')
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                { ...stats, lastIndexedAt: lastIndexed, conventions, latency },
-                null,
-                2
-              )
-            }
-          ]
+        const doStats = () => {
+          const stats = metadata.getStats()
+          const conventions = metadata.getConventions()
+          const latency = metadata.getLatencyPercentiles()
+          const lastIndexed = metadata.getStat('lastIndexedAt')
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  { ...stats, lastIndexedAt: lastIndexed, conventions, latency },
+                  null,
+                  2
+                )
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doStats()) : doStats()
       } catch (err) {
         return errorResult(err)
       }
@@ -217,15 +225,15 @@ export function createMCPServer(
           for (const f of files) {
             try {
               rmSync(resolve(config.dataDir, f))
-            } catch {
-              // ignore
+            } catch (e: unknown) {
+              if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
             }
           }
           const lanceDir = resolve(config.dataDir, 'lance')
           try {
             rmSync(lanceDir, { recursive: true })
-          } catch {
-            // ignore
+          } catch (e: unknown) {
+            if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
           }
 
           // Reinitialize pipeline with fresh stores so subsequent calls work
@@ -268,19 +276,22 @@ export function createMCPServer(
           .describe('Name of the function to find callers for'),
         limit: z.number().max(500).optional().describe('Max results (default 20)')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ functionName, limit }) => {
       try {
-        const callers = search.findCallers(functionName, limit)
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(callers, null, 2)
-            }
-          ]
+        const doFind = () => {
+          const callers = search.findCallers(functionName, limit)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(callers, null, 2)
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doFind()) : doFind()
       } catch (err) {
         return errorResult(err)
       }
@@ -298,19 +309,22 @@ export function createMCPServer(
           .describe('Name of the function to find callees for'),
         limit: z.number().max(500).optional().describe('Max results (default 20)')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ functionName, limit }) => {
       try {
-        const callees = search.findCallees(functionName, limit)
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(callees, null, 2)
-            }
-          ]
+        const doFind = () => {
+          const callees = search.findCallees(functionName, limit)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(callees, null, 2)
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doFind()) : doFind()
       } catch (err) {
         return errorResult(err)
       }
@@ -325,28 +339,31 @@ export function createMCPServer(
       inputSchema: {
         query: z.string().min(1).describe('Natural language query or code symbol name')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ query }) => {
       try {
-        const ftsStore = pipeline.getFTSStore()
-        const result = resolveSeeds(query, metadata, ftsStore)
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  bestSeed: result.bestSeed,
-                  candidates: result.seeds,
-                  count: result.seeds.length
-                },
-                null,
-                2
-              )
-            }
-          ]
+        const doResolve = () => {
+          const ftsStore = pipeline.getFTSStore()
+          const result = resolveSeeds(query, metadata, ftsStore)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    bestSeed: result.bestSeed,
+                    candidates: result.seeds,
+                    count: result.seeds.length
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doResolve()) : doResolve()
       } catch (err) {
         return errorResult(err)
       }
@@ -373,50 +390,53 @@ export function createMCPServer(
           .optional()
           .describe('Tree direction (default: both)')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ seed, depth, direction }) => {
       try {
-        const ftsStore = pipeline.getFTSStore()
-        const seedResult = resolveSeeds(seed, metadata, ftsStore)
-        if (!seedResult.bestSeed) {
+        const doBuild = () => {
+          const ftsStore = pipeline.getFTSStore()
+          const seedResult = resolveSeeds(seed, metadata, ftsStore)
+          if (!seedResult.bestSeed) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `No matching code symbol found for "${seed}"`
+                }
+              ]
+            }
+          }
+
+          const tree = buildStackTree(metadata, {
+            seed: seedResult.bestSeed,
+            direction: direction ?? 'both',
+            maxDepth: depth ?? 2,
+            maxBranchFactor: 3,
+            maxNodes: 24
+          })
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `No matching code symbol found for "${seed}"`
+                text: JSON.stringify(
+                  {
+                    seed: tree.seed,
+                    upTree: tree.upTree,
+                    downTree: tree.downTree,
+                    edges: tree.edges,
+                    nodeCount: tree.nodeCount,
+                    coverage: tree.coverage
+                  },
+                  null,
+                  2
+                )
               }
             ]
           }
         }
-
-        const tree = buildStackTree(metadata, {
-          seed: seedResult.bestSeed,
-          direction: direction ?? 'both',
-          maxDepth: depth ?? 2,
-          maxBranchFactor: 3,
-          maxNodes: 24
-        })
-
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  seed: tree.seed,
-                  upTree: tree.upTree,
-                  downTree: tree.downTree,
-                  edges: tree.edges,
-                  nodeCount: tree.nodeCount,
-                  coverage: tree.coverage
-                },
-                null,
-                2
-              )
-            }
-          ]
-        }
+        return lock ? await lock.withRead(async () => doBuild()) : doBuild()
       } catch (err) {
         return errorResult(err)
       }
@@ -434,7 +454,7 @@ export function createMCPServer(
           .min(1)
           .describe('Relative file path (e.g., src/auth/handler.ts)')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ filePath }) => {
       try {
@@ -442,29 +462,32 @@ export function createMCPServer(
           return errorResult(new Error('Path outside project root'))
         }
 
-        const imports = metadata.getImportsForFile(filePath)
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  filePath,
-                  imports: imports.map((i) => ({
-                    name: i.importedName,
-                    from: i.sourceModule,
-                    resolvedPath: i.resolvedPath,
-                    isDefault: i.isDefault,
-                    isNamespace: i.isNamespace
-                  })),
-                  count: imports.length
-                },
-                null,
-                2
-              )
-            }
-          ]
+        const doGet = () => {
+          const imports = metadata.getImportsForFile(filePath)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    filePath,
+                    imports: imports.map((i) => ({
+                      name: i.importedName,
+                      from: i.sourceModule,
+                      resolvedPath: i.resolvedPath,
+                      isDefault: i.isDefault,
+                      isNamespace: i.isNamespace
+                    })),
+                    count: imports.length
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doGet()) : doGet()
       } catch (err) {
         return errorResult(err)
       }
@@ -479,36 +502,39 @@ export function createMCPServer(
       inputSchema: {
         name: z.string().min(1).describe('Symbol name to look up (e.g., "authenticate", "UserService")')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ name }) => {
       try {
-        const matches = metadata.findChunksByNames([name])
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  symbol: name,
-                  matches: matches.map((m) => ({
-                    name: m.name,
-                    kind: m.kind,
-                    filePath: m.filePath,
-                    startLine: m.startLine,
-                    endLine: m.endLine,
-                    content: m.content,
-                    parentName: m.parentName,
-                    language: m.language
-                  })),
-                  count: matches.length
-                },
-                null,
-                2
-              )
-            }
-          ]
+        const doGet = () => {
+          const matches = metadata.findChunksByNames([name])
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    symbol: name,
+                    matches: matches.map((m) => ({
+                      name: m.name,
+                      kind: m.kind,
+                      filePath: m.filePath,
+                      startLine: m.startLine,
+                      endLine: m.endLine,
+                      content: m.content,
+                      parentName: m.parentName,
+                      language: m.language
+                    })),
+                    count: matches.length
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          }
         }
+        return lock ? await lock.withRead(async () => doGet()) : doGet()
       } catch (err) {
         return errorResult(err)
       }
@@ -532,66 +558,69 @@ export function createMCPServer(
           .optional()
           .describe('Maximum tree depth (default: 2)')
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ query, direction, maxDepth }) => {
       try {
-        const ftsStore = pipeline.getFTSStore()
-        const seedResult = resolveSeeds(query, metadata, ftsStore)
-        if (!seedResult.bestSeed) {
+        const doExplain = () => {
+          const ftsStore = pipeline.getFTSStore()
+          const seedResult = resolveSeeds(query, metadata, ftsStore)
+          if (!seedResult.bestSeed) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `No matching code symbol found for "${query}"`
+                }
+              ]
+            }
+          }
+
+          const tree = buildStackTree(metadata, {
+            seed: seedResult.bestSeed,
+            direction: direction ?? 'both',
+            maxDepth: maxDepth ?? 2,
+            maxBranchFactor: 3,
+            maxNodes: 24
+          })
+
+          const flowContext = assembleFlowContext(
+            tree,
+            metadata,
+            config.contextBudget,
+            query
+          )
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `No matching code symbol found for "${query}"`
+                text: JSON.stringify(
+                  {
+                    seed: {
+                      name: seedResult.bestSeed.name,
+                      filePath: seedResult.bestSeed.filePath,
+                      kind: seedResult.bestSeed.kind,
+                      confidence: seedResult.bestSeed.confidence
+                    },
+                    tree: {
+                      nodeCount: tree.nodeCount,
+                      upCount: tree.upTree.length,
+                      downCount: tree.downTree.length,
+                      coverage: tree.coverage
+                    },
+                    flowContext: flowContext.text,
+                    tokenCount: flowContext.tokenCount,
+                    chunksIncluded: flowContext.chunks.length
+                  },
+                  null,
+                  2
+                )
               }
             ]
           }
         }
-
-        const tree = buildStackTree(metadata, {
-          seed: seedResult.bestSeed,
-          direction: direction ?? 'both',
-          maxDepth: maxDepth ?? 2,
-          maxBranchFactor: 3,
-          maxNodes: 24
-        })
-
-        const flowContext = assembleFlowContext(
-          tree,
-          metadata,
-          config.contextBudget,
-          query
-        )
-
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  seed: {
-                    name: seedResult.bestSeed.name,
-                    filePath: seedResult.bestSeed.filePath,
-                    kind: seedResult.bestSeed.kind,
-                    confidence: seedResult.bestSeed.confidence
-                  },
-                  tree: {
-                    nodeCount: tree.nodeCount,
-                    upCount: tree.upTree.length,
-                    downCount: tree.downTree.length,
-                    coverage: tree.coverage
-                  },
-                  flowContext: flowContext.text,
-                  tokenCount: flowContext.tokenCount,
-                  chunksIncluded: flowContext.chunks.length
-                },
-                null,
-                2
-              )
-            }
-          ]
-        }
+        return lock ? await lock.withRead(async () => doExplain()) : doExplain()
       } catch (err) {
         return errorResult(err)
       }

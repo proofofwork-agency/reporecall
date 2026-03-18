@@ -466,8 +466,9 @@ export function createDaemonServer(
             query = body;
           }
 
-          // Save raw query before sanitization for debug records
-          const rawQuery = query;
+          // Save raw query before sanitization for debug records.
+          // Strip control characters to prevent log injection.
+          const rawQuery = query.replace(/[\x00-\x1f\x7f]/g, " ");
 
           // Sanitize query: strip code fragments, imports, and other noise
           // that can leak into the hook payload from CLI wrappers
@@ -555,7 +556,7 @@ export function createDaemonServer(
               sanitizedQuery: query,
             };
             logHook(
-              `[${requestId}] SKIP query="${query.slice(0, 100)}" reason="${intent.skipReason ?? "non-code query"}" debug=${JSON.stringify(skipDebug)}`
+              `[${requestId}] SKIP query="${rawQuery.slice(0, 100)}" reason="${intent.skipReason ?? "non-code query"}" debug=${JSON.stringify(skipDebug)}`
             );
             metadata.incrementRouteStat("skip");
             if (debugMode) {
@@ -590,7 +591,7 @@ export function createDaemonServer(
           }
 
           const startTime = Date.now();
-          logHook(`[${requestId}] SEARCH route=${route} query="${query.slice(0, 100)}"`);
+          logHook(`[${requestId}] SEARCH route=${route} query="${rawQuery.slice(0, 100)}"`);
 
           const promptContext = await handlePromptContextDetailed(
             query,

@@ -21,9 +21,8 @@ async function buildDeepRouteContext(
   activeFiles?: string[],
   signal?: AbortSignal,
   seedResult?: SeedResult
-): Promise<AssembledContext | null> {
+): Promise<AssembledContext> {
   const baseContext = await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult);
-  if (!baseContext) return null;
   if (baseContext.routeStyle === "concept") {
     return baseContext;
   }
@@ -51,6 +50,14 @@ export async function handlePromptContextDetailed(
 
   // R0 or fallback: existing behavior
   if (!route || route === "R0") {
+    return {
+      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
+      resolvedRoute: "R0",
+    };
+  }
+
+  // R1 without metadata/fts falls back to R0
+  if (route === "R1" && (!metadata || !fts)) {
     return {
       context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
       resolvedRoute: "R0",
@@ -98,14 +105,6 @@ export async function handlePromptContextDetailed(
     return {
       context: await buildDeepRouteContext(query, search, config, activeFiles, signal, resolvedSeeds),
       resolvedRoute: "R2",
-    };
-  }
-
-  // R1 without metadata/fts falls back to R0
-  if (route === "R1" && (!metadata || !fts)) {
-    return {
-      context: await search.searchWithContext(query, config.contextBudget, activeFiles, signal, seedResult),
-      resolvedRoute: "R0",
     };
   }
 

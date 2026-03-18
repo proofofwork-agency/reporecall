@@ -104,6 +104,60 @@ describe("resolveCallTarget", () => {
     expect(result).toBe("src/app.ts");
   });
 
+  it("skips receiver lookup when receiver is 'self'", () => {
+    const metadata = createMockMetadata({
+      imports: [],
+      chunks: [
+        {
+          id: "c1",
+          filePath: "src/app.ts",
+          name: "validate",
+          kind: "method_definition",
+          startLine: 10,
+          endLine: 20,
+          content: "validate() {}",
+          language: "typescript",
+          indexedAt: "2026-01-01",
+        },
+      ],
+    });
+
+    const result = resolveCallTarget(
+      { targetName: "validate", filePath: "src/app.ts", receiver: "self" },
+      metadata
+    );
+
+    // Should fall through to same-file check since "self" is skipped
+    expect(result).toBe("src/app.ts");
+  });
+
+  it("skips receiver lookup when receiver is 'super'", () => {
+    const metadata = createMockMetadata({
+      imports: [],
+      chunks: [
+        {
+          id: "c1",
+          filePath: "src/app.ts",
+          name: "validate",
+          kind: "method_definition",
+          startLine: 10,
+          endLine: 20,
+          content: "validate() {}",
+          language: "typescript",
+          indexedAt: "2026-01-01",
+        },
+      ],
+    });
+
+    const result = resolveCallTarget(
+      { targetName: "validate", filePath: "src/app.ts", receiver: "super" },
+      metadata
+    );
+
+    // Should fall through to same-file check since "super" is skipped
+    expect(result).toBe("src/app.ts");
+  });
+
   it("resolves same-file when chunk exists in the same file", () => {
     const metadata = createMockMetadata({
       imports: [],

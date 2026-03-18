@@ -3,6 +3,7 @@ dist/
 .memory/
 .claude/*.local.json
 .claude/skills/
+.claude/plans/
 *.tsbuildinfo
 .DS_Store
 skills-lock.json

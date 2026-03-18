@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import type { Statement } from "better-sqlite3";
 
 export interface ImportRecord {
   filePath: string;
@@ -10,6 +11,14 @@ export interface ImportRecord {
 }
 
 export class ImportStore {
+  private deleteByFileStmt!: Statement;
+  private insertStmt!: Statement;
+  private removeByFileStmt!: Statement;
+  private getImportsStmt!: Statement;
+  private findImporterFilesStmt!: Statement;
+  private findByNameStmt!: Statement;
+  private findByNameWithFileStmt!: Statement;
+
   constructor(private readonly db: Database.Database) {}
 
   initSchema(): void {
@@ -30,30 +39,42 @@ export class ImportStore {
     `);
 
     // Deduplicate before creating unique index (handles databases from before the index existed)
-    try {
-      this.db.exec(`
-        DELETE FROM imports WHERE id NOT IN (
-          SELECT MIN(id) FROM imports
-          GROUP BY file_path, imported_name, source_module, is_default, is_namespace
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_unique ON imports(file_path, imported_name, source_module, is_default, is_namespace);
-      `);
-    } catch {
-      // Index already exists — nothing to do
-    }
+    this.db.exec(`
+      DELETE FROM imports WHERE id NOT IN (
+        SELECT MIN(id) FROM imports
+        GROUP BY file_path, imported_name, source_module, is_default, is_namespace
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_imports_unique ON imports(file_path, imported_name, source_module, is_default, is_namespace);
+    `);
+
+    // Cache prepared statements
+    this.deleteByFileStmt = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);
+    this.insertStmt = this.db.prepare(
+      `INSERT OR IGNORE INTO imports (file_path, imported_name, source_module, resolved_path, is_default, is_namespace) VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    this.removeByFileStmt = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);
+    this.getImportsStmt = this.db.prepare(
+      `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
+       FROM imports WHERE file_path = ?`
+    );
+    this.findImporterFilesStmt = this.db.prepare(`SELECT DISTINCT file_path FROM imports WHERE resolved_path = ?`);
+    this.findByNameStmt = this.db.prepare(
+      `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
+       FROM imports WHERE imported_name = ?`
+    );
+    this.findByNameWithFileStmt = this.db.prepare(
+      `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
+       FROM imports WHERE imported_name = ? AND file_path = ?`
+    );
   }
 
   upsertImports(imports: ImportRecord[]): void {
     if (imports.length === 0) return;
     const filePaths = [...new Set(imports.map((i) => i.filePath))];
-    const del = this.db.prepare(`DELETE FROM imports WHERE file_path = ?`);
-    const ins = this.db.prepare(
-      `INSERT OR IGNORE INTO imports (file_path, imported_name, source_module, resolved_path, is_default, is_namespace) VALUES (?, ?, ?, ?, ?, ?)`
-    );
     this.db.transaction(() => {
-      for (const fp of filePaths) del.run(fp);
+      for (const fp of filePaths) this.deleteByFileStmt.run(fp);
       for (const imp of imports) {
-        ins.run(
+        this.insertStmt.run(
           imp.filePath,
           imp.importedName,
           imp.sourceModule,
@@ -66,16 +87,11 @@ export class ImportStore {
   }
 
   removeImportsForFile(filePath: string): void {
-    this.db.prepare(`DELETE FROM imports WHERE file_path = ?`).run(filePath);
+    this.removeByFileStmt.run(filePath);
   }
 
   getImportsForFile(filePath: string): ImportRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
-         FROM imports WHERE file_path = ?`
-      )
-      .all(filePath) as Array<{
+    const rows = this.getImportsStmt.all(filePath) as Array<{
       file_path: string;
       imported_name: string;
       source_module: string;
@@ -95,9 +111,7 @@ export class ImportStore {
   }
 
   findImporterFiles(resolvedPath: string): string[] {
-    const rows = this.db
-      .prepare(`SELECT DISTINCT file_path FROM imports WHERE resolved_path = ?`)
-      .all(resolvedPath) as Array<{ file_path: string }>;
+    const rows = this.findImporterFilesStmt.all(resolvedPath) as Array<{ file_path: string }>;
     return rows.map((r) => r.file_path);
   }
 
@@ -112,19 +126,9 @@ export class ImportStore {
     }>;
 
     if (filePath) {
-      rows = this.db
-        .prepare(
-          `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
-           FROM imports WHERE imported_name = ? AND file_path = ?`
-        )
-        .all(importedName, filePath) as typeof rows;
+      rows = this.findByNameWithFileStmt.all(importedName, filePath) as typeof rows;
     } else {
-      rows = this.db
-        .prepare(
-          `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
-           FROM imports WHERE imported_name = ?`
-        )
-        .all(importedName) as typeof rows;
+      rows = this.findByNameStmt.all(importedName) as typeof rows;
     }
 
     return rows.map((r) => ({

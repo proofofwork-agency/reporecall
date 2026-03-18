@@ -178,7 +178,7 @@ export function resolveImportPath(
   projectRoot: string
 ): string | null {
   // External modules: not a relative path
-  if (!sourceModule.startsWith(".")) {
+  if (!sourceModule.startsWith(".") || isAbsolute(sourceModule)) {
     return null;
   }
 
@@ -188,6 +188,10 @@ export function resolveImportPath(
       : resolve(projectRoot, importingFilePath)
   );
   const basePath = resolve(importingDir, sourceModule);
+
+  // Guard: resolved path must stay within project root
+  const rel = relative(projectRoot, basePath);
+  if (rel.startsWith("..") || isAbsolute(rel)) return null;
 
   // Try exact path first
   if (existsSync(basePath) && !isDirectory(basePath)) {

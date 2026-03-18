@@ -17,7 +17,6 @@ import { FileWatcher } from '../daemon/watcher.js'
 import { IndexScheduler } from '../daemon/scheduler.js'
 import { createDaemonServer } from '../daemon/server.js'
 import { ReadWriteLock } from '../core/rwlock.js'
-import { freeEncoder } from '../search/context-assembler.js'
 import { OllamaEmbedder } from '../indexer/embedder.js'
 import { createMCPServer } from '../daemon/mcp-server.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -396,10 +395,7 @@ export function serveCommand(): Command {
           )
         }
 
-        // Step 10: Free tiktoken WASM encoder
-        freeEncoder()
-
-        // Step 11: Flush pino logger before exiting to ensure all log lines are written
+        // Step 10: Flush pino logger before exiting to ensure all log lines are written
         log.flush()
 
         // All handles closed/unreffed — Node.js will exit naturally.
