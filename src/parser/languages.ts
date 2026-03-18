@@ -205,7 +205,7 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
   zig: {
     extensions: [".zig"],
     wasmName: "tree-sitter-zig",
-    extractableTypes: ["FnProto", "TestDecl", "ContainerDecl"],
+    extractableTypes: ["function_declaration", "test_declaration"],
     docstringTypes: ["doc_comment", "line_comment"],
   },
   bash: {
@@ -218,9 +218,8 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
     extensions: [".lua"],
     wasmName: "tree-sitter-lua",
     extractableTypes: [
-      "function_declaration",
-      "function_definition",
-      "local_function",
+      "function_definition_statement",
+      "local_function_definition_statement",
     ],
     docstringTypes: ["comment"],
   },

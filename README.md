@@ -12,7 +12,7 @@
 
 ## The Problem
 
-You ask Claude: *"how does the credit refund work when a job fails?"*
+You ask Claude: _"how does the credit refund work when a job fails?"_
 
 Claude doesn't know your codebase. So it starts searching:
 
@@ -55,7 +55,7 @@ Same question. Claude asks, Reporecall's hook fires before the prompt reaches Cl
 └────────────────────┴──────────────────────┴─────────────────┘
 ```
 
-That's what Reporecall does. It builds a local index of your codebase — AST chunks, call graph, keyword + vector search — and injects the right context before Claude even starts thinking. The call graph is the key part: it doesn't just find the function you asked about, it finds the functions that *call* it and the functions *it calls*. That's the depth that grepping misses.
+That's what Reporecall does. It builds a local index of your codebase — AST chunks, call graph, keyword + vector search — and injects the right context before Claude even starts thinking. The call graph is the key part: it doesn't just find the function you asked about, it finds the functions that _call_ it and the functions _it calls_. That's the depth that grepping misses.
 
 ## What It Solves and What It Doesn't
 
@@ -106,13 +106,14 @@ The scanner also indexes non-parser fallback file types by default: `.json`, `.m
 
 Reporecall uses a **three-tier configuration pattern** designed for teams:
 
-| Tier | Location | Scope | Committed to Git | Purpose |
-|------|----------|-------|------------------|---------|
-| **Global** | `~/.claude/settings.json` | All projects on your machine | ✗ | Personal preferences (model, theme, keybindings) |
-| **Project Shared** | `.claude/settings.json`, `.mcp.json` | Current project | ✓ | Team-wide hooks, MCP config, instructions |
-| **Local** | `.claude/settings.local.json` | Your machine | ✗ | Custom daemon port, proxy, tokens, etc. |
+| Tier               | Location                             | Scope                        | Committed to Git | Purpose                                          |
+| ------------------ | ------------------------------------ | ---------------------------- | ---------------- | ------------------------------------------------ |
+| **Global**         | `~/.claude/settings.json`            | All projects on your machine | ✗                | Personal preferences (model, theme, keybindings) |
+| **Project Shared** | `.claude/settings.json`, `.mcp.json` | Current project              | ✓                | Team-wide hooks, MCP config, instructions        |
+| **Local**          | `.claude/settings.local.json`        | Your machine                 | ✗                | Custom daemon port, proxy, tokens, etc.          |
 
 **Setup for teams:**
+
 ```bash
 git clone <repo>
 cd <repo>
@@ -129,6 +130,7 @@ See [CLAUDE.md](./CLAUDE.md#team-collaboration) for detailed team collaboration 
 ## Privacy & Data
 
 Reporecall runs **entirely on your machine**:
+
 - No external API calls during retrieval
 - No telemetry or data collection
 - No cloud dependency or uploads
@@ -161,14 +163,17 @@ Then ask Claude questions normally. The hook daemon injects relevant context bef
 ### Daily Workflow
 
 **Morning:** Start Reporecall
+
 ```bash
 reporecall serve
 ```
+
 ✓ Daemon wakes up and watches your code folder
 ✓ Connected to Claude, ready to help
 ✓ Stays running in background all day
 
 **During Development:** Ask Questions
+
 ```
 Developer: "Why is my test failing? Here's the error..."
 ↓
@@ -186,6 +191,7 @@ Claude: Shows entire auth flow, suggests improvements based on YOUR
 ```
 
 **End of Day:** Everything Syncs Automatically
+
 ```
 ✓ If you edited files today, Reporecall noticed and updated
 ✓ If teammates changed code, Reporecall learned it
@@ -364,18 +370,21 @@ flowchart TD
 Reporecall automatically chooses the best search strategy for your question:
 
 **R0 — Fast Mode (Hybrid Search)**
+
 - Use when: Looking for something specific by name or exact term
 - Example: "What does validateEmail do?"
 - How it works: Searches both exact keywords AND semantic meaning simultaneously
 - Result: ~10ms response time
 
 **R1 — Flow Mode (Call Tree Traversal)**
+
 - Use when: Understanding how a feature works end-to-end
 - Example: "Walk me through the payment flow" or "Help me debug this checkout"
 - How it works: Traces which functions call which other functions (bidirectional)
 - Result: Shows complete call chain with context
 
 **R2 — Deep Search (Semantic)**
+
 - Use when: Looking for related code across the codebase by concept
 - Example: "Find all error handling" or "Show me authentication patterns"
 - How it works: Searches by meaning, not just keywords
@@ -387,16 +396,16 @@ For broad architectural questions like "what is the storage layer?" or "how does
 
 Default bundles (8):
 
-| Kind | Pattern Example | Symbols |
-|------|----------------|---------|
-| `ast` | "ast", "tree-sitter" | `initTreeSitter`, `chunkFileWithCalls`, `walkForExtractables`, ... |
-| `call_graph` | "call graph", "who calls", "callers" | `extractCallEdges`, `buildStackTree`, ... |
-| `search_pipeline` | "search pipeline", "hybrid search", "query routing" | `classifyIntent`, `deriveRoute`, `searchWithContext`, ... |
-| `storage` | "storage layer", "data stores" | `MetadataStore`, `FTSStore`, `ChunkStore`, ... |
-| `daemon` | "daemon", "http server" | `createDaemonServer`, `sanitizeQuery`, `IndexScheduler`, ... |
-| `embedding` | "embedding provider", "embedder" | `LocalEmbedder`, `NullEmbedder`, `OllamaEmbedder`, ... |
-| `cli` | "cli", "command line" | `createCLI`, `initCommand`, `serveCommand`, ... |
-| `context_assembly` | "token budget", "context assembly" | `assembleContext`, `assembleConceptContext`, `countTokens`, ... |
+| Kind               | Pattern Example                                     | Symbols                                                            |
+| ------------------ | --------------------------------------------------- | ------------------------------------------------------------------ |
+| `ast`              | "ast", "tree-sitter"                                | `initTreeSitter`, `chunkFileWithCalls`, `walkForExtractables`, ... |
+| `call_graph`       | "call graph", "who calls", "callers"                | `extractCallEdges`, `buildStackTree`, ...                          |
+| `search_pipeline`  | "search pipeline", "hybrid search", "query routing" | `classifyIntent`, `deriveRoute`, `searchWithContext`, ...          |
+| `storage`          | "storage layer", "data stores"                      | `MetadataStore`, `FTSStore`, `ChunkStore`, ...                     |
+| `daemon`           | "daemon", "http server"                             | `createDaemonServer`, `sanitizeQuery`, `IndexScheduler`, ...       |
+| `embedding`        | "embedding provider", "embedder"                    | `LocalEmbedder`, `NullEmbedder`, `OllamaEmbedder`, ...             |
+| `cli`              | "cli", "command line"                               | `createCLI`, `initCommand`, `serveCommand`, ...                    |
+| `context_assembly` | "token budget", "context assembly"                  | `assembleContext`, `assembleConceptContext`, `countTokens`, ...    |
 
 Bundles are configurable via `.memory/config.json` and validated for ReDoS safety.
 
@@ -544,11 +553,12 @@ Caller/callee results are useful, but they are based on symbol names and extract
 
 ### Keep claims disciplined
 
-The live-repo benchmark (NDCG@10: 0.482, MRR: 0.670 in keyword mode) provides honest, community-standard numbers measured through the production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, and hook priority scoring). See the [Benchmark section](#benchmark) for full analysis.
+The live-repo benchmark (NDCG@10: 0.530, MRR: 0.750 in keyword mode) provides honest, community-standard numbers measured through the production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, and hook priority scoring). See the [Benchmark section](#benchmark) for full analysis.
 
 ## Operational Notes
 
 ### Security & Access Control
+
 - The daemon binds only to `127.0.0.1` (localhost only, not accessible from network)
 - All non-health/readiness routes require bearer token authentication (timing-safe comparison)
 - API keys should come from environment variables, not committed to config files
@@ -563,12 +573,14 @@ The live-repo benchmark (NDCG@10: 0.482, MRR: 0.670 in keyword mode) provides ho
 - Symlink escape detection prevents indexing files outside the project root
 
 ### Data Management
+
 - `clear_index` resets on-disk stores and Merkle state
 - Stale-store recovery forces full rebuild when Merkle says “no changes” but stores are empty
 - `.memory/` folder contains all local data (metadata.db, fts.db, lance/, merkle.json)
 - Tree-sitter WASM parsers are deterministic and safe for untrusted files
 
 ### Daemon Lifecycle
+
 - PID file locking prevents concurrent daemon instances
 - Stale PID detection: checks if the process is still alive before claiming a port conflict
 - Graceful shutdown on SIGTERM/SIGINT with 10-step ordered sequence:
@@ -585,6 +597,7 @@ The live-repo benchmark (NDCG@10: 0.482, MRR: 0.670 in keyword mode) provides ho
 - Force-exit timeout (10s) prevents indefinite hangs
 
 ### Indexing Strategy
+
 - Merkle-based change detection (xxHash64 per file) with mtime pre-filtering: unchanged files are detected in O(1) via filesystem mtime without re-reading or re-hashing
 - Only unchanged files are skipped during incremental indexing
 - File watcher debounces for 2s to batch rapid saves
@@ -614,10 +627,10 @@ npm run benchmark -- --output results.json            # custom output path
 ║  P@5: 0.226  P@10: 0.113  R@5: 0.291  R@10: 0.291             ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  By Route        Count   NDCG@10   MRR                        ║
-║    R0             20      0.706    0.950                        ║
-║    R1             24      0.443    0.667                        ║
-║    skip            7       —        —                           ║
-║    R2              3      0.058    0.083                        ║
+║    R0             20      0.706    0.950                      ║
+║    R1             24      0.443    0.667                      ║
+║    skip            7       —        —                         ║
+║    R2              3      0.058    0.083                      ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  Route accuracy: 81.5%  Avg latency: 4.79ms (P50: 3.69ms)     ║
 ╚═══════════════════════════════════════════════════════════════╝
@@ -625,14 +638,14 @@ npm run benchmark -- --output results.json            # custom output path
 
 ### What the numbers mean
 
-| Metric | Value | What it measures | Interpretation |
-|--------|-------|-----------------|----------------|
-| **NDCG@10** | 0.530 | Ranking quality of top 10 results (0-1) | Competitive (CodeSearchNet SOTA: 0.4–0.7) |
-| **MRR** | 0.750 | How quickly the first relevant result appears (0-1) | Strong — first relevant result typically at rank 1 |
-| **MAP** | 0.278 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall |
-| **Route accuracy** | 81.5% | Correct routing (skip/R0/R1/R2) classification | Good — intent classifier works with zero LLM tokens |
-| **P@5** | 0.226 | Fraction of top 5 that are relevant | Solid — concept bundles and seed boosting surface relevant code |
-| **R@10** | 0.291 | Fraction of all relevant chunks found in top 10 | Moderate — recall improves with semantic embeddings |
+| Metric             | Value | What it measures                                      | Interpretation                                                  |
+| ------------------ | ----- | ----------------------------------------------------- | --------------------------------------------------------------- |
+| **NDCG@10**        | 0.530 | Ranking quality of top 10 results (0-1)               | Competitive (CodeSearchNet SOTA: 0.4–0.7)                       |
+| **MRR**            | 0.750 | How quickly the first relevant result appears (0-1)   | Strong — first relevant result typically at rank 1              |
+| **MAP**            | 0.278 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall                       |
+| **Route accuracy** | 81.5% | Correct routing (skip/R0/R1/R2) classification        | Good — intent classifier works with zero LLM tokens             |
+| **P@5**            | 0.226 | Fraction of top 5 that are relevant                   | Solid — concept bundles and seed boosting surface relevant code |
+| **R@10**           | 0.291 | Fraction of all relevant chunks found in top 10       | Moderate — recall improves with semantic embeddings             |
 
 ### What this tells us
 
@@ -646,13 +659,13 @@ npm run benchmark -- --output results.json            # custom output path
 
 **By category:**
 
-| Category | Count | NDCG@10 | MRR | Notes |
-|----------|-------|---------|-----|-------|
-| exact_lookup | 14 | 0.753 | 0.929 | Strong — seed boosting surfaces the right symbol at rank 1 |
-| architecture | 7 | 0.564 | 0.750 | Good — concept bundles short-circuit broad questions to relevant code |
-| flow | 18 | 0.438 | 0.722 | Good — flow tree assembly provides call graph context |
-| debugging | 8 | 0.319 | 0.500 | Moderate — length penalty and test filtering improve signal |
-| meta | 7 | — | — | Skip route validation — greetings, thanks, meta-AI queries correctly skipped |
+| Category     | Count | NDCG@10 | MRR   | Notes                                                                        |
+| ------------ | ----- | ------- | ----- | ---------------------------------------------------------------------------- |
+| exact_lookup | 14    | 0.753   | 0.929 | Strong — seed boosting surfaces the right symbol at rank 1                   |
+| architecture | 7     | 0.564   | 0.750 | Good — concept bundles short-circuit broad questions to relevant code        |
+| flow         | 18    | 0.438   | 0.722 | Good — flow tree assembly provides call graph context                        |
+| debugging    | 8     | 0.319   | 0.500 | Moderate — length penalty and test filtering improve signal                  |
+| meta         | 7     | —       | —     | Skip route validation — greetings, thanks, meta-AI queries correctly skipped |
 
 ### What the benchmark does NOT measure
 
@@ -662,12 +675,14 @@ npm run benchmark -- --output results.json            # custom output path
 ### Methodology
 
 The benchmark:
+
 1. Indexes the Reporecall codebase from scratch (~125 files → ~630 chunks)
 2. Runs each query through the full production pipeline: `sanitizeQuery` → `classifyIntent` → `deriveRoute` → `resolveSeeds` → `handlePromptContextDetailed()` (with seed boosting, concept bundles, graph/sibling expansion, and hook priority scoring)
 3. Maps each result's chunk name to a human-annotated relevance grade (0-3)
 4. Computes standard IR metrics against the ideal ranking
 
 Annotations use the **0-3 graded relevance scale** from CodeSearchNet:
+
 - **3** = highly relevant (the exact function/class being asked about)
 - **2** = relevant (directly related code, e.g., a caller or type definition)
 - **1** = marginally relevant (tangentially related, might provide useful context)
@@ -712,6 +727,7 @@ npm run benchmark -- --output out.json         # custom output path
 ```
 
 To update relevance annotations after code changes:
+
 ```bash
 npx tsx benchmark/annotate.ts --project .       # generates benchmark/annotations-draft.json
 # manually grade results 0-3, save as benchmark/annotations.json

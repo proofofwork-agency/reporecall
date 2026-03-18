@@ -55,6 +55,21 @@ function extractName(node: SyntaxNode): string {
     if (decl) return extractName(decl);
   }
 
+  // Kotlin: classes use type_identifier, functions use simple_identifier as direct children
+  // Zig: test declarations have a string child with the test name
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (!child) continue;
+    if (child.type === "simple_identifier" || child.type === "type_identifier") {
+      return child.text;
+    }
+    if (child.type === "string" && node.type === "test_declaration") {
+      // Strip quotes from test name
+      const text = child.text;
+      return text.startsWith('"') ? text.slice(1, -1) : text;
+    }
+  }
+
   return "<anonymous>";
 }
 
@@ -97,10 +112,11 @@ function extractParentName(node: SyntaxNode): string | undefined {
     if (
       current.type === "class_declaration" ||
       current.type === "class_definition" ||
-      current.type === "impl_item"
+      current.type === "impl_item" ||
+      current.type === "object_declaration"
     ) {
-      const name = current.childForFieldName("name");
-      if (name) return name.text;
+      const name = extractName(current);
+      if (name !== "<anonymous>") return name;
     }
     current = current.parent;
   }
@@ -113,7 +129,7 @@ const CONTAINER_TYPES = new Set([
   "interface_declaration", "trait_item", "trait_definition",
   "protocol_declaration",
   "module", "namespace_definition",
-  "component",
+  "object_declaration", "component",
 ]);
 
 function walkForExtractables(
