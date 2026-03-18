@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { loadConfig } from "../../src/core/config.js";
+import { loadConfig, resolveContextBudget } from "../../src/core/config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -403,5 +403,77 @@ describe("loadConfig — malformed JSON", () => {
     const config = loadConfig(tmpDir);
     expect(config.embeddingProvider).toBe("local");
     expect(config.port).toBe(37222);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveContextBudget — dynamic budget computation
+// ---------------------------------------------------------------------------
+
+describe("resolveContextBudget", () => {
+  it("returns 2000 (floor) for 50 chunks", () => {
+    expect(resolveContextBudget(0, 50)).toBe(2000);
+  });
+
+  it("returns 2000 for 200 chunks (still below floor)", () => {
+    expect(resolveContextBudget(0, 200)).toBe(2000);
+  });
+
+  it("returns 4000 for 1000 chunks", () => {
+    expect(resolveContextBudget(0, 1000)).toBe(4000);
+  });
+
+  it("returns 6000 (ceiling) for 2000+ chunks", () => {
+    expect(resolveContextBudget(0, 2000)).toBe(6000);
+  });
+
+  it("respects user override when configBudget > 0", () => {
+    expect(resolveContextBudget(5000, 1000)).toBe(5000);
+  });
+
+  it("returns 6000 for very large projects", () => {
+    expect(resolveContextBudget(0, 10000)).toBe(6000);
+  });
+
+  it("returns 2000 for zero chunks (auto mode)", () => {
+    expect(resolveContextBudget(0, 0)).toBe(2000);
+  });
+
+  it("returns the exact user budget regardless of chunk count", () => {
+    expect(resolveContextBudget(3000, 50)).toBe(3000);
+    expect(resolveContextBudget(3000, 5000)).toBe(3000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// contextBudget default is now 0 (auto)
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — contextBudget defaults to 0 (auto)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("defaults contextBudget to 0", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.contextBudget).toBe(0);
+  });
+
+  it("accepts contextBudget: 0 as a valid user override", () => {
+    writeConfigJson(tmpDir, { contextBudget: 0 });
+    const config = loadConfig(tmpDir);
+    expect(config.contextBudget).toBe(0);
+  });
+
+  it("accepts a positive contextBudget override", () => {
+    writeConfigJson(tmpDir, { contextBudget: 5000 });
+    const config = loadConfig(tmpDir);
+    expect(config.contextBudget).toBe(5000);
   });
 });

@@ -13,7 +13,7 @@ export function searchCommand(): Command {
     .argument('<query>', 'Search query')
     .option('--project <path>', 'Project root path')
     .option('--limit <n>', 'Max results', '10')
-    .option('--budget <tokens>', 'Token budget for context')
+    .option('--budget [tokens]', 'Token budget for context (omit value for auto)')
     .option('--max-chunks <n>', 'Max context chunks per query')
     .action(async (query, options) => {
       const projectRoot = options.project
@@ -33,12 +33,18 @@ export function searchCommand(): Command {
 
       try {
         // If --budget is specified, use searchWithContext for token-budgeted results
-        if (options.budget) {
-          const budget = parseInt(options.budget, 10)
-          if (isNaN(budget) || budget < 1) {
-            console.error('Error: --budget must be a positive integer')
-            process.exit(1)
+        if (options.budget !== undefined) {
+          let budget: number | undefined
+          if (options.budget !== true) {
+            // Explicit number: --budget 5000
+            const parsed = parseInt(options.budget, 10)
+            if (isNaN(parsed) || parsed < 1) {
+              console.error('Error: --budget must be a positive integer or omitted for auto')
+              process.exit(1)
+            }
+            budget = parsed
           }
+          // budget=undefined → searchWithContext uses auto via resolveContextBudget
           if (options.maxChunks !== undefined) {
             const parsed = parseInt(options.maxChunks, 10)
             if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed

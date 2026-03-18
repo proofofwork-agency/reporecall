@@ -1,4 +1,4 @@
-import type { MemoryConfig } from "../core/config.js";
+import { type MemoryConfig, resolveContextBudget } from "../core/config.js";
 import type { EmbeddingProvider } from "../indexer/types.js";
 import type { VectorStore } from "../storage/vector-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
@@ -138,7 +138,10 @@ export class HybridSearch {
     signal?: AbortSignal,
     seedResult?: SeedResult
   ): Promise<AssembledContext> {
-    const budget = tokenBudget ?? this.config.contextBudget;
+    const budget = tokenBudget ?? resolveContextBudget(
+      this.config.contextBudget,
+      this.metadata.getStats().totalChunks
+    );
     const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
     const conceptContext = this.buildConceptContext(query, budget, seeds);
     if (conceptContext) return conceptContext;
@@ -170,7 +173,7 @@ export class HybridSearch {
 
     return assembleContext(
       prioritized,
-      tokenBudget ?? this.config.contextBudget,
+      budget,
       {
         maxChunks: maxContextChunks,
         scoreFloorRatio: 0.7,

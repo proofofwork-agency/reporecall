@@ -123,7 +123,9 @@ export async function resolveExplainResult(
     undefined,
     route,
     metadata,
-    fts
+    fts,
+    undefined,
+    metadata.getStats().totalChunks
   )
   route = promptContext.resolvedRoute
   const context = promptContext.context

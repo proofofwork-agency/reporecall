@@ -60,7 +60,7 @@ const UserConfigSchema = z.object({
   ignorePatterns: z.array(z.string()).optional(),
   maxFileSize: z.number().positive().optional(),
   batchSize: z.number().positive().optional(),
-  contextBudget: z.number().positive().optional(),
+  contextBudget: z.number().min(0).optional(),
   maxContextChunks: z.number().min(0).optional(),
   sessionBudget: z.number().positive().optional(),
   searchWeights: z.object({
@@ -122,7 +122,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
-  contextBudget: 4000,
+  contextBudget: 0,
   maxContextChunks: 0,
   sessionBudget: 2000,
   searchWeights: { vector: 0.5, keyword: 0.3, recency: 0.2 },
@@ -282,4 +282,25 @@ export function loadConfig(projectRoot: string): MemoryConfig {
   }
 
   return merged;
+}
+
+/**
+ * Compute the effective context budget.
+ * If the user explicitly set contextBudget > 0 in their config, use that.
+ * If contextBudget is 0 (the default, meaning "auto"), compute dynamically
+ * based on the number of indexed chunks.
+ *
+ * Formula: clamp(1500 + chunkCount * 2.5, 2000, 6000)
+ * - 50 chunks  -> 2000 tokens
+ * - 200 chunks -> 2000 tokens
+ * - 1000 chunks -> 4000 tokens
+ * - 2000+ chunks -> 6000 tokens
+ *
+ * @param configBudget - The contextBudget value from config (0 = auto)
+ * @param chunkCount - The number of indexed chunks in the project
+ * @returns The resolved token budget
+ */
+export function resolveContextBudget(configBudget: number, chunkCount: number): number {
+  if (configBudget > 0) return configBudget;
+  return Math.min(6000, Math.max(2000, Math.floor(1500 + chunkCount * 2.5)));
 }

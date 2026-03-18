@@ -5,7 +5,7 @@ import { realpathSync } from 'fs'
 import type { HybridSearch } from '../search/hybrid.js'
 import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
-import type { MemoryConfig } from '../core/config.js'
+import { type MemoryConfig, resolveContextBudget } from '../core/config.js'
 import type { ReadWriteLock } from '../core/rwlock.js'
 import { resolveSeeds } from '../search/seed.js'
 import { buildStackTree } from '../search/tree-builder.js'
@@ -599,10 +599,14 @@ export function createMCPServer(
             maxNodes: 24
           })
 
+          const flowBudget = resolveContextBudget(
+            config.contextBudget,
+            metadata.getStats().totalChunks
+          )
           const flowContext = assembleFlowContext(
             tree,
             metadata,
-            config.contextBudget,
+            flowBudget,
             query
           )
 

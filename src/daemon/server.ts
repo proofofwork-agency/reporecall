@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
-import type { MemoryConfig } from "../core/config.js";
+import { type MemoryConfig, resolveContextBudget } from "../core/config.js";
 import type { HybridSearch } from "../search/hybrid.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { handleSessionStart } from "../hooks/session-start.js";
@@ -593,6 +593,7 @@ export function createDaemonServer(
           const startTime = Date.now();
           logHook(`[${requestId}] SEARCH route=${route} query="${rawQuery.slice(0, 100)}"`);
 
+          const totalChunks = metadata.getStats().totalChunks;
           const promptContext = await handlePromptContextDetailed(
             query,
             search,
@@ -602,7 +603,8 @@ export function createDaemonServer(
             route,
             liveOptions.ftsStore ? metadata : undefined,
             liveOptions.ftsStore,
-            cachedSeedResult
+            cachedSeedResult,
+            totalChunks
           );
           route = promptContext.resolvedRoute;
           const context = promptContext.context;
@@ -694,8 +696,9 @@ export function createDaemonServer(
             );
           }
 
+          const resolvedBudget = resolveContextBudget(config.contextBudget, totalChunks);
           logHook(
-            `[${requestId}] BUDGET ${context.tokenCount} / ${config.contextBudget} tokens (${((context.tokenCount / config.contextBudget) * 100).toFixed(1)}%)`
+            `[${requestId}] BUDGET ${context.tokenCount} / ${resolvedBudget} tokens (${((context.tokenCount / resolvedBudget) * 100).toFixed(1)}%)${config.contextBudget === 0 ? " [auto]" : ""}`
           );
 
           // Stats update: all reads and writes are synchronous (better-sqlite3),

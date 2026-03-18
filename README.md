@@ -236,7 +236,7 @@ Important options:
 
 - `--project <path>` on all main commands
 - `reporecall search --limit <n>`
-- `reporecall search --budget <tokens>`
+- `reporecall search --budget [tokens]` (omit value for auto)
 - `reporecall search --max-chunks <n>`
 - `reporecall serve --port <n>`
 - `reporecall serve --mcp`
@@ -395,7 +395,7 @@ flowchart LR
     RRF["Reciprocal Rank<br/>Fusion<br/>1/(k+rank), k=60"]
     Adj["Score adjustments<br/>impl +50% · test −70%<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +30%/term"]
     Floor["Score floor filter<br/>≥ 70% of top score"]
-    Budget["Token budget<br/>assembly<br/>tiktoken gpt-4o<br/>counting<br/>4000 token default"]
+    Budget["Token budget<br/>assembly<br/>tiktoken gpt-4o<br/>counting<br/>auto-scaled budget"]
     Ctx["Assembled context<br/>markdown code blocks<br/>+ Direct Facts section"]
 
     Q2 --> FTS5S & VEC
@@ -482,7 +482,7 @@ Config lives in `.memory/config.json`. All fields are optional.
 | `embeddingModel`        |       `"Xenova/all-MiniLM-L6-v2"` | embedding model name                           |
 | `embeddingDimensions`   |                             `384` | vector dimensions                              |
 | `ollamaUrl`             |        `"http://localhost:11434"` | Ollama base URL                                |
-| `contextBudget`         |                            `4000` | prompt-context token budget                    |
+| `contextBudget`         |                               `0` | prompt-context token budget (`0` = auto-scale) |
 | `maxContextChunks`      |                               `0` | dynamic cap based on token budget (`0` = auto) |
 | `sessionBudget`         |                            `2000` | session-start token budget                     |
 | `searchWeights.vector`  |                             `0.5` | vector weight                                  |

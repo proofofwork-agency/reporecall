@@ -12,6 +12,7 @@
 - **Deep route context assembly** — R1/R2 routes assemble context using graph expansion, sibling chunks, and concept bundles for richer, more relevant context windows.
 - **`explain` CLI command** — Interactive call-chain explorer: `reporecall explain functionName` shows callers, callees, or full stack trees.
 - **`stats` CLI command** — Quick summary of indexed files, chunks, and storage size.
+- **Dynamic context budget** — Context token budget now auto-scales based on index size: `clamp(1500 + chunks × 2.5, 2000, 6000)`. Small projects get lean context (~2K tokens), large projects get richer context (~4-6K tokens). User override via `contextBudget` in `.memory/config.json` is always respected. Set to `0` (new default) for auto-scaling.
 
 ### Security
 
@@ -38,7 +39,9 @@
 - Unreachable null guard removed from `buildDeepRouteContext`
 - `SELF_REFS` set hoisted to module scope in `resolve.ts`
 - Hook log write failures now logged instead of silently swallowed
+- `--budget [tokens]` CLI flag now accepts optional value — omit for auto-scaling, pass a number for explicit override
 - README accuracy fixes: score floors, language count, latency numbers, benchmark claims
+- Removed redundant `SETUP.md` — content consolidated into `README.md`
 
 ### Tests
 
