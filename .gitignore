@@ -1,9 +1,10 @@
 node_modules/
 dist/
 .memory/
-.claude/
+.claude/*.local.json
+.claude/skills/
+.claude/plans/
 *.tsbuildinfo
 .DS_Store
-CLAUDE.md
 skills-lock.json
 .agents/

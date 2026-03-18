@@ -11,6 +11,7 @@ export interface StoredChunk {
   language: string;
   indexedAt: string;
   fileMtime?: string;
+  isExported?: boolean;
 }
 
 export interface ChunkScoringInfo {
@@ -23,13 +24,4 @@ export interface ChunkScoringInfo {
   fileMtime?: string;
 }
 
-export interface VectorRecord {
-  id: string;
-  vector: number[];
-  filePath: string;
-  name: string;
-  kind: string;
-  startLine: number;
-  endLine: number;
-}
 

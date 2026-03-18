@@ -1,3 +1,5 @@
+import { STOP_WORDS } from "./utils.js";
+
 export interface RankedItem {
   id: string;
   vectorRank?: number;
@@ -32,6 +34,7 @@ export function reciprocalRankFusion(
   // Vector scores — standard RRF: 1/(k + rank) with 1-indexed rank
   for (let i = 0; i < vectorResults.length; i++) {
     const item = vectorResults[i];
+    if (!item) continue;
     const rank = i + 1; // 1-indexed
     const existing = scores.get(item.id) ?? {
       id: item.id,
@@ -45,6 +48,7 @@ export function reciprocalRankFusion(
   // Keyword scores — standard RRF: 1/(k + rank) with 1-indexed rank
   for (let i = 0; i < keywordResults.length; i++) {
     const item = keywordResults[i];
+    if (!item) continue;
     const rank = i + 1; // 1-indexed
     const existing = scores.get(item.id) ?? {
       id: item.id,
@@ -115,7 +119,6 @@ export function reciprocalRankFusion(
 
   // Query-term filename/symbol boost: if query terms appear in file basename or chunk name, boost
   if (queryTerms && queryTerms.length > 0 && chunkFilePaths) {
-    const STOP_WORDS = new Set(["the", "a", "an", "is", "are", "what", "which", "how", "by", "in", "of", "and", "or", "to", "this", "that", "return", "list"]);
     const terms = queryTerms
       .map((t) => t.toLowerCase())
       .filter((t) => t.length >= 2 && !STOP_WORDS.has(t));

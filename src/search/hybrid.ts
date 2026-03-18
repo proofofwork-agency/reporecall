@@ -1,20 +1,48 @@
-import type { MemoryConfig } from "../core/config.js";
+import { type MemoryConfig, resolveContextBudget } from "../core/config.js";
 import type { EmbeddingProvider } from "../indexer/types.js";
 import type { VectorStore } from "../storage/vector-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { reciprocalRankFusion } from "./ranker.js";
-import { assembleContext } from "./context-assembler.js";
+import { isTestFile } from "./utils.js";
+import {
+  assembleConceptContext,
+  assembleContext,
+  type ConceptContextKind,
+} from "./context-assembler.js";
 import { getLogger } from "../core/logger.js";
 import { LocalReranker } from "./reranker.js";
 import type { SearchResult, SearchOptions, AssembledContext } from "./types.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
+import { resolveSeeds } from "./seed.js";
+import type { SeedResult } from "./seed.js";
+import type { StoredChunk } from "../storage/types.js";
 
 const IMPL_BOOST = 1.25;
 const TEST_PENALTY = 0.35;
 const DOC_PENALTY = 0.45;
 const DOC_PENALTY_NO_IMPL = 0.8;
 const TERM_MATCH_BOOST = 1.15;
+const CONCEPT_BOOST = 0.9;
+
+interface CompiledConceptBundle {
+  kind: string;
+  pattern: RegExp;
+  symbols: string[];
+  maxChunks: number;
+}
+
+function compileConceptBundles(
+  bundles: Array<{ kind: string; pattern: string; symbols: string[]; maxChunks: number }>
+): CompiledConceptBundle[] {
+  if (!bundles) return [];
+  return bundles.map((b) => ({
+    kind: b.kind,
+    pattern: new RegExp(b.pattern, "i"),
+    symbols: b.symbols,
+    maxChunks: b.maxChunks,
+  }));
+}
 
 interface ScoringMaps {
   chunkDates: Map<string, string>;
@@ -32,6 +60,7 @@ export class HybridSearch {
   private config: MemoryConfig;
   private reranker: LocalReranker | null = null;
   private lock: ReadWriteLock | undefined;
+  private conceptBundles: CompiledConceptBundle[];
 
   constructor(
     embedder: EmbeddingProvider,
@@ -47,6 +76,7 @@ export class HybridSearch {
     this.metadata = metadata;
     this.config = config;
     this.lock = lock;
+    this.conceptBundles = compileConceptBundles(config.conceptBundles);
   }
 
   updateStores(
@@ -94,7 +124,8 @@ export class HybridSearch {
 
       this.expandSiblings(ranked, scoringMaps, options);
 
-      return this.rerankOrHydrate(query, ranked, limit, options);
+      const hydrated = await this.rerankOrHydrate(query, ranked, limit, options);
+      return this.prependConceptTargetResults(query, hydrated);
     };
 
     return this.lock ? this.lock.withRead(doSearch) : doSearch();
@@ -104,9 +135,17 @@ export class HybridSearch {
     query: string,
     tokenBudget?: number,
     activeFiles?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    seedResult?: SeedResult
   ): Promise<AssembledContext> {
-    const budget = tokenBudget ?? this.config.contextBudget;
+    const budget = tokenBudget ?? resolveContextBudget(
+      this.config.contextBudget,
+      this.metadata.getStats().totalChunks
+    );
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const conceptContext = this.buildConceptContext(query, budget, seeds);
+    if (conceptContext) return conceptContext;
+
     const maxContextChunks = this.config.maxContextChunks > 0
       ? this.config.maxContextChunks
       : Math.min(100, Math.max(10, Math.floor(budget / 200)));  // ~200 tokens per avg chunk, capped at 100
@@ -119,7 +158,8 @@ export class HybridSearch {
       rerank: false,
       signal,
     });
-    const prioritized = this.prioritizeForHookContext(query, results);
+    const exactAware = this.prependExplicitTargetResults(query, results, seeds);
+    const prioritized = this.prioritizeForHookContext(query, exactAware);
 
     const log = getLogger();
     log.debug({
@@ -127,12 +167,13 @@ export class HybridSearch {
       budget,
       maxContextChunks,
       retrievedCount: results.length,
+      exactAwareCount: exactAware.length,
       prioritizedCount: prioritized.length,
     }, "searchWithContext pipeline");
 
     return assembleContext(
       prioritized,
-      tokenBudget ?? this.config.contextBudget,
+      budget,
       {
         maxChunks: maxContextChunks,
         scoreFloorRatio: 0.7,
@@ -140,6 +181,33 @@ export class HybridSearch {
         factExtractors: this.config.factExtractors,
       }
     );
+  }
+
+  private buildConceptContext(
+    query: string,
+    tokenBudget: number,
+    seedResult?: SeedResult
+  ): AssembledContext | null {
+    const conceptKind = this.getConceptKind(query);
+    if (!conceptKind) return null;
+
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const hasResolvedExplicitTarget = seeds.seeds
+      .some((seed) => seed.reason === "explicit_target");
+    if (hasResolvedExplicitTarget) return null;
+
+    const bundle = this.getConceptBundle(conceptKind);
+    const selectedChunks = this.selectConceptChunks(
+      this.getConceptSymbolsForKind(conceptKind),
+      bundle?.maxChunks ?? 4
+    );
+    if (selectedChunks.length === 0) return null;
+
+    const conceptResults = selectedChunks.map((chunk, index) =>
+      this.chunkToSearchResult(chunk, 1 - index * 0.01)
+    );
+
+    return assembleConceptContext(conceptKind, conceptResults, tokenBudget);
   }
 
   private prioritizeForHookContext(
@@ -166,6 +234,136 @@ export class HybridSearch {
         ...item.result,
         hookScore: item.adjustedScore,
       }));
+  }
+
+  private prependExplicitTargetResults(
+    query: string,
+    results: SearchResult[],
+    seedResult?: SeedResult
+  ): SearchResult[] {
+    const seeds = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const explicitSeeds = seeds.seeds
+      .filter((seed) => seed.reason === "explicit_target")
+      .slice(0, 5);
+
+    if (explicitSeeds.length === 0) return results;
+
+    const chunkMap = new Map(
+      this.metadata
+        .getChunksByIds(explicitSeeds.map((seed) => seed.chunkId))
+        .map((chunk) => [chunk.id, chunk])
+    );
+
+    const byId = new Map(results.map((result) => [result.id, result]));
+    const topScore = results[0]?.score ?? 1;
+
+    for (let i = 0; i < explicitSeeds.length; i++) {
+      const seed = explicitSeeds[i];
+      if (!seed) continue;
+      const chunk = chunkMap.get(seed.chunkId);
+      if (!chunk) continue;
+
+      const existing = byId.get(seed.chunkId);
+      const boostedScore = topScore + 1 + seed.confidence - i * 0.001;
+      byId.set(
+        seed.chunkId,
+        existing
+          ? { ...existing, score: Math.max(existing.score, boostedScore) }
+          : this.chunkToSearchResult(chunk, boostedScore)
+      );
+    }
+
+    return Array.from(byId.values()).sort((a, b) => b.score - a.score);
+  }
+
+  private prependConceptTargetResults(
+    query: string,
+    results: SearchResult[],
+    seedResult?: SeedResult
+  ): SearchResult[] {
+    const conceptSymbols = this.getConceptSymbols(query);
+    if (conceptSymbols.length === 0) return results;
+
+    const resolved = seedResult ?? resolveSeeds(query, this.metadata, this.fts);
+    const hasResolvedExplicitTarget = resolved.seeds
+      .some((seed) => seed.reason === "explicit_target");
+    if (hasResolvedExplicitTarget) return results;
+
+    const selectedChunks = this.selectConceptChunks(conceptSymbols);
+    if (selectedChunks.length === 0) return results;
+
+    const byId = new Map(results.map((result) => [result.id, result]));
+    const topScore = results[0]?.score ?? 1;
+
+    for (let i = 0; i < selectedChunks.length; i++) {
+      const chunk = selectedChunks[i];
+      if (!chunk) continue;
+      const existing = byId.get(chunk.id);
+      const boostedScore = topScore + CONCEPT_BOOST - i * 0.001;
+      byId.set(
+        chunk.id,
+        existing
+          ? { ...existing, score: Math.max(existing.score, boostedScore) }
+          : this.chunkToSearchResult(chunk, boostedScore)
+      );
+    }
+
+    return Array.from(byId.values()).sort((a, b) => b.score - a.score);
+  }
+
+  hasConceptContext(query: string): boolean {
+    return this.getConceptKind(query) !== null;
+  }
+
+  private getConceptKind(query: string): ConceptContextKind | null {
+    const matched = this.conceptBundles.filter((b) => b.pattern.test(query));
+    if (matched.length === 1) return (matched[0]?.kind ?? null) as ConceptContextKind | null;
+    return null;
+  }
+
+  private getConceptSymbols(query: string): string[] {
+    const kind = this.getConceptKind(query);
+    return kind ? this.getConceptSymbolsForKind(kind) : [];
+  }
+
+  private getConceptBundle(kind: ConceptContextKind): CompiledConceptBundle | undefined {
+    return this.conceptBundles.find((b) => b.kind === kind);
+  }
+
+  private getConceptSymbolsForKind(kind: ConceptContextKind): string[] {
+    return this.getConceptBundle(kind)?.symbols ?? [];
+  }
+
+  private selectConceptChunks(symbols: string[], maxChunks?: number): StoredChunk[] {
+    const nameOrder = new Map(symbols.map((name, index) => [name, index]));
+    const bestByName = new Map<string, StoredChunk>();
+
+    for (const chunk of this.metadata.findChunksByNames(symbols)) {
+      const existing = bestByName.get(chunk.name);
+      if (!existing || this.compareConceptChunks(chunk, existing) < 0) {
+        bestByName.set(chunk.name, chunk);
+      }
+    }
+
+    const ordered = Array.from(bestByName.values()).sort((a, b) => {
+      const orderDiff = (nameOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER)
+        - (nameOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER);
+      if (orderDiff !== 0) return orderDiff;
+      return a.filePath.localeCompare(b.filePath);
+    });
+    return typeof maxChunks === "number" ? ordered.slice(0, maxChunks) : ordered;
+  }
+
+  private compareConceptChunks(a: StoredChunk, b: StoredChunk): number {
+    const implDiff = Number(this.isImplementationPath(b.filePath))
+      - Number(this.isImplementationPath(a.filePath));
+    if (implDiff !== 0) return implDiff;
+
+    const testDiff = Number(isTestFile(a.filePath))
+      - Number(isTestFile(b.filePath));
+    if (testDiff !== 0) return testDiff;
+
+    return a.filePath.localeCompare(b.filePath);
   }
 
   private getHookPriorityScore(
@@ -198,9 +396,29 @@ export class HybridSearch {
   }
 
   private isImplementationChunk(result: SearchResult): boolean {
-    const lowerPath = result.filePath.toLowerCase();
+    return this.isImplementationPath(result.filePath);
+  }
+
+  private isImplementationPath(filePath: string): boolean {
+    const lowerPath = filePath.toLowerCase();
     const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
     return implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()));
+  }
+
+  private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
+    return {
+      id: chunk.id,
+      score,
+      filePath: chunk.filePath,
+      name: chunk.name,
+      kind: chunk.kind,
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      content: chunk.content,
+      docstring: chunk.docstring,
+      parentName: chunk.parentName,
+      language: chunk.language ?? "",
+    };
   }
 
   private resolveWeights(
@@ -468,7 +686,9 @@ export class HybridSearch {
     limit: number
   ): Promise<Array<{ id: string; score: number }>> {
     try {
-      const [queryVector] = await this.embedder.embed([query]);
+      const embedResults = await this.embedder.embed([query]);
+      const queryVector = embedResults[0];
+      if (!queryVector) return [];
       return this.vectors.search(queryVector, limit);
     } catch (err) {
       getLogger().warn(`Vector search failed: ${err}`);

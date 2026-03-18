@@ -62,6 +62,8 @@ function makeMetadata(overrides?: Partial<any>): any {
     getStat: (_key: string) => undefined,
     setStat: () => {},
     recordLatency: () => {},
+    incrementRouteStat: () => {},
+    incrementStat: () => {},
     getConventions: () => null,
     getLatencyPercentiles: () => ({ avg: 0, p50: 0, p95: 0, count: 0 }),
     close: () => {},
@@ -213,7 +215,9 @@ describe("daemon HTTP server (3F)", () => {
       query: "",
     }, token);
     expect(status).toBe(200);
-    expect(body).toEqual({ additionalContext: "" });
+    expect(body).toHaveProperty("hookSpecificOutput");
+    expect(body.hookSpecificOutput.additionalContext).toBe("");
+    expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
   });
 
   it("GET /unknown returns 404", async () => {
@@ -247,7 +251,9 @@ describe("daemon HTTP server (3F)", () => {
       token
     );
     expect(status).toBe(200);
-    expect(body).toEqual({ additionalContext: "" });
+    expect(body).toHaveProperty("hookSpecificOutput");
+    expect(body.hookSpecificOutput.additionalContext).toBe("");
+    expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
   });
 
   it("sanitizeQuery: handles multi-line natural language", async () => {
@@ -520,9 +526,47 @@ describe("daemon HTTP server — debug mode", () => {
     expect(debugHeader).toBeDefined();
     const parsed = JSON.parse(debugHeader as string);
     expect(parsed).toHaveProperty("requestId");
+    expect(parsed).toHaveProperty("hookEventName", "UserPromptSubmit");
+    expect(parsed).toHaveProperty("route", "R0");
     expect(parsed.chunks).toBe(1);
     expect(parsed.tokens).toBe(10);
+    expect(parsed).toHaveProperty("queryClassification");
+    expect(parsed.queryClassification).toMatchObject({
+      isCodeQuery: true,
+      needsNavigation: true,
+    });
     expect(typeof parsed.elapsedMs).toBe("number");
+  });
+
+  it("X-Memory-Debug header is present on skip responses when debugMode is true", async () => {
+    const config = makeConfig(port);
+    const result = createDaemonServer(config, makeSearch(), makeMetadata(), {
+      debugMode: true,
+    });
+    server = result.server;
+    token = result.token;
+    await new Promise<void>((res) => server.listen(port, "127.0.0.1", res));
+
+    const { status, headers, body } = await request(port, "POST", "/hooks/prompt-context", {
+      query: "hello",
+    }, token);
+    expect(status).toBe(200);
+    expect(body._debug.route).toBe("skip");
+
+    const debugHeader = headers["x-memory-debug"];
+    expect(debugHeader).toBeDefined();
+    const parsed = JSON.parse(debugHeader as string);
+    expect(parsed).toMatchObject({
+      hookEventName: "UserPromptSubmit",
+      route: "skip",
+      chunks: 0,
+      tokens: 0,
+      skipReason: "non-code query",
+    });
+    expect(parsed.queryClassification).toMatchObject({
+      isCodeQuery: false,
+      needsNavigation: false,
+    });
   });
 
   it("X-Memory-Debug header is absent when debugMode is false", async () => {

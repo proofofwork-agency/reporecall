@@ -29,5 +29,11 @@ function openWithPragmas(dbPath: string): Database.Database {
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
+  db.pragma("synchronous = NORMAL");      // Safe with WAL; faster than default FULL
+  db.pragma("cache_size = -65536");        // 64MB cache instead of 2MB default
+  db.pragma("temp_store = MEMORY");        // Temp tables in memory
+  db.pragma("mmap_size = 268435456");      // 256MB memory-mapped I/O
+  db.pragma("foreign_keys = ON");
   return db;
 }
+

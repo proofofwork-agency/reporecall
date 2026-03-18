@@ -13,7 +13,11 @@ import { FTSStore } from "../storage/fts-store.js";
 import { VectorStore } from "../storage/vector-store.js";
 import type { CodeChunk } from "../parser/types.js";
 import type { CallEdge } from "../analysis/call-graph.js";
+import { resolveImportPath } from "../analysis/imports.js";
+import type { ImportRecord } from "../storage/import-store.js";
 import { analyzeConventions } from "../analysis/conventions.js";
+import { resolveCallTarget } from "../analysis/resolve.js";
+import { freeEncoder } from "../search/context-assembler.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -28,6 +32,21 @@ export interface PipelineDependencies {
   fts?: FTSStore;
   vectors?: VectorStore;
   merkle?: MerkleTree;
+}
+
+function buildImportRecords(
+  rawImports: Array<{ importedName: string; sourceModule: string; isDefault: boolean; isNamespace: boolean }>,
+  relPath: string,
+  projectRoot: string
+): ImportRecord[] {
+  return rawImports.map((raw) => ({
+    filePath: relPath,
+    importedName: raw.importedName,
+    sourceModule: raw.sourceModule,
+    resolvedPath: resolveImportPath(raw.sourceModule, relPath, projectRoot),
+    isDefault: raw.isDefault,
+    isNamespace: raw.isNamespace,
+  }));
 }
 
 export class IndexingPipeline {
@@ -124,19 +143,25 @@ export class IndexingPipeline {
 
     const allChunks: Array<CodeChunk & { fileMtime: string }> = [];
     const allCallEdges: CallEdge[] = [];
+    const allImportRecords: ImportRecord[] = [];
     const successfulFiles = new Set<string>();
 
     for (let i = 0; i < toProcess.length; i++) {
       const change = toProcess[i];
+      if (!change) continue;
       const absPath = resolve(this.config.projectRoot, change.path);
 
       try {
         const fileMtime = (await stat(absPath)).mtime.toISOString();
-        const { chunks, callEdges } = await chunkFileWithCalls(absPath, this.config.projectRoot);
+        const { chunks, callEdges, rawImports } = await chunkFileWithCalls(absPath, this.config.projectRoot);
         for (const chunk of chunks) {
           allChunks.push({ ...chunk, fileMtime });
         }
         allCallEdges.push(...callEdges);
+
+        // Resolve and collect import records
+        allImportRecords.push(...buildImportRecords(rawImports, change.path, this.config.projectRoot));
+
         successfulFiles.add(change.path);
       } catch (err) {
         log.warn(`Failed to chunk ${change.path}: ${err}`);
@@ -182,7 +207,10 @@ export class IndexingPipeline {
         try {
           const vectors = await this.embedder.embed(texts);
           for (let j = 0; j < batch.length; j++) {
-            embeddedChunks.push({ chunk: batch[j], vector: vectors[j] });
+            const batchChunk = batch[j];
+            const batchVector = vectors[j];
+            if (!batchChunk || !batchVector) continue;
+            embeddedChunks.push({ chunk: batchChunk, vector: batchVector });
           }
         } catch (err) {
           log.warn(`Embedding batch failed, falling back to keyword-only for ${batch.length} chunks: ${err}`);
@@ -214,6 +242,7 @@ export class IndexingPipeline {
     for (const filePath of successfulFiles) {
       this.metadata.removeChunksForFile(filePath);
       this.metadata.removeCallEdgesForFile(filePath);
+      this.metadata.removeImportsForFile(filePath);
       this.fts.removeByFile(filePath);
     }
     await this.vectors.removeByFiles(Array.from(successfulFiles));
@@ -235,7 +264,23 @@ export class IndexingPipeline {
       }))
     );
 
-    // Store call edges
+    // Store import records (before call edges so resolution can query them)
+    if (allImportRecords.length > 0) {
+      this.metadata.upsertImports(allImportRecords);
+    }
+
+    // Resolve call edge targets using stored imports and chunks
+    for (const edge of allCallEdges) {
+      const resolvedPath = resolveCallTarget(
+        { targetName: edge.targetName, filePath: edge.filePath, receiver: edge.receiver },
+        this.metadata
+      );
+      if (resolvedPath) {
+        edge.targetFilePath = resolvedPath;
+      }
+    }
+
+    // Store call edges (after resolution so target_file_path is populated)
     if (allCallEdges.length > 0) {
       this.metadata.upsertCallEdges(allCallEdges);
     }
@@ -267,12 +312,12 @@ export class IndexingPipeline {
     }
 
     // Apply pending merkle state filtered to successful files and save
-    const filteredPendingState: Record<string, string> = {};
-    for (const [path, hash] of Object.entries(pendingState)) {
+    const filteredPendingState: Record<string, string | { hash: string; mtimeMs: number }> = {};
+    for (const [path, entry] of Object.entries(pendingState)) {
       // Keep existing state for unchanged files + successful files only
       const isChangedFile = toProcess.some((c) => c.path === path);
       if (!isChangedFile || successfulFiles.has(path)) {
-        filteredPendingState[path] = hash;
+        filteredPendingState[path] = entry;
       }
     }
     this.merkle.applyPendingState(filteredPendingState);
@@ -320,7 +365,7 @@ export class IndexingPipeline {
 
       try {
         const fileMtime = (await stat(absPath)).mtime.toISOString();
-        const { chunks, callEdges } = await chunkFileWithCalls(absPath, this.config.projectRoot);
+        const { chunks, callEdges, rawImports } = await chunkFileWithCalls(absPath, this.config.projectRoot);
         if (chunks.length === 0) {
           this.metadata.removeChunksForFile(relPath);
           this.fts.removeByFile(relPath);
@@ -350,18 +395,39 @@ export class IndexingPipeline {
         // Delete old data AFTER embedding succeeds, BEFORE storing new data
         this.metadata.removeChunksForFile(relPath);
         this.metadata.removeCallEdgesForFile(relPath);
+        this.metadata.removeImportsForFile(relPath);
         this.fts.removeByFile(relPath);
         await this.vectors.removeByFile(relPath);
 
-        for (let i = 0; i < chunks.length; i++) {
-          this.metadata.upsertChunk({ ...chunks[i], indexedAt: now, fileMtime });
-          this.fts.upsert({
-            id: chunks[i].id,
-            name: chunks[i].name,
-            filePath: chunks[i].filePath,
-            content: chunks[i].content,
-            kind: chunks[i].kind,
-          });
+        // Bulk upsert chunks and FTS entries
+        const validChunks = chunks.filter((c): c is NonNullable<typeof c> => c != null);
+        this.metadata.bulkUpsertChunks(
+          validChunks.map((chunk) => ({ ...chunk, indexedAt: now, fileMtime }))
+        );
+        this.fts.bulkUpsert(
+          validChunks.map((chunk) => ({
+            id: chunk.id,
+            name: chunk.name,
+            filePath: chunk.filePath,
+            content: chunk.content,
+            kind: chunk.kind,
+          }))
+        );
+
+        // Store import records (before call edges so resolution can query them)
+        if (rawImports.length > 0) {
+          this.metadata.upsertImports(buildImportRecords(rawImports, relPath, this.config.projectRoot));
+        }
+
+        // Resolve call edge targets using stored imports and chunks
+        for (const edge of callEdges) {
+          const resolvedPath = resolveCallTarget(
+            { targetName: edge.targetName, filePath: edge.filePath, receiver: edge.receiver },
+            this.metadata
+          );
+          if (resolvedPath) {
+            edge.targetFilePath = resolvedPath;
+          }
         }
 
         if (callEdges.length > 0) {
@@ -369,16 +435,21 @@ export class IndexingPipeline {
         }
 
         if (!isKeywordMode && vectors) {
+          const resolvedVectors = vectors;
           await this.vectors.upsert(
-            chunks.map((chunk, i) => ({
-              id: chunk.id,
-              vector: vectors![i],
-              filePath: chunk.filePath,
-              name: chunk.name,
-              kind: chunk.kind,
-              startLine: chunk.startLine,
-              endLine: chunk.endLine,
-            }))
+            chunks.flatMap((chunk, i) => {
+              const vector = resolvedVectors[i];
+              if (!vector) return [];
+              return [{
+                id: chunk.id,
+                vector,
+                filePath: chunk.filePath,
+                name: chunk.name,
+                kind: chunk.kind,
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+              }];
+            })
           );
         }
 
@@ -444,13 +515,17 @@ export class IndexingPipeline {
   }
 
   close(): void {
+    freeEncoder();
     this.metadata.close();
     this.fts.close();
-    this.vectors.close().catch(() => {});
+    this.vectors.close().catch((err) => {
+      getLogger().warn({ err }, '[Pipeline] vectors.close() failed in sync close');
+    });
   }
 
   /** Async close that awaits vector store shutdown to prevent native teardown races. */
   async closeAsync(): Promise<void> {
+    freeEncoder();
     // Close SQLite stores first (synchronous) while event loop is still alive
     this.fts.close();
     this.metadata.close();
@@ -459,8 +534,8 @@ export class IndexingPipeline {
   }
 
   /** Close stores AND wipe merkle state — used only by clear_index */
-  closeAndClearMerkle(): void {
-    this.close();
+  async closeAndClearMerkle(): Promise<void> {
+    await this.closeAsync();
     this.merkle.clear();
   }
 

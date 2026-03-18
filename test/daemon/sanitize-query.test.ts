@@ -143,4 +143,19 @@ describe("sanitizeQuery", () => {
     // "more code here" is not a recognized code pattern, so it passes through
     expect(result).toContain("more code here");
   });
+
+  it("strips trailing harness script contamination from Claude hook payloads", () => {
+    const input = [
+      "What MCP tools are exposed by the memory server in this repo?",
+      "import json, pathlib, subprocess, tempfile, shutil, time",
+      "REPO = pathlib.Path('/Users/example/project')",
+      "if not CLAUDE: raise SystemExit('no claude')",
+      "subprocess.run(['claude', '-p', 'hello prompt'], check=True)",
+      "print(log.read_text())",
+    ].join("\n");
+
+    expect(sanitizeQuery(input)).toBe(
+      "What MCP tools are exposed by the memory server in this repo?"
+    );
+  });
 });

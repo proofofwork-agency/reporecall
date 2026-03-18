@@ -39,6 +39,12 @@ export interface MemoryConfig {
   port: number;
   implementationPaths: string[];
   factExtractors: Array<{ keyword: string; pattern: string; label: string }>;
+  conceptBundles: Array<{
+    kind: string;
+    pattern: string;
+    symbols: string[];
+    maxChunks: number;
+  }>;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -46,12 +52,15 @@ const UserConfigSchema = z.object({
   embeddingProvider: z.enum(["local", "ollama", "openai", "keyword"]).optional(),
   embeddingModel: z.string().optional(),
   embeddingDimensions: z.number().int().min(1).optional(),
-  ollamaUrl: z.string().url().optional(),
+  ollamaUrl: z.string().url().refine((u) => {
+    const h = new URL(u).hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+  }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or [::1])" }).optional(),
   extensions: z.array(z.string()).optional(),
   ignorePatterns: z.array(z.string()).optional(),
   maxFileSize: z.number().positive().optional(),
   batchSize: z.number().positive().optional(),
-  contextBudget: z.number().positive().optional(),
+  contextBudget: z.number().min(0).optional(),
   maxContextChunks: z.number().min(0).optional(),
   sessionBudget: z.number().positive().optional(),
   searchWeights: z.object({
@@ -80,6 +89,14 @@ const UserConfigSchema = z.object({
     }, { message: "Invalid regex syntax" }),
     label: z.string(),
   })).optional(),
+  conceptBundles: z.array(z.object({
+    kind: z.string(),
+    pattern: z.string().refine((p) => {
+      try { new RegExp(p, "i"); return true; } catch { return false; }
+    }, { message: "Invalid regex syntax" }),
+    symbols: z.array(z.string()).min(1),
+    maxChunks: z.number().int().min(1).default(4),
+  })).optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -105,7 +122,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
-  contextBudget: 4000,
+  contextBudget: 0,
   maxContextChunks: 0,
   sessionBudget: 2000,
   searchWeights: { vector: 0.5, keyword: 0.3, recency: 0.2 },
@@ -124,6 +141,56 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   port: 37222,
   implementationPaths: ["src/", "lib/", "bin/"],
   factExtractors: [],
+  conceptBundles: [
+    {
+      kind: "ast",
+      pattern: "\\b(ast|tree[- ]?sitter)\\b",
+      symbols: ["initTreeSitter", "createParser", "chunkFileWithCalls", "walkForExtractables", "extractName"],
+      maxChunks: 4,
+    },
+    {
+      kind: "call_graph",
+      pattern: "\\bcall\\s+graph\\b|\\bwho\\s+calls\\b|\\bcalled\\s+by\\b|\\bcaller(?:s)?\\b|\\bcallee(?:s)?\\b",
+      symbols: ["extractCallEdges", "extractCalleeInfo", "extractReceiver", "graphCommand", "buildStackTree"],
+      maxChunks: 4,
+    },
+    {
+      kind: "search_pipeline",
+      pattern: "\\bsearch\\s+pipeline\\b|\\bretrieval\\s+pipeline\\b|\\bintent\\s+classification\\s+route\\b|\\bhybrid\\s+search\\b|\\bsearch\\s+routing\\b|\\bquery\\s+routing\\b|\\broute\\s+selection\\b",
+      symbols: ["classifyIntent", "deriveRoute", "handlePromptContextDetailed", "searchWithContext", "search", "resolveSeeds"],
+      maxChunks: 5,
+    },
+    {
+      kind: "storage",
+      pattern: "\\bstorage\\s+layer\\b|\\bstorage\\s+design\\b|\\bdata\\s+stores?\\b|\\bpersist",
+      symbols: ["MetadataStore", "FTSStore", "ChunkStore", "CallEdgeStore", "ImportStore", "StatsStore", "ConventionsStore"],
+      maxChunks: 5,
+    },
+    {
+      kind: "daemon",
+      pattern: "\\bdaemon\\b|\\bhttp\\s+server\\b|\\bserver\\s+architect",
+      symbols: ["createDaemonServer", "handlePromptContext", "sanitizeQuery", "IndexScheduler"],
+      maxChunks: 4,
+    },
+    {
+      kind: "embedding",
+      pattern: "\\bembedding\\s+(provider|handled|across)\\b|\\bembedder\\b|\\bvector\\s+encod",
+      symbols: ["EmbeddingProvider", "LocalEmbedder", "NullEmbedder", "OllamaEmbedder", "createEmbedder"],
+      maxChunks: 4,
+    },
+    {
+      kind: "cli",
+      pattern: "\\bcli\\b|\\bcommand\\s+struct|\\bcommand\\s+line\\b",
+      symbols: ["createCLI", "initCommand", "searchCommand", "serveCommand", "explainCommand", "mcpCommand"],
+      maxChunks: 5,
+    },
+    {
+      kind: "context_assembly",
+      pattern: "\\btoken\\s+budget\\b|\\bcontext\\s+assembl|\\bbudget\\s+strat",
+      symbols: ["assembleContext", "assembleConceptContext", "assembleDeepRouteContext", "AssembledContext", "countTokens"],
+      maxChunks: 5,
+    },
+  ],
 };
 
 export function loadConfig(projectRoot: string): MemoryConfig {
@@ -154,6 +221,21 @@ export function loadConfig(projectRoot: string): MemoryConfig {
       ...DEFAULTS.searchWeights,
       ...(userConfig.searchWeights ?? {}),
     },
+    // Append user conceptBundles to defaults (dedup by kind)
+    conceptBundles: (() => {
+      const base = DEFAULTS.conceptBundles;
+      const user = userConfig.conceptBundles;
+      if (!user || user.length === 0) return base;
+      const baseKinds = new Set(base.map((b) => b.kind));
+      const overrides = user.filter((u) => baseKinds.has(u.kind));
+      const additions = user.filter((u) => !baseKinds.has(u.kind));
+      // Replace defaults that share a kind with user overrides, keep the rest
+      const merged = base.map((b) => {
+        const override = overrides.find((o) => o.kind === b.kind);
+        return override ?? b;
+      });
+      return [...merged, ...additions];
+    })(),
   };
 
   // Validate search weight sum
@@ -182,10 +264,43 @@ export function loadConfig(projectRoot: string): MemoryConfig {
     });
   }
 
+  // Validate conceptBundle patterns: reject unsafe regex (same protection as factExtractors)
+  if (merged.conceptBundles && merged.conceptBundles.length > 0) {
+    const log = getLogger();
+    merged.conceptBundles = merged.conceptBundles.filter((bundle) => {
+      if (!safe(bundle.pattern)) {
+        log.warn(`Rejected conceptBundle pattern "${bundle.pattern}" (kind: ${bundle.kind}): potential ReDoS (exponential backtracking)`);
+        return false;
+      }
+      return true;
+    });
+  }
+
   // H-1: Never load API keys from config file — env var only
-  if ((userConfig as any).openaiApiKey) {
+  if ("openaiApiKey" in (userConfig as Record<string, unknown>)) {
     getLogger().warn("openaiApiKey in config file is ignored for security. Use OPENAI_API_KEY env var.");
   }
 
   return merged;
+}
+
+/**
+ * Compute the effective context budget.
+ * If the user explicitly set contextBudget > 0 in their config, use that.
+ * If contextBudget is 0 (the default, meaning "auto"), compute dynamically
+ * based on the number of indexed chunks.
+ *
+ * Formula: clamp(1500 + chunkCount * 2.5, 2000, 6000)
+ * - 50 chunks  -> 2000 tokens
+ * - 200 chunks -> 2000 tokens
+ * - 1000 chunks -> 4000 tokens
+ * - 2000+ chunks -> 6000 tokens
+ *
+ * @param configBudget - The contextBudget value from config (0 = auto)
+ * @param chunkCount - The number of indexed chunks in the project
+ * @returns The resolved token budget
+ */
+export function resolveContextBudget(configBudget: number, chunkCount: number): number {
+  if (configBudget > 0) return configBudget;
+  return Math.min(6000, Math.max(2000, Math.floor(1500 + chunkCount * 2.5)));
 }

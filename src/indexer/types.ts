@@ -4,10 +4,6 @@ export interface IndexedChunk extends CodeChunk {
   vector: number[];
 }
 
-export interface EmbeddingResult {
-  vectors: number[][];
-}
-
 export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
   dimensions(): number;

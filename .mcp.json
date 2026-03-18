@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "reporecall": {
+      "command": "npx",
+      "args": ["reporecall", "mcp", "--project", "."],
+      "env": {}
+    }
+  }
+}

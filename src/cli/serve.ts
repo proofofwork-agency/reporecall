@@ -29,8 +29,7 @@ export function serveCommand(): Command {
     .option('--mcp', 'Also start MCP server on stdio')
     .option(
       '--max-chunks <n>',
-      'Max context chunks per query (0 = dynamic)',
-      '0'
+      'Max context chunks per query (0 = dynamic)'
     )
     .option('--debug', 'Enable debug logging for hook/retrieval diagnostics')
     .action(async (options) => {
@@ -60,8 +59,10 @@ export function serveCommand(): Command {
         }
         config.port = parsed
       }
-      if (options.maxChunks)
-        config.maxContextChunks = parseInt(options.maxChunks, 10)
+      if (options.maxChunks !== undefined) {
+        const parsed = parseInt(options.maxChunks, 10)
+        if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
+      }
 
       // Health check for Ollama
       if (config.embeddingProvider === 'ollama') {
@@ -203,6 +204,11 @@ export function serveCommand(): Command {
         console.error('Daemon will continue without initial index.')
       }
 
+      // Pre-warm embedder (non-blocking)
+      if (config.embeddingProvider === 'local') {
+        pipeline.getEmbedder().embed(['warmup']).catch(() => {})
+      }
+
       // Set up search with read-write lock
       const rwLock = new ReadWriteLock()
       const search = new HybridSearch(
@@ -214,31 +220,46 @@ export function serveCommand(): Command {
         rwLock
       )
 
-      // Start file watcher
+      // Track actual FTS initialization state via a mutable container so that
+      // re-index events after startup can update the flag and the server closure
+      // will observe the new value without a restart.
+      const ftsState = { initialized: false }
+      try {
+        // If FTSStore constructor succeeded (no throw), FTS is ready
+        pipeline.getFTSStore().search('__probe__', 1)
+        ftsState.initialized = true
+      } catch {
+        // FTS not ready yet; will be re-probed after successful index operations
+      }
+
+      // Start file watcher — re-probe FTS after each flush so that a recovery
+      // re-index (e.g. after a corrupted startup) makes the server aware.
       const scheduler = new IndexScheduler(pipeline, rwLock)
       const watcher = new FileWatcher(config, (changes) => {
         console.log(`File changes detected: ${changes.length} files`)
         scheduler.enqueue(changes)
+        if (!ftsState.initialized) {
+          try {
+            pipeline.getFTSStore().search('__probe__', 1)
+            ftsState.initialized = true
+          } catch {
+            // Still not ready
+          }
+        }
       })
       watcher.start()
       console.log('File watcher active')
-
-      // Track actual FTS initialization state
-      let ftsInitialized = false
-      try {
-        // If FTSStore constructor succeeded (no throw), FTS is ready
-        pipeline.getFTSStore().search('__probe__', 1)
-        ftsInitialized = true
-      } catch {
-        ftsInitialized = false
-      }
 
       // Start HTTP server
       const { server, metrics } = createDaemonServer(
         config,
         search,
         pipeline.getMetadataStore(),
-        { ftsInitialized, debugMode: !!options.debug }
+        {
+          get ftsInitialized() { return ftsState.initialized },
+          debugMode: !!options.debug,
+          get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined }
+        }
       )
 
       const tokenPath = resolve(config.dataDir, 'daemon.token')
@@ -270,7 +291,8 @@ export function serveCommand(): Command {
           search,
           pipeline,
           pipeline.getMetadataStore(),
-          config
+          config,
+          rwLock
         )
 
         const { StdioServerTransport } =
@@ -310,23 +332,27 @@ export function serveCommand(): Command {
             })
           })
 
-          // Step 2: Stop file watcher (no more change events)
+          // Step 2: Stop scheduler and drain pending jobs
+          scheduler.stop();
+          await scheduler.drain();
+
+          // Step 3: Stop file watcher (no more change events)
           await watcher.stop()
 
-          // Step 3: Close MCP server if running
+          // Step 4: Close MCP server if running
           if (mcpServer) {
             await mcpServer.close()
           }
 
-          // Step 4: Destroy metrics collector (stop timers, disable histogram)
+          // Step 5: Destroy metrics collector (stop timers, disable histogram)
           metrics.destroy()
 
-          // Step 5: Close all stores in order (FTS, metadata, vector via pipeline)
+          // Step 6: Close all stores in order (FTS, metadata, vector via pipeline)
           // Await vector store close to prevent native library teardown race
           // that can cause libc++abi mutex errors on process exit.
           await pipeline.closeAsync()
 
-          // Step 6: Clean up SQLite WAL sidecars for a clean next startup
+          // Step 7: Clean up SQLite WAL sidecars for a clean next startup
           const sidecarFiles = [
             resolve(config.dataDir, 'metadata.db-wal'),
             resolve(config.dataDir, 'metadata.db-shm'),
@@ -344,7 +370,7 @@ export function serveCommand(): Command {
           log.error({ err }, 'Error during shutdown')
         }
 
-        // Step 7: Remove PID file and release advisory lock
+        // Step 8: Remove PID file and release advisory lock
         if (pidFd !== undefined) {
           try {
             closeSync(pidFd)
@@ -358,7 +384,7 @@ export function serveCommand(): Command {
           // ignore — may have already been removed
         }
 
-        // Step 8: Remove token file
+        // Step 9: Remove token file
         try {
           unlinkSync(tokenPath)
         } catch (err) {
@@ -368,7 +394,7 @@ export function serveCommand(): Command {
           )
         }
 
-        // Step 9: Flush pino logger before exiting to ensure all log lines are written
+        // Step 10: Flush pino logger before exiting to ensure all log lines are written
         log.flush()
 
         // All handles closed/unreffed — Node.js will exit naturally.

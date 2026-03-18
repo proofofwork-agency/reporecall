@@ -9,15 +9,31 @@ export class IndexScheduler {
   private processing = false;
   private flushScheduled = false;
   private lock: ReadWriteLock | undefined;
+  private retryCount = new Map<string, number>();
+  private readonly MAX_RETRIES = 3;
+  private stopped = false;
+  private flushDoneCallbacks: Array<() => void> = [];
 
   constructor(pipeline: IndexingPipeline, lock?: ReadWriteLock) {
     this.pipeline = pipeline;
     this.lock = lock;
   }
 
+  stop(): void {
+    this.stopped = true;
+  }
+
+  drain(): Promise<void> {
+    if (!this.processing && !this.flushScheduled) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.flushDoneCallbacks.push(resolve);
+    });
+  }
+
   enqueue(
     changes: Array<{ path: string; type: "add" | "change" | "unlink" }>
   ): void {
+    if (this.stopped) return;
     const log = getLogger();
 
     for (const change of changes) {
@@ -62,8 +78,18 @@ export class IndexScheduler {
           try {
             await this.pipeline.removeFiles(paths);
             log.info(`Removed ${paths.length} file(s)`);
+            for (const p of paths) this.retryCount.delete(p);
           } catch (err) {
-            for (const p of paths) this.deleteQueue.add(p);
+            for (const p of paths) {
+              const count = (this.retryCount.get(p) ?? 0) + 1;
+              if (count > this.MAX_RETRIES) {
+                log.error({ path: p, retries: count }, `Dead-lettered after ${this.MAX_RETRIES} retries`);
+                this.retryCount.delete(p);
+              } else {
+                this.retryCount.set(p, count);
+                this.deleteQueue.add(p);
+              }
+            }
             throw err;
           }
         }
@@ -76,8 +102,18 @@ export class IndexScheduler {
             log.info(
               `Indexed ${result.filesProcessed} changed file(s) (${result.chunksCreated} new chunks)`
             );
+            for (const p of paths) this.retryCount.delete(p);
           } catch (err) {
-            for (const p of paths) this.queue.add(p);
+            for (const p of paths) {
+              const count = (this.retryCount.get(p) ?? 0) + 1;
+              if (count > this.MAX_RETRIES) {
+                log.error({ path: p, retries: count }, `Dead-lettered after ${this.MAX_RETRIES} retries`);
+                this.retryCount.delete(p);
+              } else {
+                this.retryCount.set(p, count);
+                this.queue.add(p);
+              }
+            }
             throw err;
           }
         }
@@ -107,6 +143,12 @@ export class IndexScheduler {
       log.error(`Index scheduler error: ${err}`);
     } finally {
       this.processing = false;
+
+      // Notify drain() waiters that flush is complete
+      const cbs = this.flushDoneCallbacks;
+      this.flushDoneCallbacks = [];
+      for (const cb of cbs) cb();
+
       // If new items arrived during processing, flush again
       if (this.queue.size > 0 || this.deleteQueue.size > 0) {
         this.scheduleFlush();

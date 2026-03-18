@@ -8,6 +8,7 @@ import { graphCommand } from './graph.js'
 import { conventionsCommand } from './conventions.js'
 import { mcpCommand } from './mcp.js'
 import { doctorCommand } from './doctor.js'
+import { explainCommand } from './explain.js'
 import { createRequire } from 'module'
 
 const require = createRequire(import.meta.url)
@@ -43,6 +44,7 @@ export function createCLI(): Command {
   program.addCommand(conventionsCommand())
   program.addCommand(mcpCommand())
   program.addCommand(doctorCommand())
+  program.addCommand(explainCommand())
 
   return program
 }

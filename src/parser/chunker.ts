@@ -5,6 +5,7 @@ import { getLanguage, createParser, initTreeSitter } from "./tree-sitter.js";
 import { getLanguageForExtension, type LanguageConfig } from "./languages.js";
 import type { CodeChunk } from "./types.js";
 import { extractCallEdges, type CallEdge } from "../analysis/call-graph.js";
+import { extractImports, type RawImport } from "../analysis/imports.js";
 import xxhash from "xxhash-wasm";
 
 type SyntaxNode = Parser.SyntaxNode;
@@ -59,6 +60,28 @@ function extractDocstring(
   return undefined;
 }
 
+/**
+ * Checks if a syntax node is exported by walking up the parent chain
+ * looking for an `export_statement` wrapper. Stops at function/class
+ * boundaries to avoid false positives.
+ */
+function isExported(node: SyntaxNode): boolean {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "export_statement") return true;
+    // Don't walk past function/class boundaries
+    if (
+      ["function_declaration", "class_declaration", "method_definition", "arrow_function"].includes(
+        current.type
+      )
+    ) {
+      break;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 function extractParentName(node: SyntaxNode): string | undefined {
   let current = node.parent;
   while (current) {
@@ -108,7 +131,7 @@ function walkForExtractables(
 export async function chunkFileWithCalls(
   filePath: string,
   projectRoot: string
-): Promise<{ chunks: CodeChunk[]; callEdges: CallEdge[] }> {
+): Promise<{ chunks: CodeChunk[]; callEdges: CallEdge[]; rawImports: RawImport[]; language: string | null }> {
   const MAX_CHUNK_FILE_SIZE = 1024 * 1024; // 1MB
 
   const ext = extname(filePath);
@@ -121,7 +144,7 @@ export async function chunkFileWithCalls(
   try {
     fileSize = (await stat(filePath)).size;
   } catch {
-    return { chunks: [], callEdges: [] };
+    return { chunks: [], callEdges: [], rawImports: [], language: null };
   }
   if (fileSize > MAX_CHUNK_FILE_SIZE) {
     const id = h.h64ToString(`${relPath}:file:0`);
@@ -132,6 +155,8 @@ export async function chunkFileWithCalls(
         startLine: 1, endLine: 1, language: ext.replace(".", ""),
       }],
       callEdges: [],
+      rawImports: [],
+      language: null,
     };
   }
 
@@ -153,6 +178,8 @@ export async function chunkFileWithCalls(
         },
       ],
       callEdges: [],
+      rawImports: [],
+      language: null,
     };
   }
 
@@ -176,6 +203,8 @@ export async function chunkFileWithCalls(
         },
       ],
       callEdges: [],
+      rawImports: [],
+      language: null,
     };
   }
 
@@ -197,6 +226,8 @@ export async function chunkFileWithCalls(
         },
       ],
       callEdges: [],
+      rawImports: [],
+      language: null,
     };
   }
 
@@ -219,6 +250,8 @@ export async function chunkFileWithCalls(
         },
       ],
       callEdges: [],
+      rawImports: [],
+      language: null,
     };
   }
 
@@ -242,6 +275,7 @@ export async function chunkFileWithCalls(
       parentName: extractParentName(node),
       docstring: extractDocstring(node, config.docstringTypes),
       language: langName,
+      isExported: isExported(node),
     });
 
     if (config.callNodeTypes) {
@@ -250,5 +284,11 @@ export async function chunkFileWithCalls(
     }
   }
 
-  return { chunks, callEdges: allCallEdges };
+  // Extract imports from TS/JS/TSX files
+  const tsJsLanguages = new Set(["typescript", "tsx", "javascript"]);
+  const rawImports = tsJsLanguages.has(langName)
+    ? extractImports(tree.rootNode, langName)
+    : [];
+
+  return { chunks, callEdges: allCallEdges, rawImports, language: langName };
 }

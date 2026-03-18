@@ -1,4 +1,4 @@
-import { appendFile, rename, stat, unlink } from "fs/promises";
+import { appendFile, chmod, rename, stat, unlink } from "fs/promises";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 
@@ -13,7 +13,7 @@ export class RotatingLog {
     this.filePath = filePath;
     this.maxBytes = maxBytes;
     this.maxFiles = maxFiles;
-    mkdirSync(dirname(filePath), { recursive: true });
+    mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
   }
 
   async append(message: string): Promise<void> {
@@ -33,7 +33,11 @@ export class RotatingLog {
         await this.rotate();
       }
 
-      await appendFile(this.filePath, message);
+      const isNewFile = this.currentSize === 0;
+      await appendFile(this.filePath, message, { mode: 0o600 });
+      if (isNewFile) {
+        await chmod(this.filePath, 0o600);
+      }
       this.currentSize! += bytes;
     });
     this.writeQueue = op.catch(() => {});
@@ -56,6 +60,7 @@ export class RotatingLog {
     // Rename current file to .1
     try {
       await rename(this.filePath, `${this.filePath}.1`);
+      await chmod(`${this.filePath}.1`, 0o600);
     } catch { /* may not exist */ }
 
     this.currentSize = 0;

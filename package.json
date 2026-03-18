@@ -1,6 +1,6 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reporecall — local codebase memory for Claude Code and MCP",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,7 +34,7 @@
     "README.md",
     "LICENSE"
   ],
-  "author": "Danillo Felixd",
+  "author": "ProofOfWork / Danillo Felix <danillo@proofofwork.agency>",
   "bin": {
     "reporecall": "./dist/memory.js",
     "memory": "./dist/memory.js"
@@ -45,6 +45,7 @@
     "test": "vitest",
     "lint": "tsc --noEmit",
     "benchmark": "tsx benchmark.ts",
+    "smoke": "node scripts/smoke-test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {
