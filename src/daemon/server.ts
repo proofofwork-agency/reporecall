@@ -65,7 +65,29 @@ function checkRateLimit(ip: string, maxRequests: number = RATE_LIMIT_MAX_REQUEST
 // Covers: imports, declarations, control flow, common language constructs,
 // comments, and block openers.
 const CODE_LINE_RE =
-  /^(import |from |const |let |var |function |class |def |return |export |await |async |if\s*\(|for\s*\(|while\s*\(|switch\s*\(|try\s*\{|catch\s*\(|#!|\/\/|\/\*|#include|#define|package |using |\{|\[|<\?|<%)/;
+  /^(import |from |const |let |var |function |class |def |return |export |await |async |if\s*\(|if\b.+:|elif\b.+:|else:|for\s*\(|for\b.+:|while\s*\(|while\b.+:|switch\s*\(|try\s*\{|try:|catch\s*\(|except\b.+:|with\b.+:|#!|\/\/|\/\*|#include|#define|package |using |\{|\[|<\?|<%)/;
+
+const ASSIGNMENT_LINE_RE =
+  /^[A-Za-z_][A-Za-z0-9_.]*\s*=\s*.+$/;
+
+const CALLISH_LINE_RE =
+  /^(?:\([^)]*\)|[^\s(][^\s]*)\s*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\([^)]*\)\s*$/;
+
+function looksLikeCodeLine(trimmed: string): boolean {
+  if (CODE_LINE_RE.test(trimmed)) return true;
+  if (ASSIGNMENT_LINE_RE.test(trimmed)) return true;
+  if (CALLISH_LINE_RE.test(trimmed)) return true;
+
+  const codePunctuation = (trimmed.match(/[=()[\]{};]|=>|->|::/g) ?? []).length;
+  if (
+    codePunctuation >= 3 &&
+    /[./'"\\[\]{}]/.test(trimmed)
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 export function sanitizeQuery(raw: string): string {
   // 1. Strip backtick-fenced code blocks (``` ... ```) which may contain
@@ -86,7 +108,7 @@ export function sanitizeQuery(raw: string): string {
     const trimmed = line.trim();
     if (!trimmed) continue;
     // Skip lines that look like code
-    if (CODE_LINE_RE.test(trimmed)) continue;
+    if (looksLikeCodeLine(trimmed)) continue;
     // Skip lines that are mostly non-alphanumeric (likely code/symbols)
     const alphaCount = (trimmed.match(/[a-zA-Z]/g) ?? []).length;
     if (trimmed.length > 4 && alphaCount / trimmed.length < 0.3) continue;

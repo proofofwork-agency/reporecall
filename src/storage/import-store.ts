@@ -81,6 +81,13 @@ export class ImportStore {
     }));
   }
 
+  findImporterFiles(resolvedPath: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT DISTINCT file_path FROM imports WHERE resolved_path = ?`)
+      .all(resolvedPath) as Array<{ file_path: string }>;
+    return rows.map((r) => r.file_path);
+  }
+
   findImportByName(importedName: string, filePath?: string): ImportRecord[] {
     let rows: Array<{
       file_path: string;

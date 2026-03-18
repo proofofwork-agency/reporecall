@@ -4,7 +4,7 @@ type TreeMetadata = Pick<
   MetadataStore,
   "findCallers" | "findCallees" | "findChunksByNames" | "getChunksByIds"
 > &
-  Partial<Pick<MetadataStore, "findCalleesForChunk">>;
+  Partial<Pick<MetadataStore, "findCalleesForChunk" | "findImporterFiles" | "findChunksByFilePath">>;
 
 export interface TreeOptions {
   seed: { chunkId: string; name: string; filePath: string; kind: string };
@@ -234,6 +234,42 @@ export function buildStackTree(
 
   if (direction === "down" || direction === "both") {
     buildDirection("down", seed.name, seed.chunkId, seed.filePath, 1);
+  }
+
+  // Import-level fallback: if call graph produced no edges, resolve facade/dispatch patterns
+  // by finding files that import the seed's file and adding their representative chunk as
+  // a depth-1 "up" node with edgeKind "import".
+  if (totalNodes <= 1 && metadata.findImporterFiles && metadata.findChunksByFilePath) {
+    const importerFiles = metadata
+      .findImporterFiles(seed.filePath)
+      .filter((f) => !isTestFile(f))
+      .slice(0, 3);
+
+    for (const importerFile of importerFiles) {
+      if (totalNodes >= maxNodes) break;
+      const chunks = metadata.findChunksByFilePath(importerFile);
+      const rep = chunks[0];
+      if (!rep) continue;
+      if (visited.has(rep.id)) continue;
+
+      visited.add(rep.id);
+      totalNodes++;
+
+      upTree.push({
+        chunkId: rep.id,
+        name: rep.name,
+        filePath: rep.filePath,
+        kind: rep.kind,
+        depth: 1,
+        direction: "up",
+      });
+
+      edges.push({
+        from: rep.id,
+        to: seed.chunkId,
+        callType: "import",
+      });
+    }
   }
 
   const seedNode: TreeNode = {

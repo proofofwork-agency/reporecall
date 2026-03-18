@@ -73,9 +73,9 @@
   },
   {
     "query": "what happens when a prompt-context hook fires?",
-    "expectedRoute": "R2",
+    "expectedRoute": "R1",
     "category": "flow",
-    "description": "Navigational query that degrades to R2 when tree coverage is weak"
+    "description": "Navigational query resolved via import-edge fallback and function-preference scoring"
   },
   {
     "query": "how does seed resolution determine the best seed?",
@@ -91,9 +91,9 @@
   },
   {
     "query": "what is the overall design of the storage layer?",
-    "expectedRoute": "R2",
+    "expectedRoute": "R1",
     "category": "architecture",
-    "description": "Architecture question that degrades to R2 when tree coverage is weak"
+    "description": "Architecture question resolved via import-edge fallback after locality-aware seed scoring"
   },
   {
     "query": "why does the FTS search return empty results?",

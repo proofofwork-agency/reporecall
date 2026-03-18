@@ -115,8 +115,12 @@ export function scoreFTSCandidate(
   const chunkNameLower = chunk.name.toLowerCase();
 
   // Signal 1: Name match (0.0 / 0.15 / 0.30)
-  const isExactMatch = queryTermsLower.some((term) => term === chunkNameLower);
-  const isPartialMatch = !isExactMatch && queryTermsLower.some(
+  // Use filtered terms only: require length ≥ 3 and exclude stop words to prevent
+  // short English words like "is" or "of" from partial-matching code names
+  // (e.g. "is" would match "isCorrupted" via .includes()).
+  const nameMatchTerms = queryTermsLower.filter((t) => t.length >= 3 && !FTS_STOP_WORDS.has(t));
+  const isExactMatch = nameMatchTerms.some((term) => term === chunkNameLower);
+  const isPartialMatch = !isExactMatch && nameMatchTerms.some(
     (term) => chunkNameLower.includes(term) || term.includes(chunkNameLower)
   );
   const nameScore = isExactMatch ? 0.30 : isPartialMatch ? 0.15 : 0.0;
@@ -133,12 +137,27 @@ export function scoreFTSCandidate(
     pathContrib = 0.20 * (matchingTerms.length / contentTerms.length);
   }
 
-  // Signal 4: Kind + export (0 to 0.20)
+  // Signal 4: Kind + export (0 to 0.25)
+  // function_declaration gets a small base bonus over interface/type_alias because
+  // most navigational queries ("how does X work?", "what happens when X fires?")
+  // want to trace behaviour, not inspect type shapes.
   let kindScore = MEANINGFUL_KINDS.has(chunk.kind) ? 0.15 : 0;
+  if (chunk.kind === "function_declaration" || chunk.kind === "method_definition") kindScore += 0.05;
   if (chunk.kind === "export_statement") kindScore = 0.20;
   else if (MEANINGFUL_KINDS.has(chunk.kind) && chunk.content?.includes("export")) kindScore += 0.05;
 
-  return Math.min(0.85, Math.max(0, 0.35 + nameScore + rankContrib + pathContrib + kindScore));
+  // Signal 5: Locality penalty (-0.10) — if no content term appears in either the
+  // chunk's name or its file path, this is likely a content-only FTS false positive
+  // (e.g. an English word like "overall" matching a code field name). Penalise it so
+  // chunks that are in the right module or have a relevant name rank above noise.
+  const contentTerms2 = queryTermsLower.filter((t) => t.length >= 2 && !FTS_STOP_WORDS.has(t));
+  const hasNameLocality = contentTerms2.some(
+    (t) => chunk.name.toLowerCase().includes(t) || t.includes(chunk.name.toLowerCase())
+  );
+  const hasPathLocality = contentTerms2.some((t) => chunk.filePath.toLowerCase().includes(t));
+  const localityPenalty = hasNameLocality || hasPathLocality ? 0 : 0.10;
+
+  return Math.min(0.85, Math.max(0, 0.35 + nameScore + rankContrib + pathContrib + kindScore - localityPenalty));
 }
 
 /**
@@ -383,7 +402,7 @@ export function resolveSeeds(
           nonTestCandidates.push(candidate);
         }
 
-        if (nonTestCandidates.length >= 5) break;
+        if (nonTestCandidates.length >= 8) break;
       }
 
       candidates.push(...nonTestCandidates);
@@ -393,8 +412,24 @@ export function resolveSeeds(
     }
   }
 
-  // Step 3: Sort by confidence and determine bestSeed
-  candidates.sort((a, b) => b.confidence - a.confidence);
+  // Step 3: Sort by confidence and determine bestSeed.
+  // Near-tie tiebreak: within 0.03 confidence, prefer runtime constructs
+  // (function_declaration, method_definition) over type-only definitions
+  // (interface_declaration, type_alias_declaration) — execution queries want
+  // to trace behaviour, not data shapes.
+  const KIND_RANK: Record<string, number> = {
+    function_declaration: 4,
+    class_declaration: 4,  // classes represent modules; equal priority to functions
+    method_definition: 2,  // internal methods are lower-priority seeds
+    export_statement: 1,
+    interface_declaration: 0,
+    type_alias_declaration: 0,
+  };
+  candidates.sort((a, b) => {
+    const diff = b.confidence - a.confidence;
+    if (Math.abs(diff) > 0.03) return diff;
+    return (KIND_RANK[b.kind] ?? 1) - (KIND_RANK[a.kind] ?? 1);
+  });
 
   const bestSeed = candidates.find((c) => c.confidence >= 0.55) ?? null;
 

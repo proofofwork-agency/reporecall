@@ -160,6 +160,81 @@ describe("ImportStore", () => {
     expect(store.getImportsForFile("any.ts")).toHaveLength(0);
   });
 
+  it("finds importer files by resolved path", () => {
+    store.upsertImports([
+      {
+        filePath: "src/server.ts",
+        importedName: "handlePromptContext",
+        sourceModule: "./hooks/prompt-context",
+        resolvedPath: "src/hooks/prompt-context.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+      {
+        filePath: "src/router.ts",
+        importedName: "handlePromptContext",
+        sourceModule: "./hooks/prompt-context",
+        resolvedPath: "src/hooks/prompt-context.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+      {
+        filePath: "src/other.ts",
+        importedName: "something",
+        sourceModule: "./other-module",
+        resolvedPath: "src/other-module.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+    ]);
+
+    const result = store.findImporterFiles("src/hooks/prompt-context.ts");
+    expect(result).toHaveLength(2);
+    expect(result).toContain("src/server.ts");
+    expect(result).toContain("src/router.ts");
+  });
+
+  it("returns empty array when no file imports the resolved path", () => {
+    store.upsertImports([
+      {
+        filePath: "src/a.ts",
+        importedName: "foo",
+        sourceModule: "./foo",
+        resolvedPath: "src/foo.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+    ]);
+
+    const result = store.findImporterFiles("src/nonexistent.ts");
+    expect(result).toHaveLength(0);
+  });
+
+  it("deduplicates importer files when multiple named imports come from the same file", () => {
+    store.upsertImports([
+      {
+        filePath: "src/consumer.ts",
+        importedName: "ClassA",
+        sourceModule: "./module",
+        resolvedPath: "src/module.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+      {
+        filePath: "src/consumer.ts",
+        importedName: "ClassB",
+        sourceModule: "./module",
+        resolvedPath: "src/module.ts",
+        isDefault: false,
+        isNamespace: false,
+      },
+    ]);
+
+    const result = store.findImporterFiles("src/module.ts");
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe("src/consumer.ts");
+  });
+
   it("stores namespace imports correctly", () => {
     store.upsertImports([
       {

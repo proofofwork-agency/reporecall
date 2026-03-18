@@ -101,7 +101,7 @@ export function initCommand(): Command {
           `curl -s -X POST`,
           `  -H "Authorization: Bearer $TOKEN"`,
           `  -H "Content-Type: application/json"`,
-          `  -d "$(cat)"`,
+          `  --data-binary @-`,
           `  "http://127.0.0.1:${configPort}${endpoint}"`,
           `  2>/dev/null || true`
         ].join(' ')

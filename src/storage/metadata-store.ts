@@ -197,8 +197,16 @@ export class MetadataStore {
     return this.imports.getImportsForFile(filePath);
   }
 
+  findImporterFiles(resolvedPath: string): string[] {
+    return this.imports.findImporterFiles(resolvedPath);
+  }
+
   findImportByName(name: string, filePath?: string): ImportRecord[] {
     return this.imports.findImportByName(name, filePath);
+  }
+
+  findChunksByFilePath(filePath: string): StoredChunk[] {
+    return this.chunks.findChunksByFilePath(filePath);
   }
 
   removeImportsForFile(filePath: string): void {

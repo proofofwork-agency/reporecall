@@ -36,7 +36,7 @@ describe('init hook merging', () => {
         {
           type: 'command',
           command:
-            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST "http://127.0.0.1:37222/hooks/session-start"'
+            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST --data-binary @- "http://127.0.0.1:37222/hooks/session-start"'
         }
       ]
     }
@@ -46,7 +46,7 @@ describe('init hook merging', () => {
         {
           type: 'command',
           command:
-            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST "http://127.0.0.1:37222/hooks/prompt-context"'
+            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST --data-binary @- "http://127.0.0.1:37222/hooks/prompt-context"'
         }
       ]
     }
@@ -104,7 +104,7 @@ describe('init hook merging', () => {
         {
           type: 'command',
           command:
-            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST "http://127.0.0.1:9999/hooks/session-start"'
+            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST --data-binary @- "http://127.0.0.1:9999/hooks/session-start"'
         }
       ]
     }
@@ -154,7 +154,7 @@ describe('init hook merging', () => {
         {
           type: 'command',
           command:
-            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST "http://127.0.0.1:9999/hooks/session-start"'
+            'TOKEN=$(cat "/tmp/.memory/daemon.token" 2>/dev/null || echo ""); curl -s -X POST --data-binary @- "http://127.0.0.1:9999/hooks/session-start"'
         }
       ]
     }
@@ -186,7 +186,7 @@ describe('init hook merging', () => {
       `curl -s -X POST`,
       `  -H "Authorization: Bearer $TOKEN"`,
       `  -H "Content-Type: application/json"`,
-      `  -d "$(cat)"`,
+      `  --data-binary @-`,
       `  "http://127.0.0.1:${port}${endpoint}"`,
       `  2>/dev/null || true`
     ].join(' ')
@@ -198,6 +198,7 @@ describe('init hook merging', () => {
     expect(hook.hooks[0].command).toContain(tokenPath)
     expect(hook.hooks[0].command).toContain('Authorization: Bearer $TOKEN')
     expect(hook.hooks[0].command).toContain(endpoint)
+    expect(hook.hooks[0].command).toContain('--data-binary @-')
     // The command gracefully handles missing token file
     expect(hook.hooks[0].command).toContain('2>/dev/null || echo ""')
   })

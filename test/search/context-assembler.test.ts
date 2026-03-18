@@ -86,7 +86,7 @@ describe("assembleContext — directive header", () => {
   it("includes directive header by default", () => {
     const results = [makeResult("a", 1.0)];
     const ctx = assembleContext(results, 100_000);
-    expect(ctx.text).toContain("If a `Direct facts` section is present and it answers the question, answer directly from it.");
+    expect(ctx.text).toContain("If a `Direct facts` section answers the question, answer directly from it and do not use repository tools.");
   });
 
   it("omits directive header when disabled", () => {

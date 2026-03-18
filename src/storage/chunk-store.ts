@@ -229,6 +229,17 @@ export class ChunkStore {
     return rows.map((row) => this.mapRow(row));
   }
 
+  findChunksByFilePath(filePath: string): StoredChunk[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM chunks WHERE file_path = ?
+         AND kind != 'file' AND name != '<anonymous>'
+         ORDER BY start_line ASC`
+      )
+      .all(filePath) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapRow(row));
+  }
+
   bulkUpsertChunks(chunks: StoredChunk[]): void {
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO chunks
