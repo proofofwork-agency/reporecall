@@ -21,7 +21,7 @@ function loadVersion(): string {
     try {
       return require('../package.json').version
     } catch {
-      return '0.2.1'
+      return '0.2.3'
     }
   }
 }

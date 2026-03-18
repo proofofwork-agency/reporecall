@@ -10,6 +10,15 @@ import xxhash from "xxhash-wasm";
 
 type SyntaxNode = Parser.SyntaxNode;
 
+/**
+ * Max lines stored per chunk. Longer functions are truncated in the stored
+ * content (FTS + metadata) while the chunk's startLine/endLine still reflect
+ * the full range so navigation works. This prevents BM25 from over-scoring
+ * mega-functions that happen to contain scattered query terms.
+ */
+const MAX_CHUNK_LINES = 200;
+const TRUNCATION_KEEP_LINES = 150;
+
 let hasherPromise: Promise<Awaited<ReturnType<typeof xxhash>>> | undefined;
 
 function getHasher() {
@@ -263,13 +272,22 @@ export async function chunkFileWithCalls(
     const startLine = node.startPosition.row + 1;
     const endLine = node.endPosition.row + 1;
     const id = h.h64ToString(`${relPath}:${name}:${startLine}`);
+    const lineCount = endLine - startLine + 1;
+
+    let chunkContent = node.text;
+    if (lineCount > MAX_CHUNK_LINES) {
+      const lines = chunkContent.split("\n");
+      const kept = lines.slice(0, TRUNCATION_KEEP_LINES);
+      kept.push(`// ... truncated ${lineCount - TRUNCATION_KEEP_LINES} more lines (${lineCount} total) ...`);
+      chunkContent = kept.join("\n");
+    }
 
     chunks.push({
       id,
       filePath: relPath,
       name,
       kind: node.type,
-      content: node.text,
+      content: chunkContent,
       startLine,
       endLine,
       parentName: extractParentName(node),

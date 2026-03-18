@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3] — 2026-03-18
+
+### Fixes
+
+- **Retrieval quality regression fix** — Large AST chunks (500+ line functions) no longer dominate search results. Added `MAX_CHUNK_LINES = 200` truncation in chunker and length penalty in hook priority scoring.
+- **pnpm/yarn wasm resolution** — Tree-sitter grammar loading now uses `createRequire` as primary resolution strategy, fixing AST parsing in pnpm and yarn PnP projects.
+
 ## [0.2.1] — 2026-03-18
 
 ### Fixes

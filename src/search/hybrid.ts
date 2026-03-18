@@ -392,6 +392,12 @@ export class HybridSearch {
       score *= Math.pow(TERM_MATCH_BOOST, termMatches);
     }
 
+    // Length penalty: demote disproportionately large chunks
+    const lineCount = result.endLine - result.startLine + 1;
+    if (lineCount > 100) {
+      score *= 100 / (lineCount * 0.5 + 50);
+    }
+
     return score;
   }
 

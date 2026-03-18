@@ -1,7 +1,7 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.2.2",
-  "description": "Reporecall — local codebase memory for Claude Code and MCP",
+  "version": "0.2.3",
+  "description": "Reporecall - local codebase memory for Claude Code and MCP",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
