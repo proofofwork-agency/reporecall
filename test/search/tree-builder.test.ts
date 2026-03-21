@@ -26,11 +26,11 @@ function createTestMetadata(db: Database.Database) {
     // Only expose the methods that buildStackTree actually uses
     asFacade(): Pick<
       MetadataStore,
-      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds"
+      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds" | "findChunksByFilePath" | "findTargetById"
     > {
       return {
-        findCallers: (targetName: string, limit?: number, targetFilePath?: string) =>
-          callEdges.findCallers(targetName, limit, targetFilePath),
+        findCallers: (targetName: string, limit?: number, targetFilePath?: string, targetId?: string) =>
+          callEdges.findCallers(targetName, limit, targetFilePath, targetId),
         findCallees: (sourceName: string, limit?: number) =>
           callEdges.findCallees(sourceName, limit),
         findCalleesForChunk: (sourceChunkId: string, limit?: number) =>
@@ -38,6 +38,8 @@ function createTestMetadata(db: Database.Database) {
         findChunksByNames: (names: string[]) =>
           chunks.findChunksByNames(names),
         getChunksByIds: (ids: string[]) => chunks.getChunksByIds(ids),
+        findChunksByFilePath: (filePath: string) => chunks.findChunksByFilePath(filePath),
+        findTargetById: (_id: string) => undefined,
       };
     },
   };
@@ -170,6 +172,110 @@ describe("buildStackTree", () => {
     expect(tree.downTree[0].name).toBe("utility");
     expect(tree.nodeCount).toBe(3);
     expect(tree.edges).toHaveLength(2);
+  });
+
+  it("adds same-file siblings for endpoint/file-module seeds and skips test callers when real callers exist", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "serve_handler", filePath: "supabase/functions/generate-image/index.ts" });
+    const sibling = makeChunk({ id: "helper", name: "isInternalServiceRequest", filePath: "supabase/functions/generate-image/index.ts" });
+    const realCaller = makeChunk({ id: "caller-real", name: "generate_image", filePath: "supabase/functions/storyboard-controller/index.ts" });
+    const testCaller = makeChunk({ id: "caller-test", name: "generate_image_test", filePath: "src/__tests__/storyboard-controller.test.ts" });
+
+    seedChunks(seedChunk, sibling, realCaller, testCaller);
+    seedEdges(
+      makeCallEdge({
+        sourceChunkId: "caller-real",
+        targetName: "generate-image",
+        filePath: "supabase/functions/storyboard-controller/index.ts",
+        targetId: "endpoint:supabase/functions/generate-image/index.ts",
+        targetKind: "endpoint",
+      }),
+      makeCallEdge({
+        sourceChunkId: "caller-test",
+        targetName: "generate-image",
+        filePath: "src/__tests__/storyboard-controller.test.ts",
+        targetId: "endpoint:supabase/functions/generate-image/index.ts",
+        targetKind: "endpoint",
+      })
+    );
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: {
+        chunkId: "seed",
+        name: "serve_handler",
+        filePath: "supabase/functions/generate-image/index.ts",
+        kind: "arrow_function",
+        targetId: "endpoint:supabase/functions/generate-image/index.ts",
+        targetKind: "endpoint",
+      },
+      direction: "both",
+      query: "how does generate-image work?",
+    });
+
+    expect(tree.upTree.some((node) => node.chunkId === "caller-real")).toBe(true);
+    expect(tree.upTree.some((node) => node.chunkId === "caller-test")).toBe(false);
+    expect(tree.downTree.some((node) => node.chunkId === "helper")).toBe(true);
+  });
+
+  it("implementation-shaped queries skip test-only callers and avoid depth-2 caller expansion", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "IndexingPipeline", filePath: "src/indexer/pipeline.ts" });
+    const testCaller = makeChunk({ id: "caller-test", name: "describe_handler", filePath: "test/indexer/pipeline.test.ts" });
+    const realCallee = makeChunk({ id: "callee-real", name: "createEmbedder", filePath: "src/indexer/embedder.ts" });
+    const depth2Caller = makeChunk({ id: "caller-2", name: "testHarness", filePath: "test/indexer/harness.test.ts" });
+
+    seedChunks(seedChunk, testCaller, realCallee, depth2Caller);
+    seedEdges(
+      makeCallEdge({
+        sourceChunkId: "caller-test",
+        targetName: "IndexingPipeline",
+        filePath: "test/indexer/pipeline.test.ts",
+      }),
+      makeCallEdge({
+        sourceChunkId: "caller-2",
+        targetName: "describe_handler",
+        filePath: "test/indexer/harness.test.ts",
+      }),
+      makeCallEdge({
+        sourceChunkId: "seed",
+        targetName: "createEmbedder",
+        filePath: "src/indexer/pipeline.ts",
+        targetFilePath: "src/indexer/embedder.ts",
+      })
+    );
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: { chunkId: "seed", name: "IndexingPipeline", filePath: "src/indexer/pipeline.ts", kind: "class_declaration" },
+      direction: "both",
+      maxDepth: 2,
+      query: "why does indexing fail",
+    });
+
+    expect(tree.upTree).toHaveLength(0);
+    expect(tree.downTree.some((node) => node.chunkId === "callee-real")).toBe(true);
+  });
+
+  it("implementation-shaped class seeds include same-file methods before expanding outward", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "IndexingPipeline", filePath: "src/indexer/pipeline.ts", kind: "class_declaration" });
+    const methodChunk = makeChunk({ id: "method", name: "indexAll", filePath: "src/indexer/pipeline.ts", kind: "method_definition" });
+    const externalChunk = makeChunk({ id: "external", name: "MetadataStore", filePath: "src/storage/metadata-store.ts", kind: "class_declaration" });
+
+    seedChunks(seedChunk, methodChunk, externalChunk);
+    seedEdges(
+      makeCallEdge({
+        sourceChunkId: "seed",
+        targetName: "MetadataStore",
+        filePath: "src/indexer/pipeline.ts",
+        targetFilePath: "src/storage/metadata-store.ts",
+      })
+    );
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: { chunkId: "seed", name: "IndexingPipeline", filePath: "src/indexer/pipeline.ts", kind: "class_declaration" },
+      direction: "both",
+      query: "why does indexing fail",
+    });
+
+    expect(tree.downTree[0]?.chunkId).toBe("method");
+    expect(tree.downTree.some((node) => node.chunkId === "external")).toBe(true);
   });
 
   it("depth limit: maxDepth=1 prevents depth-2 nodes", () => {
@@ -497,7 +603,7 @@ describe("buildStackTree", () => {
 
   // ---- Test caller deprioritization -----------------------------------------
 
-  it("up-tree: implementation callers appear before test callers", () => {
+  it("up-tree: implementation callers exclude test callers when real callers exist", () => {
     const seedChunk = makeChunk({ id: "seed", name: "target", filePath: "src/target.ts" });
     const implCaller = makeChunk({ id: "impl-caller", name: "implCaller", filePath: "src/caller.ts" });
     const testCaller = makeChunk({ id: "test-caller", name: "testCaller", filePath: "test/caller.test.ts" });
@@ -514,8 +620,7 @@ describe("buildStackTree", () => {
       maxBranchFactor: 2,
     });
 
-    expect(tree.upTree).toHaveLength(2);
-    // Implementation caller should come first
+    expect(tree.upTree).toHaveLength(1);
     expect(tree.upTree[0].filePath).not.toMatch(/test/);
     expect(tree.upTree[0].name).toBe("implCaller");
   });
@@ -540,7 +645,7 @@ describe("buildStackTree", () => {
     expect(tree.upTree[0].name).toBe("testCaller");
   });
 
-  it("down-tree: implementation callees appear before test callees", () => {
+  it("down-tree: implementation callees exclude test callees when real callees exist", () => {
     const seedChunk = makeChunk({ id: "seed", name: "main", filePath: "src/main.ts" });
     const implCallee = makeChunk({ id: "impl-callee", name: "helper", filePath: "src/helper.ts" });
     const testCallee = makeChunk({ id: "test-callee", name: "testHelper", filePath: "test/helper.test.ts" });
@@ -557,8 +662,7 @@ describe("buildStackTree", () => {
       maxBranchFactor: 2,
     });
 
-    expect(tree.downTree).toHaveLength(2);
-    // Implementation callee should come first
+    expect(tree.downTree).toHaveLength(1);
     expect(tree.downTree[0].filePath).not.toMatch(/test/);
     expect(tree.downTree[0].name).toBe("helper");
   });

@@ -9,6 +9,7 @@
 export interface QueryIntent {
   isCodeQuery: boolean;
   needsNavigation: boolean;
+  prefersBroadContext?: boolean;
   skipReason?: string;
 }
 
@@ -33,6 +34,14 @@ const NON_CODE_PATTERNS: RegExp[] = [
   /^summarize\s+(our\s+)?conversation[\s!.?]*$/,
   /\bwhat\s+did\s+we\s+discuss\b/,
   /\btell\s+me\s+a\s+joke\b/,
+  // Short vague directives with no code-specific nouns — conversational,
+  // not worth searching the index for.
+  /^(ok|okay|sure|yes|no|yep|nope|yea|yeah|nah|got\s+it|understood|sounds\s+good|go\s+ahead|do\s+it|perfect|great|lgtm|nice|cool|alright)[\s!.?]*$/,
+  /^(don'?t\s+break\s+what\s+work(s|ed))\b/,
+  /^(please\s+)?(continue|proceed|go\s+on|carry\s+on|keep\s+going|move\s+on)[\s!.?]*$/,
+  /^(make|build|create)\s+(a\s+)?new\s+dist[\s!.?]*$/,
+  /^(we\s+have|there'?s|there\s+is)\s+a\s+new\s+(dist|build|version)[\s.,!?]*$/,
+  /^(check|verify|confirm)\s+(if\s+|that\s+)?(it|that|this)\s+(work(s|ed)|is\s+(ok|good|fine|correct))[\s!.?]*$/,
 ];
 
 // ── Navigation patterns ───────────────────────────────────────────
@@ -46,11 +55,21 @@ const NAVIGATION_PATTERNS: RegExp[] = [
   /\bwhy\s+is\b/,
   /\bwhy\s+do\b/,
   /\bwhat\s+happens\s+(when|if)\b/,
-  /\b(flow|trace|debug|broken|fail|failing|error)\b/,
+  /\b(flow|workflow|trace|debug|broken|fail|failing|error)\b/,
+  /\b(audit|instrument|logging?|trace)\b/,
+  /\b(change|update)\b.*\b(flow|workflow|lifecycle|path|pipeline|journey|files?)\b/,
   /\b(architecture|design)\b/,
   /\b(who|what)\s+calls\b/,
   /\bcalled\s+by\b/,
 ];
+
+const WORKFLOW_NOUN_RE = /\b(flow|workflow|lifecycle|pipeline|journey|request flow)\b/;
+const FILE_INVENTORY_RE = /\bwhich\s+files?\b|\ball\s+(?:the\s+)?files?\b/;
+const WHOLE_SYSTEM_SCOPE_RE = /\b(full|entire|complete|end-to-end|across)\b|\bevery\s+step\b|\bfrom\s+.+\s+to\s+.+\b/;
+const CROSS_CUTTING_EDIT_RE = /\b(add|instrument|trace|audit|update|change|logging?)\b/;
+const LIFECYCLE_SYSTEM_RE = /\b(shutdown|startup|drain|close|teardown|boot|bootstrap)\b/;
+const REDIRECT_DEBUG_RE =
+  /(?:\b(success|failure|fail(?:ure)?)\b.*\bredirect\b|\bredirect\b.*\b(success|failure|fail(?:ure)?)\b)/;
 
 /**
  * Classify a user query into a {@link QueryIntent}.
@@ -76,10 +95,22 @@ export function classifyIntent(query: string): QueryIntent {
     }
   }
 
-  // Default: it's a code query. Check navigation.
-  const needsNavigation = NAVIGATION_PATTERNS.some((p) => p.test(lower));
+  const hasNavigationCue = NAVIGATION_PATTERNS.some((p) => p.test(lower));
+  const hasWorkflowNoun = WORKFLOW_NOUN_RE.test(lower);
+  const hasFileInventoryCue = FILE_INVENTORY_RE.test(lower);
+  const hasWholeSystemScope = WHOLE_SYSTEM_SCOPE_RE.test(lower);
+  const hasCrossCuttingCue = CROSS_CUTTING_EDIT_RE.test(lower);
 
-  return { isCodeQuery: true, needsNavigation };
+  const prefersBroadContext =
+    hasFileInventoryCue
+    || REDIRECT_DEBUG_RE.test(lower)
+    || (hasWorkflowNoun && hasWholeSystemScope)
+    || (hasWholeSystemScope && LIFECYCLE_SYSTEM_RE.test(lower))
+    || (hasWholeSystemScope && hasCrossCuttingCue)
+    || (hasFileInventoryCue && hasWorkflowNoun);
+  const needsNavigation = hasNavigationCue || prefersBroadContext;
+
+  return { isCodeQuery: true, needsNavigation, prefersBroadContext };
 }
 
 /**
@@ -96,6 +127,7 @@ export function deriveRoute(
 ): RouteDecision {
   if (!intent.isCodeQuery) return "skip";
   if (!intent.needsNavigation) return "R0";
+  if (intent.prefersBroadContext) return "R2";
 
   // Navigational query — route depends on seed confidence
   if (seedConfidence === undefined) return "R0";

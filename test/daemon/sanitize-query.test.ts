@@ -144,6 +144,99 @@ describe("sanitizeQuery", () => {
     expect(result).toContain("more code here");
   });
 
+  // --- System tag stripping ---
+
+  it("strips <task-notification> block, preserving surrounding user text", () => {
+    const input =
+      "how does auth work <task-notification>some internal task info</task-notification> explain sessions";
+    const result = sanitizeQuery(input);
+    expect(result).toContain("how does auth work");
+    expect(result).toContain("explain sessions");
+    expect(result).not.toContain("internal task info");
+  });
+
+  it("strips <system-reminder> block, preserving surrounding user text", () => {
+    const input = [
+      "explain the search module",
+      "<system-reminder>",
+      "Claude Code instructions and context here",
+      "with multiple lines of system content",
+      "</system-reminder>",
+      "what about ranking",
+    ].join("\n");
+    const result = sanitizeQuery(input);
+    expect(result).toContain("explain the search module");
+    expect(result).toContain("what about ranking");
+    expect(result).not.toContain("Claude Code instructions");
+  });
+
+  it("returns empty when input is only system tags", () => {
+    const input =
+      "<system-reminder>all system content</system-reminder><task-notification>more system</task-notification>";
+    expect(sanitizeQuery(input)).toBe("");
+  });
+
+  it("strips system tags but keeps user text and code fragments mixed in", () => {
+    const input = [
+      "how does the parser work",
+      "<system-reminder>injected context block</system-reminder>",
+      "<tool-result>tool call output here</tool-result>",
+      "what about chunking",
+    ].join("\n");
+    const result = sanitizeQuery(input);
+    expect(result).toContain("how does the parser work");
+    expect(result).toContain("what about chunking");
+    expect(result).not.toContain("injected context");
+    expect(result).not.toContain("tool call output");
+  });
+
+  // --- Non-XML system boilerplate stripping ---
+
+  it("strips 'Read the output file' task-output instructions", () => {
+    const input = [
+      "add logging to auth flow",
+      "Read the output file to retrieve the result: /private/tmp/claude-task-abc123.txt",
+      "/private/tmp/claude-task-abc123.txt",
+    ].join("\n");
+    const result = sanitizeQuery(input);
+    expect(result).toContain("add logging to auth flow");
+    expect(result).not.toContain("Read the output file");
+    expect(result).not.toContain("/private/tmp");
+  });
+
+  it("strips bare temp-dir paths (/private/tmp, /var/folders, /tmp)", () => {
+    const input = [
+      "explain the search module",
+      "/var/folders/xr/abc123/T/claude-output.json",
+      "/tmp/some-temp-file.txt",
+      "what about ranking",
+    ].join("\n");
+    const result = sanitizeQuery(input);
+    expect(result).toContain("explain the search module");
+    expect(result).toContain("what about ranking");
+    expect(result).not.toContain("/var/folders");
+    expect(result).not.toContain("/tmp/some");
+  });
+
+  it("returns empty when input is only system boilerplate", () => {
+    const input = [
+      "Read the output file to retrieve the result: /private/tmp/out.txt",
+      "/private/tmp/out.txt",
+    ].join("\n");
+    expect(sanitizeQuery(input)).toBe("");
+  });
+
+  it("strips mixed XML tags and boilerplate, keeps user text", () => {
+    const input = [
+      "<system-reminder>system stuff here</system-reminder>",
+      "Read the output file to retrieve the result: /private/tmp/task.txt",
+      "/private/tmp/task.txt",
+      "how does the auth middleware work",
+    ].join("\n");
+    const result = sanitizeQuery(input);
+    expect(result).toBe("how does the auth middleware work");
+  });
+
   it("strips trailing harness script contamination from Claude hook payloads", () => {
     const input = [
       "What MCP tools are exposed by the memory server in this repo?",

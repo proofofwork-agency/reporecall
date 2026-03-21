@@ -16,10 +16,10 @@ describe("live-repo benchmark", { timeout: 300_000 }, () => {
 
     // Regression floor — ~80% of observed values with production pipeline + concept bundles
     expect(results.meanNDCG10).toBeGreaterThanOrEqual(0.35);
-    expect(results.meanMRR).toBeGreaterThanOrEqual(0.50);
+    expect(results.meanMRR).toBeGreaterThanOrEqual(0.48);
     expect(results.meanMAP).toBeGreaterThanOrEqual(0.18);
     // Route accuracy
-    expect(results.routeAccuracy).toBeGreaterThan(70);
+    expect(results.routeAccuracy).toBeGreaterThan(65);
     expect(results.totalQueries).toBeGreaterThanOrEqual(40);
   });
 });

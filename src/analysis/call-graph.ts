@@ -6,7 +6,11 @@ export interface CallEdge {
   sourceChunkId: string;
   targetName: string;
   receiver?: string;
+  literalTargets?: string[];
   targetFilePath?: string;
+  targetId?: string;
+  targetKind?: import("../storage/types.js").TargetKind;
+  resolutionSource?: "import" | "same_file" | "alias_literal" | "alias_path" | "symbol";
   callType: "call" | "new" | "decorator" | "macro";
   filePath: string;
   line: number;
@@ -114,6 +118,44 @@ function extractCalleeInfo(node: SyntaxNode): CalleeInfo | undefined {
   return undefined;
 }
 
+function stripStringLiteral(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length < 3) return null;
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith("`") && trimmed.endsWith("`"))
+  ) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (inner && !/[${}\\\n\r]/.test(inner)) return inner;
+  }
+  return null;
+}
+
+function collectLiteralTargets(node: SyntaxNode): string[] {
+  const values = new Set<string>();
+  const argsNode =
+    node.childForFieldName("arguments")
+    ?? node.namedChildren.find((child) =>
+      child.type === "arguments" || child.type === "argument_list"
+    );
+  if (!argsNode) return [];
+
+  const stack: SyntaxNode[] = [argsNode];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    const literal = stripStringLiteral(current.text);
+    if (literal) values.add(literal);
+    for (let i = 0; i < current.namedChildCount; i++) {
+      const child = current.namedChild(i);
+      if (child) stack.push(child);
+    }
+  }
+
+  return Array.from(values).slice(0, 4);
+}
+
 function walkForCallNodes(
   node: SyntaxNode,
   callNodeTypes: string[],
@@ -148,11 +190,12 @@ export function extractCallEdges(
 
     const callType = inferCallType(callNode.type);
     const line = callNode.startPosition.row + 1;
+    const literalTargets = collectLiteralTargets(callNode);
     // Intentional: dedup by receiver:targetName:callType per chunk — we record
     // one edge per unique call target per chunk, discarding line info for
     // repeated calls. This keeps the call graph compact without inflating
     // edge counts.
-    const key = `${info.receiver ?? ""}:${info.name}:${callType}`;
+    const key = `${info.receiver ?? ""}:${info.name}:${callType}:${literalTargets.join("|")}`;
 
     if (seen.has(key)) continue;
     seen.add(key);
@@ -161,6 +204,7 @@ export function extractCallEdges(
       sourceChunkId: chunkId,
       targetName: info.name,
       receiver: info.receiver,
+      literalTargets,
       callType,
       filePath,
       line,

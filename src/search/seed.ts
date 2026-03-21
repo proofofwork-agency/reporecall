@@ -1,7 +1,16 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
-import type { StoredChunk } from "../storage/types.js";
-import { isTestFile, STOP_WORDS } from "./utils.js";
+import type { StoredChunk, TargetKind } from "../storage/types.js";
+import {
+  expandQueryTerms,
+  getQueryTermVariants,
+  isTestFile,
+  STOP_WORDS,
+  textMatchesQueryTerm,
+  tokenizeQueryTerms,
+} from "./utils.js";
+import { resolveTargetsForQuery } from "./targets.js";
+import { classifyIntent } from "./intent.js";
 
 export interface SeedCandidate {
   chunkId: string;
@@ -9,7 +18,11 @@ export interface SeedCandidate {
   filePath: string;
   kind: string;
   confidence: number; // 0-1
-  reason: "explicit_target" | "fts_exact" | "hybrid_top";
+  reason: "explicit_target" | "resolved_target" | "fts_exact" | "hybrid_top";
+  targetId?: string;
+  targetKind?: TargetKind;
+  resolvedAlias?: string;
+  resolutionSource?: string;
 }
 
 export interface SeedResult {
@@ -28,6 +41,13 @@ const PASCAL_CASE_RE = /\b([A-Z][a-z][a-zA-Z0-9]*)\b/g;
 const CAMEL_CASE_RE = /\b([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g;
 const FILE_PATH_RE = /[\w/.-]+\.\w{1,10}/g;
 const DOTTED_PATH_RE = /\b([A-Za-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*)\b/g;
+const ACRONYM_RE = /\b([A-Z]{3,6})\b/g;
+const ACRONYM_BLOCKLIST = new Set([
+  "API", "URL", "CSS", "HTML", "HTTP", "JSON", "XML", "SQL",
+  "REST", "SDK", "DOM", "CLI", "ENV", "EOF", "SSH", "TLS",
+  "SSL", "DNS", "TCP", "UDP", "URI", "RFC", "CORS", "CSRF",
+  "AST", "MCP", "JWT", "RSA", "AES", "SHA", "AWS", "GCP",
+]);
 
 // Extended stop words for FTS content term filtering (common verbs in navigational queries)
 const FTS_STOP_WORDS = new Set([
@@ -54,23 +74,22 @@ const KIND_RANK: Record<string, number> = {
   type_alias_declaration: 0,
 };
 
-function tokenizeQueryTerms(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9_./-]+/)
-    .filter((term) => term.length >= 2);
-}
-
 function buildFallbackQueries(query: string, queryTermsLower: string[]): string[] {
   const contentTerms = queryTermsLower.filter((term) => !FTS_STOP_WORDS.has(term));
+  const expandedTerms = expandQueryTerms(queryTermsLower)
+    .filter((term) => term.weight >= 0.58 && !FTS_STOP_WORDS.has(term.term))
+    .map((term) => term.term);
   const variants = new Set<string>([query]);
 
   if (contentTerms.length >= 2) {
     variants.add(contentTerms.join(" "));
   }
 
-  for (const term of contentTerms.slice(0, 4)) {
+  for (const term of [...contentTerms, ...expandedTerms].slice(0, 8)) {
     variants.add(term);
+    for (const variant of getQueryTermVariants(term)) {
+      variants.add(variant);
+    }
   }
 
   return Array.from(variants);
@@ -107,15 +126,27 @@ export function scoreFTSCandidate(
   rank: number
 ): number {
   const chunkNameLower = chunk.name.toLowerCase();
+  const expandedTerms = expandQueryTerms(queryTermsLower)
+    .filter((term) => !FTS_STOP_WORDS.has(term.term));
+  const weightedTerms = expandedTerms.length > 0
+    ? expandedTerms
+    : queryTermsLower
+        .filter((term) => !FTS_STOP_WORDS.has(term))
+        .map((term) => ({ term, weight: 1 }));
+  const totalWeight = weightedTerms.reduce((sum, term) => sum + term.weight, 0) || 1;
 
   // Signal 1: Name match (0.0 / 0.15 / 0.30)
   // Use filtered terms only: require length ≥ 3 and exclude stop words to prevent
   // short English words like "is" or "of" from partial-matching code names
   // (e.g. "is" would match "isCorrupted" via .includes()).
-  const nameMatchTerms = queryTermsLower.filter((t) => t.length >= 3 && !FTS_STOP_WORDS.has(t));
-  const isExactMatch = nameMatchTerms.some((term) => term === chunkNameLower);
+  const nameMatchTerms = weightedTerms.filter((term) => term.term.length >= 3);
+  const isExactMatch = nameMatchTerms.some((term) =>
+    getQueryTermVariants(term.term).some((variant) => variant === chunkNameLower)
+  );
   const isPartialMatch = !isExactMatch && nameMatchTerms.some(
-    (term) => chunkNameLower.includes(term) || term.includes(chunkNameLower)
+    (term) => getQueryTermVariants(term.term).some(
+      (variant) => chunkNameLower.includes(variant) || variant.includes(chunkNameLower)
+    )
   );
   const nameScore = isExactMatch ? 0.30 : isPartialMatch ? 0.15 : 0.0;
 
@@ -123,12 +154,15 @@ export function scoreFTSCandidate(
   const rankContrib = 0.25 * Math.min(1, Math.abs(rank) / 10);
 
   // Signal 3: File path overlap (0 to 0.20)
-  const contentTerms = queryTermsLower.filter((t) => t.length >= 2 && !FTS_STOP_WORDS.has(t));
+  const contentTerms = weightedTerms.filter((term) => term.term.length >= 2);
   let pathContrib = 0;
   if (contentTerms.length > 0) {
     const pathLower = chunk.filePath.toLowerCase();
-    const matchingTerms = contentTerms.filter((term) => pathLower.includes(term));
-    pathContrib = 0.20 * (matchingTerms.length / contentTerms.length);
+    const matchingWeight = contentTerms.reduce(
+      (sum, term) => sum + (textMatchesQueryTerm(pathLower, term.term) ? term.weight : 0),
+      0
+    );
+    pathContrib = 0.20 * (matchingWeight / totalWeight);
   }
 
   // Signal 4: Kind + export (0 to 0.25)
@@ -140,17 +174,38 @@ export function scoreFTSCandidate(
   if (chunk.kind === "export_statement") kindScore = 0.20;
   else if (MEANINGFUL_KINDS.has(chunk.kind) && chunk.content?.includes("export")) kindScore += 0.05;
 
-  // Signal 5: Locality penalty (-0.10) — if no content term appears in either the
-  // chunk's name or its file path, this is likely a content-only FTS false positive
-  // (e.g. an English word like "overall" matching a code field name). Penalise it so
-  // chunks that are in the right module or have a relevant name rank above noise.
-  const hasNameLocality = contentTerms.some(
-    (t) => chunk.name.toLowerCase().includes(t) || t.includes(chunk.name.toLowerCase())
+  // Signal 5: Coverage-based signal scaling — measures how many distinct content
+  // terms appear in the candidate's name or file path. When a multi-term query
+  // (3+ content terms) matches a candidate on ≤1 terms in name+path, the FTS
+  // signals are likely driven by a single high-frequency codebase term (e.g.
+  // "flow" dominating "authentication flow" results). Scale ALL signal
+  // contributions proportionally instead of applying a small fixed penalty.
+  // This is deterministic and language-agnostic — no hardcoded word lists.
+  const namePathText = (chunk.name + " " + chunk.filePath).toLowerCase();
+  const matchingLocalityWeight = contentTerms.reduce(
+    (sum, term) =>
+      sum
+      + (
+        textMatchesQueryTerm(namePathText, term.term)
+        || getQueryTermVariants(term.term).some((variant) => variant.includes(chunkNameLower))
+          ? term.weight
+          : 0
+      ),
+    0
   );
-  const hasPathLocality = contentTerms.some((t) => chunk.filePath.toLowerCase().includes(t));
-  const localityPenalty = hasNameLocality || hasPathLocality ? 0 : 0.10;
+  const hasLongAnchorMatch = contentTerms.some(
+    (term) => term.term.length >= 8 && term.weight >= 0.7 && textMatchesQueryTerm(namePathText, term.term)
+  );
 
-  return Math.min(0.85, Math.max(0, 0.35 + nameScore + rankContrib + pathContrib + kindScore - localityPenalty));
+  const coverageRatio = matchingLocalityWeight / totalWeight;
+  const rawSignals = nameScore + rankContrib + pathContrib + kindScore;
+  if (contentTerms.length >= 3 && coverageRatio < 0.5) {
+    const coverageScale = hasLongAnchorMatch
+      ? coverageRatio < 0.15 ? 0.40 : 0.55
+      : coverageRatio < 0.15 ? 0.20 : 0.30;
+    return Math.min(0.85, Math.max(0, 0.35 + rawSignals * coverageScale));
+  }
+  return Math.min(0.85, Math.max(0, 0.35 + rawSignals));
 }
 
 /**
@@ -200,6 +255,14 @@ export function extractExplicitTargets(query: string): string[] {
     }
   }
 
+  // Uppercase acronyms (3-6 chars, all-caps) — e.g. "FTS", "MCP"
+  for (const match of query.matchAll(ACRONYM_RE)) {
+    const candidate = match[1];
+    if (candidate && !ACRONYM_BLOCKLIST.has(candidate)) {
+      targets.add(candidate);
+    }
+  }
+
   return Array.from(targets);
 }
 
@@ -242,6 +305,36 @@ function disambiguate(chunks: StoredChunk[], query: string): StoredChunk[] {
   });
 }
 
+function compareSeedCandidates(a: SeedCandidate, b: SeedCandidate): number {
+  // Explicit targets (direct name matches) beat resolved targets from generic
+  // catalog aliases — the user mentioned a specific symbol, trust that over
+  // incidental noun matches like "pipeline", "storage", "request".
+  const reasonRank = (c: SeedCandidate): number =>
+    c.reason === "explicit_target" || c.reason === "fts_exact" ? 1 : 0;
+  const reasonDiff = reasonRank(b) - reasonRank(a);
+  if (reasonDiff !== 0 && Math.abs(b.confidence - a.confidence) <= 0.20) return reasonDiff;
+
+  const diff = b.confidence - a.confidence;
+  if (Math.abs(diff) > 0.03) return diff;
+  const targetRank = (candidate: SeedCandidate): number => {
+    switch (candidate.targetKind) {
+      case "endpoint":
+        return 4;
+      case "file_module":
+        return 3;
+      case "symbol":
+        return 2;
+      case "subsystem":
+        return 1;
+      default:
+        return 0;
+    }
+  };
+  const targetDiff = targetRank(b) - targetRank(a);
+  if (targetDiff !== 0) return targetDiff;
+  return (KIND_RANK[b.kind] ?? 1) - (KIND_RANK[a.kind] ?? 1);
+}
+
 /**
  * Resolve seed candidates for a query using explicit identifier extraction
  * and FTS fallback.
@@ -253,10 +346,88 @@ function disambiguate(chunks: StoredChunk[], query: string): StoredChunk[] {
  */
 export function resolveSeeds(
   query: string,
-  metadata: Pick<MetadataStore, "findChunksByNames" | "getChunk" | "getChunksByIds">,
+  metadata: Pick<
+    MetadataStore,
+    | "findChunksByNames"
+    | "findChunksByNamePrefixes"
+    | "getChunk"
+    | "getChunksByIds"
+    | "findChunksByFilePath"
+    | "resolveTargetAliases"
+    | "findTargetById"
+  >,
   fts: Pick<FTSStore, "search">
 ): SeedResult {
   const candidates: SeedCandidate[] = [];
+  const seenSeedKeys = new Set<string>();
+
+  const pushCandidate = (candidate: SeedCandidate) => {
+    const key = `${candidate.chunkId}:${candidate.reason}:${candidate.targetId ?? ""}`;
+    const existingIndex = candidates.findIndex((item) => `${item.chunkId}:${item.reason}:${item.targetId ?? ""}` === key);
+    if (existingIndex >= 0) {
+      const existing = candidates[existingIndex];
+      if (existing && existing.confidence >= candidate.confidence) return;
+      candidates.splice(existingIndex, 1, candidate);
+      return;
+    }
+    if (seenSeedKeys.has(key)) return;
+    seenSeedKeys.add(key);
+    candidates.push(candidate);
+  };
+
+  const targetHits = typeof metadata.resolveTargetAliases === "function"
+    ? resolveTargetsForQuery(query, metadata)
+    : [];
+  const broadQuery = classifyIntent(query).prefersBroadContext === true;
+  const broadAnchorTerms = broadQuery
+    ? expandQueryTerms(query).filter((term) =>
+        (term.source === "original" || term.source === "morphological") && !term.generic
+      )
+    : [];
+  const broadAnchorAliases = new Set(
+    broadAnchorTerms
+      .map((term) => term.term.toLowerCase())
+  );
+  for (const hit of targetHits) {
+    let chunk = hit.target.ownerChunkId
+      ? metadata.getChunksByIds([hit.target.ownerChunkId])[0]
+      : undefined;
+    if (!chunk) {
+      chunk = metadata.findChunksByFilePath?.(hit.target.filePath)?.[0];
+    }
+    if (!chunk || isTestFile(chunk.filePath)) continue;
+    if (!broadQuery && hit.target.kind === "subsystem" && hit.confidence < 0.78) continue;
+    if (broadQuery && broadAnchorTerms.length > 0) {
+      const aliasLower = hit.alias.toLowerCase();
+      const targetNameText = `${hit.alias} ${hit.target.canonicalName} ${chunk.name}`.toLowerCase();
+      const pathText = hit.target.filePath.toLowerCase();
+      const nameMatches = broadAnchorTerms.filter((term) => textMatchesQueryTerm(targetNameText, term.term));
+      const pathMatches = broadAnchorTerms.filter((term) => textMatchesQueryTerm(pathText, term.term));
+      const allowPathOnly = hit.target.kind === "file_module" || hit.target.kind === "endpoint";
+      if (hit.target.kind === "symbol" && !broadAnchorAliases.has(aliasLower) && hit.source !== "query") {
+        continue;
+      }
+      if (nameMatches.length === 0) {
+        if (allowPathOnly) {
+          if (pathMatches.length === 0) continue;
+        } else if (pathMatches.length < 2) {
+          continue;
+        }
+      }
+    }
+    pushCandidate({
+      chunkId: chunk.id,
+      name: chunk.name,
+      filePath: chunk.filePath,
+      kind: chunk.kind,
+      confidence: hit.confidence,
+      reason: "resolved_target",
+      targetId: hit.target.id,
+      targetKind: hit.target.kind,
+      resolvedAlias: hit.alias,
+      resolutionSource: hit.source,
+    });
+  }
 
   // Step 1: Extract explicit targets
   const targets = extractExplicitTargets(query);
@@ -268,7 +439,18 @@ export function resolveSeeds(
 
     // Look up identifiers by name
     if (identifierNames.length > 0) {
-      const chunks = metadata.findChunksByNames(identifierNames);
+      let chunks = metadata.findChunksByNames(identifierNames);
+      let isPrefixMatch = false;
+
+      // Prefix fallback: if exact match returns nothing, try prefix matching
+      // Allow 3-char prefixes for all-caps acronyms (e.g. "FTS" → "FTSStore")
+      if (chunks.length === 0 && metadata.findChunksByNamePrefixes) {
+        const prefixCandidates = identifierNames.filter((n) => n.length >= 4 || (n.length >= 3 && /^[A-Z]+$/.test(n)));
+        if (prefixCandidates.length > 0) {
+          chunks = metadata.findChunksByNamePrefixes(prefixCandidates, 20);
+          isPrefixMatch = true;
+        }
+      }
 
       // Group by name
       const byName = new Map<string, StoredChunk[]>();
@@ -280,15 +462,15 @@ export function resolveSeeds(
 
       for (const matchedChunks of byName.values()) {
         if (matchedChunks.length === 1) {
-          // Single match — high confidence
+          // Single match — high confidence (lower for prefix matches)
           const chunk = matchedChunks[0];
           if (!chunk) continue;
-          candidates.push({
+          pushCandidate({
             chunkId: chunk.id,
             name: chunk.name,
             filePath: chunk.filePath,
             kind: chunk.kind,
-            confidence: 0.95,
+            confidence: isPrefixMatch ? 0.80 : 0.95,
             reason: "explicit_target",
           });
         } else {
@@ -296,24 +478,24 @@ export function resolveSeeds(
           const sorted = disambiguate(matchedChunks, query);
           const top = sorted[0];
           if (!top) continue;
-          candidates.push({
+          pushCandidate({
             chunkId: top.id,
             name: top.name,
             filePath: top.filePath,
             kind: top.kind,
-            confidence: 0.85,
+            confidence: isPrefixMatch ? 0.70 : 0.85,
             reason: "explicit_target",
           });
           // Add remaining as lower-confidence alternatives
           for (let i = 1; i < sorted.length; i++) {
             const alt = sorted[i];
             if (!alt) continue;
-            candidates.push({
+            pushCandidate({
               chunkId: alt.id,
               name: alt.name,
               filePath: alt.filePath,
               kind: alt.kind,
-              confidence: 0.7,
+              confidence: isPrefixMatch ? 0.60 : 0.7,
               reason: "explicit_target",
             });
           }
@@ -336,7 +518,7 @@ export function resolveSeeds(
           if (!chunk) continue;
           // Check if the chunk actually lives in the mentioned file
           if (chunk.filePath === fp || chunk.filePath.endsWith(fp) || fp.endsWith(chunk.filePath)) {
-            candidates.push({
+            pushCandidate({
               chunkId: chunk.id,
               name: chunk.name,
               filePath: chunk.filePath,
@@ -345,7 +527,7 @@ export function resolveSeeds(
               reason: "explicit_target",
             });
           } else {
-            candidates.push({
+            pushCandidate({
               chunkId: chunk.id,
               name: chunk.name,
               filePath: chunk.filePath,
@@ -389,7 +571,7 @@ export function resolveSeeds(
 
         const confidence = scoreFTSCandidate(chunk, queryTermsLower, ftsResult.rank);
         const chunkNameLower = chunk.name.toLowerCase();
-        const isExactMatch = queryTermsLower.some((term) => term === chunkNameLower);
+        const isExactMatch = expandQueryTerms(queryTermsLower).some((term) => term.term === chunkNameLower);
         const reason: SeedCandidate["reason"] = isExactMatch ? "fts_exact" : "hybrid_top";
         const candidate: SeedCandidate = {
           chunkId: chunk.id,
@@ -405,13 +587,16 @@ export function resolveSeeds(
         } else {
           nonTestCandidates.push(candidate);
         }
-
-        if (nonTestCandidates.length >= 8) break;
       }
 
-      candidates.push(...nonTestCandidates);
-      if (nonTestCandidates.length === 0) {
-        candidates.push(...testFallbackCandidates.slice(0, 3));
+      const rankedNonTest = [...nonTestCandidates]
+        .sort(compareSeedCandidates)
+        .slice(0, 8);
+      for (const candidate of rankedNonTest) pushCandidate(candidate);
+      if (rankedNonTest.length === 0) {
+        for (const candidate of [...testFallbackCandidates].sort(compareSeedCandidates).slice(0, 3)) {
+          pushCandidate(candidate);
+        }
       }
     }
   }
@@ -421,11 +606,7 @@ export function resolveSeeds(
   // (function_declaration, method_definition) over type-only definitions
   // (interface_declaration, type_alias_declaration) — execution queries want
   // to trace behaviour, not data shapes.
-  candidates.sort((a, b) => {
-    const diff = b.confidence - a.confidence;
-    if (Math.abs(diff) > 0.03) return diff;
-    return (KIND_RANK[b.kind] ?? 1) - (KIND_RANK[a.kind] ?? 1);
-  });
+  candidates.sort(compareSeedCandidates);
 
   const bestSeed = candidates.find((c) => c.confidence >= 0.55) ?? null;
 

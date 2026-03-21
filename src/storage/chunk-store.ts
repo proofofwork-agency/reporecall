@@ -34,6 +34,8 @@ export class ChunkStore {
   private selectLanguageCountsStmt!: Database.Statement;
   private selectSiblingsStmt!: Database.Statement;
   private selectChunksByFilePathStmt!: Database.Statement;
+  private clearFilesStmt!: Database.Statement;
+  private clearChunksStmt!: Database.Statement;
 
   constructor(private readonly db: Database.Database) {}
 
@@ -106,6 +108,8 @@ export class ChunkStore {
        AND kind != 'file' AND name != '<anonymous>'
        ORDER BY start_line ASC`
     );
+    this.clearFilesStmt = this.db.prepare(`DELETE FROM files`);
+    this.clearChunksStmt = this.db.prepare(`DELETE FROM chunks`);
   }
 
   upsertFile(path: string, hash: string): void {
@@ -235,6 +239,17 @@ export class ChunkStore {
     return results;
   }
 
+  findChunksByNamePrefixes(prefixes: string[], limit = 20): StoredChunk[] {
+    if (prefixes.length === 0) return [];
+    const validPrefixes = prefixes.filter((p) => p.length >= 3);
+    if (validPrefixes.length === 0) return [];
+    const conditions = validPrefixes.map(() => "name LIKE ? || '%'").join(" OR ");
+    const rows = this.db
+      .prepare(`SELECT * FROM chunks WHERE (${conditions}) LIMIT ?`)
+      .all(...validPrefixes, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapRow(row));
+  }
+
   findSiblings(
     parentName: string,
     filePath: string,
@@ -269,6 +284,13 @@ export class ChunkStore {
           chunk.isExported ? 1 : 0
         );
       }
+    })();
+  }
+
+  clearAll(): void {
+    this.db.transaction(() => {
+      this.clearFilesStmt.run();
+      this.clearChunksStmt.run();
     })();
   }
 

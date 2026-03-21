@@ -320,7 +320,7 @@ describe("handlePromptContext — route integration", () => {
 
     expect(result).not.toBeNull();
     expect(result!.text).toContain("low confidence");
-    expect(result!.text).toContain("resolve_seed");
+    expect(result!.text).toContain("repository tools are allowed");
   });
 
   it("R1 without metadata/fts falls back to R0", async () => {

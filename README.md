@@ -8,7 +8,9 @@
                               proofofwork
 ```
 
-**Local codebase memory for Claude Code and MCP clients**
+**Local codebase memory and project knowledge for Claude Code**
+
+Reporecall indexes your codebase locally - AST chunks, call graph, keyword + vector search - and injects the right context before Claude processes your prompt. Starting with v0.3.0, it also maintains persistent cross-session memory for project decisions, coding conventions, and working state. It runs as a Claude Code hook and MCP server, entirely on your machine - no cloud storage or external API calls.
 
 ## The Problem
 
@@ -27,9 +29,11 @@ Read that file too         → finally has the picture
 
 6 tool calls. 4 round-trips. ~15,000 tokens. And it still missed the error handler sites.
 
+The same happens across sessions. Claude has no memory of the architectural decision you explained yesterday, the naming convention you corrected last week, or the half-finished refactor you left mid-flight. Every session starts from zero.
+
 ## With Reporecall
 
-Same question. Claude asks, Reporecall's hook fires before the prompt reaches Claude:
+Same question. Reporecall's hook fires before the prompt reaches Claude:
 
 ```
 → Search index: "credit refund job fails"         (5ms, keyword + vector)
@@ -40,7 +44,7 @@ Same question. Claude asks, Reporecall's hook fires before the prompt reaches Cl
 → Inject context into prompt                       (~2K tokens)
 ```
 
-0 tool calls. 1 round-trip. Claude already has the full picture — the function, its callers, and the failure path — before it writes a single word.
+0 tool calls. 1 round-trip. Claude already has the full picture - the function, its callers, and the failure path - before it writes a single word.
 
 ```
 ┌────────────────────┬──────────────────────┬─────────────────┐
@@ -55,152 +59,128 @@ Same question. Claude asks, Reporecall's hook fires before the prompt reaches Cl
 └────────────────────┴──────────────────────┴─────────────────┘
 ```
 
-That's what Reporecall does. It builds a local index of your codebase — AST chunks, call graph, keyword + vector search — and injects the right context before Claude even starts thinking. The call graph is the key part: it doesn't just find the function you asked about, it finds the functions that _call_ it and the functions _it calls_. That's the depth that grepping misses.
-
-## What It Solves and What It Doesn't
-
-**Solves:**
-
-- **Grep chains.** Claude doing 4-6 Grep/Read round-trips to understand code before answering. Reporecall eliminates this for code understanding questions — the context is already there.
-- **Token cost and API spend.** 3-8x fewer tokens per code question. Each grep/read round-trip resends the full conversation context — on a long session, that's the expensive part. Fewer round-trips means fewer API calls, each carrying less payload.
-- **Depth.** Grepping finds the function you asked about. It doesn't tell you who calls it, or what it calls. The call graph surfaces that automatically — no extra rounds needed.
-- **Round-trip latency.** One hook injection (~5ms) replaces multiple sequential tool calls (seconds).
-
-**Doesn't solve:**
-
-- **Claude's context window.** Reporecall injects into the same window. Long conversations still hit the limit. Smaller injections (2K vs 15K) help, but it's not infinite memory.
-- **Non-code tasks.** File edits, running tests, debugging runtime behavior — Claude still uses tools for those. Reporecall only covers "understand the codebase" questions.
-- **Vague queries.** If there's no symbol or keyword to anchor on ("make this faster"), retrieval is weak. The engine needs something concrete to search for.
-- **Type-resolved accuracy.** The call graph is name-based, not type-resolved. Two unrelated functions with the same name can produce false edges. Works well for typical codebases, but it's not a compiler.
-
-## How It Works
-
-You ask Claude a question. Before Claude sees it, Reporecall's hook:
-
-1. Classifies intent (rule-based, zero LLM tokens, <1ms)
-2. Searches the index (hybrid keyword + vector, ~5ms)
-3. Expands results through the call graph (callers and callees of top hits)
-4. Filters test files, penalizes oversized chunks, enforces a token budget
-5. Injects assembled context into the prompt
-
-Claude answers with full codebase context. No tool calls needed for the common case.
-
-### What it indexes
-
-- **AST chunks**: Tree-sitter parses 22 languages into functions, classes, methods, interfaces, exports
-- **Call graph**: Which functions call which — extracted from static AST, no language server needed
-- **Import graph**: File-level dependency relationships
-- **Keyword index**: FTS5 with Porter stemming and camelCase splitting
-- **Vector embeddings**: Optional semantic search (local ONNX, Ollama, or OpenAI)
-- **Conventions**: Detected coding patterns and naming conventions
-
-Everything stays on your machine. No cloud, no API calls during retrieval, no telemetry.
-
-## Supported Languages
-
-22 languages: TypeScript, TSX, JavaScript, Python, Go, Rust, Java, Ruby, C, C++, C#, PHP, Swift, Kotlin, Scala, Zig, Bash, Lua, HTML, Vue, CSS, TOML
-
-The scanner also indexes non-parser fallback file types by default: `.json`, `.md`, `.sql`, `.svelte` (as file-level chunks).
-
-## Team Collaboration
-
-Reporecall uses a **three-tier configuration pattern** designed for teams:
-
-| Tier               | Location                             | Scope                        | Committed to Git | Purpose                                          |
-| ------------------ | ------------------------------------ | ---------------------------- | ---------------- | ------------------------------------------------ |
-| **Global**         | `~/.claude/settings.json`            | All projects on your machine | ✗                | Personal preferences (model, theme, keybindings) |
-| **Project Shared** | `.claude/settings.json`, `.mcp.json` | Current project              | ✓                | Team-wide hooks, MCP config, instructions        |
-| **Local**          | `.claude/settings.local.json`        | Your machine                 | ✗                | Custom daemon port, proxy, tokens, etc.          |
-
-**Setup for teams:**
-
-```bash
-git clone <repo>
-cd <repo>
-reporecall init    # Creates .claude/settings.json + .mcp.json (committed)
-reporecall index
-```
-
-Claude Code automatically merges `.claude/settings.local.json` over shared settings, so each team member can customize locally without affecting the shared config.
-
-**Key benefit:** Hooks use **`$CLAUDE_PROJECT_DIR`** (provided by Claude Code at runtime) so they resolve correctly on any machine—no re-running init needed.
-
-See [CLAUDE.md](./CLAUDE.md#team-collaboration) for detailed team collaboration guide.
-
-## Privacy & Data
-
-Reporecall runs **entirely on your machine**:
-
-- No external API calls during retrieval
-- No telemetry or data collection
-- No cloud dependency or uploads
-- All code stays local in `.memory/` folder
-- Works offline after initial setup
-
-This means you can use Reporecall on proprietary code without exposing it to third parties.
-
-## Cost & License
-
-- **Open source**: MIT license
-- **No ongoing costs**: One-time npm install
-- **No subscription**: Use indefinitely
-- **No API fees**: All processing local
-
 ## Quick Start
 
 ```bash
-# Install globally
 npm install -g @proofofwork-agency/reporecall
-
-# Inside your project
-reporecall init
-reporecall index
-reporecall serve
+reporecall init          # creates .memory/, hooks, MCP config
+reporecall index         # indexes your codebase
+reporecall serve         # starts daemon with file watcher
 ```
 
-Then ask Claude questions normally. The hook daemon injects relevant context before Claude answers.
+Then ask Claude questions normally. The hook injects relevant code and memory context before Claude answers.
 
 ### Daily Workflow
 
-**Morning:** Start Reporecall
-
 ```bash
-reporecall serve
+reporecall serve            # start once, runs all day with file watching
 ```
 
-✓ Daemon wakes up and watches your code folder
-✓ Connected to Claude, ready to help
-✓ Stays running in background all day
-
-**During Development:** Ask Questions
+Then use Claude normally:
 
 ```
-Developer: "Why is my test failing? Here's the error..."
-↓
-Claude: Instantly has your test structure, error handling patterns,
-        testing conventions. Gives smarter answer.
+"How does the credit refund work when a job fails?"
+  → Code context injected: refundCredits(), its callers, error handlers
 
-Developer: "Who calls the validateUserInput() function?"
-↓
-Claude: Shows all callers in context, with surrounding code.
+"What did we decide about the auth token format?"
+  → Memory recalled: stored rule about JWT structure from last week
 
-Developer: "Help me refactor the authentication flow"
-↓
-Claude: Shows entire auth flow, suggests improvements based on YOUR
-        actual code patterns.
+"Walk me through the payment flow"
+  → R1 flow tree: payment entry point → validation → charge → receipt
+
+"Who calls validateUserInput?"
+  → Call graph expansion shows all caller sites with surrounding code
 ```
 
-**End of Day:** Everything Syncs Automatically
+## What's New in v0.3.0
 
-```
-✓ If you edited files today, Reporecall noticed and updated
-✓ If teammates changed code, Reporecall learned it
-✓ Everything stays local and private
-```
+- **Memory V1.** Persistent cross-session memory stores project knowledge, coding conventions, user preferences, and working state as markdown files in `.memory/reporecall-memories/`. Four memory classes (`rule`, `fact`, `episode`, `working`) with independent token budgets. Seven new MCP tools for memory management.
+- **Broad workflow search.** New `selectBroadWorkflowBundle` handles architecture and inventory queries with corpus-aware term expansion and import corroboration. R2 NDCG@10 improved from 0.058 to 0.351.
+- **Target resolution catalog.** New `TargetStore` indexes symbols, file modules, endpoints, and routes with alias-based lookup. Literal-dispatch resolution: `invoke("generate-image")` resolves to the handler file.
+- **Query-path performance.** Seed resolution cache eliminates 2-3 redundant `resolveSeeds()` calls per search (~8-15ms saved). Query embedding LRU cache (50 entries) saves 15-40ms per hit. Route accuracy improved from 81.5% to 87%.
+- **Robustness fixes.** `sanitizeQuery` strips `<system-reminder>`, `<tool-result>`, and `antml:*` XML blocks. Short conversational directives correctly classified as skip. Tree-sitter parse errors fall back to whole-file chunks.
+
+## Features
+
+### Code Search & Context Injection
+
+- **AST chunking** - Tree-sitter parses 22 languages into functions, classes, methods, interfaces, and exports. Files with no extractable nodes fall back to file-level chunks.
+- **Hybrid search** - FTS5 keyword search (Porter stemming, camelCase splitting) fused with cosine-similarity vector search via Reciprocal Rank Fusion.
+- **Call graph expansion** - Top search hits are expanded through a static call graph to surface callers and callees automatically, without extra round-trips.
+- **Intent classification** - Rule-based classifier (zero LLM tokens, <1ms) routes queries to R0 (fast), R1 (flow), R2 (broad), or SKIP.
+- **Token-budgeted assembly** - Results are assembled into markdown code blocks under an auto-scaled token budget, with length penalty, test file demotion, and score floor filtering.
+
+### Memory V1
+
+Persistent cross-session memory layer for project knowledge, user preferences, and working state.
+
+**Four memory classes:**
+
+| Class     | Purpose                                         | Lifecycle                                       |
+| --------- | ----------------------------------------------- | ----------------------------------------------- |
+| `rule`    | Behavioral directives that override defaults    | Highest injection priority, survives compaction |
+| `fact`    | Stable project knowledge and reference material | Survives compaction indefinitely                |
+| `episode` | Session-specific observations and decisions     | Archived after 30 days by compaction            |
+| `working` | Transient context generated during a session    | Cleared between sessions or on explicit reset   |
+
+Each class has an independent token budget, so rules are never crowded out by verbose episodes. Memories are stored as markdown files with YAML frontmatter in `.memory/reporecall-memories/`, indexed by FTS, and injected alongside code context on every hook query.
+
+**Compaction** deduplicates by content fingerprint, archives stale episodes, and promotes recurring patterns from episode to fact. Pinned memories survive compaction unconditionally.
+
+**7 MCP tools:** `recall_memories`, `store_memory`, `forget_memory`, `list_memories`, `explain_memory`, `compact_memories`, `clear_working_memory`.
+
+### MCP Integration (18 tools)
+
+Reporecall exposes 18 MCP tools over stdio - 11 for code search and analysis, 7 for memory. The MCP server integrates with Claude Code through the auto-generated `.mcp.json` configuration.
+
+**Code Search & Analysis:**
+
+| Tool               | Description                                                 |
+| ------------------ | ----------------------------------------------------------- |
+| `search_code`      | Search the codebase using hybrid vector + keyword search    |
+| `find_callers`     | Find functions that call a given function                   |
+| `find_callees`     | Find functions called by a given function                   |
+| `resolve_seed`     | Resolve a query to seed candidates for stack tree building  |
+| `build_stack_tree` | Build a bidirectional call tree from a seed function/method |
+| `get_imports`      | Get import statements for a file                            |
+| `get_symbol`       | Look up code symbols by name                                |
+| `explain_flow`     | Explain the call flow around a query or function name       |
+| `index_codebase`   | Index or re-index the codebase                              |
+| `get_stats`        | Get index statistics, conventions, and latency info         |
+| `clear_index`      | Clear all indexed data                                      |
+
+**Memory:**
+
+| Tool                   | Description                                                    |
+| ---------------------- | -------------------------------------------------------------- |
+| `recall_memories`      | Search project and user memories using local keyword retrieval |
+| `explain_memory`       | Explain how memory recall would behave for a query             |
+| `compact_memories`     | Refresh and compact memory indexes                             |
+| `clear_working_memory` | Clear generated working memory entries                         |
+| `store_memory`         | Create or update a memory file                                 |
+| `forget_memory`        | Delete a memory by name                                        |
+| `list_memories`        | List all stored memories with metadata                         |
+
+### Search Modes
+
+- **R0 - Fast Path**: Hybrid keyword + vector search for direct lookups. Best for specific symbols or exact terms. Typical latency ~10ms.
+- **R1 - Flow Path**: Bidirectional call-tree traversal from a seed symbol. Shows callers and callees up to 2 levels deep. Best for "how does X work" and debugging questions.
+- **R2 - Deep Path**: Broad semantic search with corpus-aware term expansion and import corroboration. Best for architecture, inventory, and cross-cutting queries.
+
+## How It Works
+
+1. You ask Claude a question. The `UserPromptSubmit` hook fires before Claude sees the prompt.
+2. The hook POSTs the query to the local daemon (localhost:37222, bearer-token auth).
+3. The query is sanitized (XML tags, code blocks, temp paths stripped).
+4. The intent classifier routes the query: **SKIP** (greeting/meta), **R0** (direct lookup), **R1** (flow/call-tree), or **R2** (broad architecture).
+5. Seed symbols are extracted from the query (PascalCase/camelCase tokens matched against the index).
+6. Hybrid search runs: FTS5 keyword search + vector cosine search, fused via Reciprocal Rank Fusion.
+7. Call graph expansion adds callers and callees of top hits (R1 builds a full bidirectional tree).
+8. Memory recall searches `.memory/reporecall-memories/` for relevant rules, facts, and episodes.
+9. Context assembly combines code chunks and memory under a token budget, prioritizing implementation over tests.
+10. The assembled context is injected into the prompt. Claude answers with full codebase and memory context.
 
 ## Architecture
-
-Reporecall runs entirely on your machine - no external API calls during retrieval, no telemetry, no cloud dependency.
 
 ```mermaid
 flowchart TB
@@ -221,6 +201,7 @@ flowchart TB
         Meta["metadata.db<br/>chunks · call graph<br/>· conventions"]
         FTS["fts.db<br/>FTS5 keyword index"]
         Lance["lance/<br/>vector store<br/>(optional)"]
+        Mem["reporecall-memories/<br/>markdown memory files"]
     end
 
     MCP["MCP tools (stdio)"]
@@ -236,497 +217,229 @@ flowchart TB
     MCP --> Storage
 ```
 
-**Design decision:** the daemon binds only to `127.0.0.1` and requires a bearer token on all non-health routes. The intent classifier is rule-based - it uses zero LLM tokens and adds no latency to the hook path.
+## What It Solves / What It Doesn't
+
+**Solves:**
+
+- **Grep chains.** Claude doing 4-6 Grep/Read round-trips to understand code before answering. Reporecall eliminates this for code understanding questions - the context is already there.
+- **Token cost and API spend.** Lower prompt usage on repeated repo work. The exact reduction depends on the repo and query mix.
+- **Depth.** Grepping finds the function you asked about. It doesn't tell you who calls it, or what it calls. The call graph surfaces that automatically.
+- **Round-trip latency.** One hook injection (~5ms) replaces multiple sequential tool calls (seconds).
+- **Session amnesia.** Decisions, conventions, and working state persist across restarts as structured memories.
+
+**Doesn't solve:**
+
+- **Claude's context window.** Reporecall injects into the same window. Long conversations still hit the limit.
+- **Non-code tasks.** File edits, running tests, debugging runtime behavior - Claude still uses tools for those.
+- **Vague queries.** If there's no symbol or keyword to anchor on ("make this faster"), retrieval is weak.
+- **Type-resolved accuracy.** The call graph is name-based, not type-resolved. Two unrelated functions with the same name can produce false edges.
+
+## Supported Languages
+
+22 languages: TypeScript, TSX, JavaScript, Python, Go, Rust, Java, Ruby, C, C++, C#, PHP, Swift, Kotlin, Scala, Zig, Bash, Lua, HTML, Vue, CSS, TOML
+
+The scanner also indexes fallback file types by default: `.json`, `.md`, `.sql`, `.svelte` (as file-level chunks).
 
 ## Commands
 
-| Command                      | Purpose                                                           |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `reporecall init`            | create `.memory/`, Claude hook config, and CLAUDE.md instructions |
-| `reporecall index`           | run one-shot indexing                                             |
-| `reporecall search <query>`  | search the index directly                                         |
-| `reporecall serve`           | start daemon, watcher, and HTTP hook server                       |
-| `reporecall stats`           | show index and latency stats                                      |
-| `reporecall graph <name>`    | show callers/callees for a symbol                                 |
-| `reporecall conventions`     | show detected coding conventions                                  |
-| `reporecall explain <query>` | show route decision, seed, and retrieved context for a query      |
-| `reporecall mcp`             | start MCP server on stdio                                         |
-| `reporecall doctor`          | diagnose common local setup problems                              |
+| Command                      | Description                                                                |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `reporecall init`            | Initialize Reporecall in a project (creates `.memory/`, hooks, MCP config) |
+| `reporecall index`           | Index or re-index the codebase                                             |
+| `reporecall search <query>`  | Search the index directly                                                  |
+| `reporecall serve`           | Start daemon, watcher, and HTTP hook server                                |
+| `reporecall stats`           | Display index and latency statistics                                       |
+| `reporecall graph <name>`    | Show callers/callees for a symbol                                          |
+| `reporecall conventions`     | Show detected coding conventions                                           |
+| `reporecall explain <query>` | Show route decision, seed, and retrieved context                           |
+| `reporecall mcp`             | Start MCP server on stdio                                                  |
+| `reporecall doctor`          | Diagnose common setup problems                                             |
 
-Important options:
-
-- `--project <path>` on all main commands
-- `reporecall search --limit <n>`
-- `reporecall search --budget [tokens]` (omit value for auto)
-- `reporecall search --max-chunks <n>`
-- `reporecall serve --port <n>`
-- `reporecall serve --mcp`
-- `reporecall serve --max-chunks <n>`
-- `reporecall serve --debug`
-- `reporecall graph --callers | --callees | --both`
-- `reporecall conventions --json`
-- `reporecall conventions --refresh`
-- `reporecall explain --json`
-- `reporecall init --embedding-provider local|ollama|openai|keyword`
-- `reporecall init --autostart` for macOS launch-agent setup
-
-## How It Works
-
-### Indexing
-
-```mermaid
-flowchart TD
-    FS["File Scanner<br/>(extensions +<br/>ignore rules)"]
-    MC{"Merkle check<br/>(xxHash64<br/>per file)"}
-    Skip["skip - no change"]
-    TS["Tree-sitter parser<br/>(22-language<br/>WASM grammars)"]
-    Chunks["AST Chunks<br/>fn · class · method<br/>interface · enum · export<br/>↳ file-level fallback<br/>if no nodes"]
-    CE["Call Edge extraction<br/>source_chunk →<br/>target_name"]
-    IA["Import analysis"]
-    Embed{"Embedding"}
-    NullEmbed["NullEmbedder<br/>(keyword-only<br/>mode)"]
-    ONNX["all-MiniLM-L6-v2<br/>384-dim q8 ONNX<br/>~10ms warm inference"]
-    Write["Parallel write"]
-    FTS5["fts.db - FTS5<br/>Porter stemmer +<br/>camelCase splitting"]
-    LanceDB["lance/ - LanceDB<br/>vector store"]
-    MetaDB["metadata.db<br/>chunks · call graph<br/>· stats"]
-    Watch["File Watcher<br/>(chokidar,<br/>debounce 2s)"]
-
-    FS --> MC
-    MC -->|"unchanged"| Skip
-    MC -->|"changed"| TS
-    TS --> Chunks --> CE --> IA --> Embed
-    Embed -->|"keyword provider"| NullEmbed
-    Embed -->|"local/ollama/openai"| ONNX
-    NullEmbed & ONNX --> Write
-    Write --> FTS5 & LanceDB & MetaDB
-    Watch -->|"file saved"| FS
-```
-
-**Design decision:** xxHash64 per-file Merkle tracking gives O(1) change detection so the watcher never re-parses unchanged files. Tree-sitter WASM grammars are deterministic and safe for untrusted files with no runtime language-server dependency. `all-MiniLM-L6-v2` at 384 dimensions runs locally in-process at ~10 ms warm - 768-dim models give marginal quality gain at 2× compute. `keyword` mode (NullEmbedder) skips vectors entirely, useful for CI, air-gapped, or resource-constrained environments. FTS5 lives in a separate file from `metadata.db` so the two can recover from corruption independently; Porter stemmer plus camelCase identifier splitting lets `validateToken` match on `validate` and `token`.
-
-The indexing pipeline does this:
-
-1. scan files using configured extensions and ignore rules
-2. compare file state against the Merkle store
-3. parse source files with tree-sitter
-4. extract chunks such as functions, methods, classes, interfaces, enums, exports, or language-specific equivalents
-5. extract call edges
-6. embed chunks unless `embeddingProvider` is `keyword`
-7. store results in local databases
-8. analyze conventions and stats
-
-Files with no matching extractable AST nodes fall back to a file-level chunk so they can still be retrieved.
-
-### Storage
-
-The engine stores data locally in `.memory/`:
-
-- `metadata.db`: chunk metadata, file tracking, call graph edges, conventions, stats
-- `fts.db`: FTS5 keyword index
-- `lance/`: vector storage when embeddings are enabled
-- `merkle.json`: incremental change tracking
-
-### Retrieval
-
-#### Route Decision
-
-Every hook query passes through a rule-based classifier before any storage is touched.
-
-```mermaid
-flowchart TD
-    Q["Query"]
-    San["sanitizeQuery()<br/>strip code blocks +<br/>inline spans"]
-    Empty{"empty or<br/>too short?"}
-    NonCode{"NON_CODE_PATTERNS?<br/>greetings · meta-AI · chat"}
-    Nav{"NAVIGATION_PATTERNS?<br/>how/why/trace/debug/<br/>flow/arch/who calls"}
-    SK["SKIP<br/>no retrieval"]
-    R0["R0 - Fast Path<br/>hybrid search"]
-    Seed["resolveSeeds()<br/>PascalCase/camelCase<br/>extraction → FTS<br/>confidence 0–1"]
-    LowConf{"confidence<br/>< 0.55?"}
-    R2["R2 - Deep Path<br/>broad semantic search"]
-    R1check{"tree nodeCount ≤ 1<br/>or empty flow<br/>context?"}
-    R1["R1 - Flow Path ✓<br/>call-tree traversal"]
-
-    Q --> San --> Empty
-    Empty -->|"yes"| SK
-    Empty -->|"no"| NonCode
-    NonCode -->|"yes"| SK
-    NonCode -->|"no"| Nav
-    Nav -->|"no"| R0
-    Nav -->|"yes"| Seed
-    Seed -->|"no viable seed"| R2
-    Seed --> LowConf
-    LowConf -->|"yes"| R2
-    LowConf -->|"no"| R1check
-    R1check -->|"yes - degrade"| R2
-    R1check -->|"no"| R1
-```
-
-**Design decision:** the classifier uses zero LLM tokens - rule matching adds under 1 ms to the hook path. The default assumption is `isCodeQuery = true`; a false-positive skip (missing relevant context) is far worse than over-retrieving. The 0.55 confidence threshold means ambiguous seeds (common words that match many symbols) fall to R2 broad search rather than producing a wrong call tree.
-
-### Understanding the Three Search Modes
-
-Reporecall automatically chooses the best search strategy for your question:
-
-**R0 — Fast Mode (Hybrid Search)**
-
-- Use when: Looking for something specific by name or exact term
-- Example: "What does validateEmail do?"
-- How it works: Searches both exact keywords AND semantic meaning simultaneously
-- Result: ~10ms response time
-
-**R1 — Flow Mode (Call Tree Traversal)**
-
-- Use when: Understanding how a feature works end-to-end
-- Example: "Walk me through the payment flow" or "Help me debug this checkout"
-- How it works: Traces which functions call which other functions (bidirectional)
-- Result: Shows complete call chain with context
-
-**R2 — Deep Search (Semantic)**
-
-- Use when: Looking for related code across the codebase by concept
-- Example: "Find all error handling" or "Show me authentication patterns"
-- How it works: Searches by meaning, not just keywords
-- Result: Finds related code even if names don't match
-
-#### Concept Bundles _(v0.2.0)_
-
-For broad architectural questions like "what is the storage layer?" or "how does the AST pipeline work?", Reporecall uses **concept bundles** — predefined groups of symbols that represent a subsystem. When a query matches a bundle's pattern, the engine short-circuits to the relevant symbols without relying on keyword matching alone.
-
-Default bundles (8):
-
-| Kind               | Pattern Example                                     | Symbols                                                            |
-| ------------------ | --------------------------------------------------- | ------------------------------------------------------------------ |
-| `ast`              | "ast", "tree-sitter"                                | `initTreeSitter`, `chunkFileWithCalls`, `walkForExtractables`, ... |
-| `call_graph`       | "call graph", "who calls", "callers"                | `extractCallEdges`, `buildStackTree`, ...                          |
-| `search_pipeline`  | "search pipeline", "hybrid search", "query routing" | `classifyIntent`, `deriveRoute`, `searchWithContext`, ...          |
-| `storage`          | "storage layer", "data stores"                      | `MetadataStore`, `FTSStore`, `ChunkStore`, ...                     |
-| `daemon`           | "daemon", "http server"                             | `createDaemonServer`, `sanitizeQuery`, `IndexScheduler`, ...       |
-| `embedding`        | "embedding provider", "embedder"                    | `LocalEmbedder`, `NullEmbedder`, `OllamaEmbedder`, ...             |
-| `cli`              | "cli", "command line"                               | `createCLI`, `initCommand`, `serveCommand`, ...                    |
-| `context_assembly` | "token budget", "context assembly"                  | `assembleContext`, `assembleConceptContext`, `countTokens`, ...    |
-
-Bundles are configurable via `.memory/config.json` and validated for ReDoS safety.
-
-#### R0 - Fast Path: Hybrid Search & Context Assembly
-
-```mermaid
-flowchart LR
-    Q2["Query"]
-    FTS5S["FTS5 keyword search<br/>phrase → AND →<br/>OR fallback"]
-    VEC["Vector search<br/>cosine ANN<br/>(LanceDB)"]
-    RRF["Reciprocal Rank<br/>Fusion<br/>1/(k+rank), k=60"]
-    Adj["Score adjustments<br/>impl +50% · test penalty<br/>recency 90d half-life<br/>active-file +50%<br/>query-term match +30%/term<br/>length penalty >80 lines"]
-    Floor["Score floor filter<br/>≥ 55% of top score"]
-    Budget["Token budget<br/>assembly<br/>tiktoken gpt-4o<br/>counting<br/>auto-scaled budget"]
-    Ctx["Assembled context<br/>markdown code blocks<br/>+ Direct Facts section"]
-
-    Q2 --> FTS5S & VEC
-    FTS5S & VEC --> RRF --> Adj --> Floor --> Budget --> Ctx
-```
-
-**Design decision:** RRF fuses BM25 (FTS5) and cosine-similarity (LanceDB) scores without normalization - the two score spaces are incomparable, but rank positions are. k=60 follows the established RRF literature default. A length penalty demotes chunks over 80 lines (80-line chunk = 1.0x, 150 lines = 0.59x, 300 lines = 0.32x) to prevent large chunks from dominating the token budget. The 55% score floor prevents low-signal noise chunks from bloating context with irrelevant code.
-
-#### R1 - Flow Path: Bidirectional Call Tree
-
-```mermaid
-flowchart LR
-    Seed2["Seed symbol<br/>best-matched<br/>(name · file · kind)"]
-    Up["Up-tree BFS<br/>callers of seed<br/>callers of callers<br/>maxDepth=2<br/>maxBranchFactor=3"]
-    Down["Down-tree BFS<br/>callees of seed<br/>callees of callees<br/>maxDepth=2<br/>maxBranchFactor=3"]
-    ImpFallback["Import-graph fallback<br/>if call graph<br/>has no edges"]
-    Bundle["Flow Bundle<br/>assembly<br/>callers depth-desc →<br/>seed → callees<br/>depth-asc →<br/>token budget trim"]
-    Cover{"nodeCount ≤ 1<br/>or empty<br/>context?"}
-    R2D["degrade to R2"]
-    R1Out["R1 context ✓"]
-
-    Seed2 --> Up & Down
-    Up & Down -->|"no call edges"| ImpFallback
-    Up & Down & ImpFallback --> Bundle --> Cover
-    Cover -->|"yes"| R2D
-    Cover -->|"no"| R1Out
-```
-
-**Design decision:** call graph edges are extracted from static AST - no runtime execution needed, no language server per language. Full data-flow analysis would require a per-language type server, which is too heavyweight. Name-based edges are sufficient for most flow, debug, and architecture questions. The import-graph fallback ensures a useful tree even for files where call extraction found no edges.
-
-The search pipeline is:
-
-1. keyword search through FTS5
-2. vector search when embeddings are enabled
-3. reciprocal-rank fusion with recency weighting
-4. code/test/doc/path-aware score adjustment
-5. optional graph expansion
-6. optional sibling expansion
-7. optional reranking
-8. context assembly under a token budget
-
-Hook-oriented retrieval enables graph expansion (top 5 results, `graphDiscountFactor` applied) but disables sibling expansion and reranking for prompt-context injection, then prioritizes authoritative implementation chunks before assembling context.
-
-### Hooks
-
-The daemon serves:
-
-- `POST /hooks/session-start`
-- `POST /hooks/prompt-context`
-- `GET /health`
-- `GET /ready`
-- `GET /metrics` — uptime, request counts, error counts, latency summaries, heap/RSS/event-loop-lag
-- `GET /status` — index statistics and last-indexed timestamp
-
-Hook responses use `hookSpecificOutput`, not a raw top-level `additionalContext` payload.
-
-Session start injects project conventions and memory-engine instructions. Prompt submit injects targeted code context for the current query.
-
-### MCP
-
-The current MCP tools are:
-
-- `search_code` - hybrid search returning ranked code chunks
-- `index_codebase` - trigger a full or incremental index
-- `get_stats` - index counts, latency stats, and storage sizes
-- `clear_index` - reset on-disk stores and Merkle state
-- `find_callers` - callers of a named symbol
-- `find_callees` - callees of a named symbol
-- `resolve_seed` - resolve a query to a best-matched seed symbol _(v0.2.0)_
-- `build_stack_tree` - build a bidirectional call tree from a seed _(v0.2.0)_
-- `get_imports` - import edges for a file _(v0.2.0)_
-- `get_symbol` - fetch a specific chunk by symbol name or ID _(v0.2.0)_
-- `explain_flow` - assemble a flow-oriented context bundle (R1 path) _(v0.2.0)_
-
-These names are authoritative for the current implementation.
+Key options: `--project <path>`, `--debug`, `--port <n>`, `--mcp`, `--embedding-provider local|ollama|openai|keyword`, `--autostart` (macOS launch agent).
 
 ## Configuration
 
 Config lives in `.memory/config.json`. All fields are optional.
 
-| Field                   |                           Default | Description                                    |
-| ----------------------- | --------------------------------: | ---------------------------------------------- |
-| `embeddingProvider`     |                         `"local"` | `local`, `ollama`, `openai`, or `keyword`      |
-| `embeddingModel`        |       `"Xenova/all-MiniLM-L6-v2"` | embedding model name                           |
-| `embeddingDimensions`   |                             `384` | vector dimensions                              |
-| `ollamaUrl`             |        `"http://localhost:11434"` | Ollama base URL                                |
-| `contextBudget`         |                               `0` | prompt-context token budget (`0` = auto-scale) |
-| `maxContextChunks`      |                               `0` | dynamic cap based on token budget (`0` = auto) |
-| `sessionBudget`         |                            `2000` | session-start token budget                     |
-| `searchWeights.vector`  |                             `0.5` | vector weight                                  |
-| `searchWeights.keyword` |                             `0.3` | keyword weight                                 |
-| `searchWeights.recency` |                             `0.2` | recency weight                                 |
-| `batchSize`             |                              `32` | embedding batch size                           |
-| `maxFileSize`           |                          `102400` | skip larger files                              |
-| `port`                  |                           `37222` | daemon port                                    |
-| `debounceMs`            |                            `2000` | watcher debounce                               |
-| `rrfK`                  |                              `60` | RRF constant                                   |
-| `graphExpansion`        |                            `true` | enable graph expansion                         |
-| `graphDiscountFactor`   |                             `0.6` | graph expansion discount                       |
-| `siblingExpansion`      |                            `true` | enable sibling expansion                       |
-| `siblingDiscountFactor` |                             `0.4` | sibling expansion discount                     |
-| `reranking`             |                           `false` | enable local reranking                         |
-| `rerankingModel`        | `"Xenova/ms-marco-MiniLM-L-6-v2"` | reranker model                                 |
-| `rerankTopK`            |                              `25` | rerank candidate count                         |
+### Core Settings
 
-## Best Practices
+| Field                 | Type   | Default                     | Description                               |
+| --------------------- | ------ | --------------------------- | ----------------------------------------- |
+| `projectRoot`         | string | (auto)                      | Root directory of the project             |
+| `dataDir`             | string | `.memory`                   | Directory for indexes and data            |
+| `port`                | number | 37222                       | HTTP port for daemon                      |
+| `debounceMs`          | number | 2000                        | Debounce delay for file watcher           |
+| `embeddingProvider`   | string | `"local"`                   | `local`, `ollama`, `openai`, or `keyword` |
+| `embeddingModel`      | string | `"Xenova/all-MiniLM-L6-v2"` | Model for local/Ollama embeddings         |
+| `embeddingDimensions` | number | 384                         | Dimension of embedding vectors            |
+| `ollamaUrl`           | string | `"http://localhost:11434"`  | URL for Ollama service (localhost only)   |
 
-### Keep the index warm
+### Search & Retrieval
 
-Run `reporecall serve` during development so the watcher keeps the index current. Use `reporecall index` for CI or one-shot refreshes.
+| Field                   | Type    | Default                           | Description                              |
+| ----------------------- | ------- | --------------------------------- | ---------------------------------------- |
+| `contextBudget`         | number  | 0 (auto)                          | Token budget for context (`0` = dynamic) |
+| `maxContextChunks`      | number  | 0 (auto)                          | Max chunks in context (`0` = auto)       |
+| `sessionBudget`         | number  | 2000                              | Token budget per session                 |
+| `searchWeights.vector`  | number  | 0.5                               | Weight for vector similarity             |
+| `searchWeights.keyword` | number  | 0.3                               | Weight for keyword matching              |
+| `searchWeights.recency` | number  | 0.2                               | Weight for recency boost                 |
+| `rrfK`                  | number  | 60                                | Reciprocal Rank Fusion parameter         |
+| `graphExpansion`        | boolean | true                              | Enable call graph expansion              |
+| `graphDiscountFactor`   | number  | 0.6                               | Score discount for expanded nodes        |
+| `siblingExpansion`      | boolean | true                              | Include sibling functions                |
+| `siblingDiscountFactor` | number  | 0.4                               | Score discount for siblings              |
+| `reranking`             | boolean | false                             | Enable cross-encoder reranking           |
+| `rerankingModel`        | string  | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Reranking model                          |
+| `rerankTopK`            | number  | 25                                | Rerank top K results                     |
 
-### Scope the repo deliberately
+### Scoring & File Scanning
 
-Use `.memoryignore` to exclude generated code, vendored code, fixtures, or large irrelevant files. The scanner already respects `.gitignore`, `.memoryignore`, and built-in ignore patterns.
+| Field                    | Type     | Default                  | Description                         |
+| ------------------------ | -------- | ------------------------ | ----------------------------------- |
+| `batchSize`              | number   | 32                       | Chunk batch size for embedding      |
+| `maxFileSize`            | number   | 102400                   | Skip files larger than 100KB        |
+| `extensions`             | string[] | 22+ types                | File extensions to index            |
+| `ignorePatterns`         | string[] | node_modules, .git, etc. | Patterns to exclude from indexing   |
+| `implementationPaths`    | string[] | src/, lib/, bin/         | Paths prioritized for code analysis |
+| `codeBoostFactor`        | number   | 1.5                      | Boost factor for code chunks        |
+| `testPenaltyFactor`      | number   | 0.3                      | Penalty for test files              |
+| `anonymousPenaltyFactor` | number   | 0.5                      | Penalty for anonymous functions     |
 
-### Prefer natural-language search queries
+### Memory
 
-Hybrid search works better on descriptive queries than short tokens. Keyword search handles exact identifiers; vector search helps with semantic and cross-cutting questions.
+| Field                          | Type     | Default                         | Description                           |
+| ------------------------------ | -------- | ------------------------------- | ------------------------------------- |
+| `memory`                       | boolean  | true                            | Enable memory layer                   |
+| `memoryBudget`                 | number   | 500                             | Token budget for memory context       |
+| `memoryDirs`                   | string[] | []                              | Additional memory directories to scan |
+| `memoryWatch`                  | boolean  | true                            | Watch memory dirs while daemon runs   |
+| `memoryCodeFloorRatio`         | number   | 0.8                             | Minimum code context ratio            |
+| `memoryHotBudget`              | number   | 120                             | Budget for rule memories              |
+| `memoryWorkingBudget`          | number   | 80                              | Budget for working memory             |
+| `memoryEpisodeBudget`          | number   | 150                             | Budget for episode summaries          |
+| `memoryArchiveDays`            | number   | 30                              | Archive episodes older than N days    |
+| `memoryCompactionHours`        | number   | 6                               | Compact indexes every N hours         |
+| `memoryWritableDir`            | string   | `".memory/reporecall-memories"` | Writable memory directory             |
+| `memoryAutoCreate`             | boolean  | true                            | Auto-generate working memory          |
+| `memoryFactPromotionThreshold` | number   | 3                               | Retrievals before promoting to fact   |
+| `memoryWorkingHistoryLimit`    | number   | 1                               | Working memory snapshots to retain    |
 
-### Treat call graph as name-based, not type-resolved
+### Hooks
 
-Caller/callee results are useful, but they are based on symbol names and extracted calls, not full type analysis.
+| Hook                    | Type               | Purpose                                                                               |
+| ----------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| `/hooks/session-start`  | `SessionStart`     | Injects codebase conventions and memory-engine instructions at session start          |
+| `/hooks/prompt-context` | `UserPromptSubmit` | Sanitizes query, classifies intent, routes to R0/R1/R2, injects code + memory context |
 
-### Use `keyword` mode when you want zero embedding dependencies
+Additional daemon endpoints: `GET /health`, `GET /ready`, `GET /status`, `GET /metrics`.
 
-`embeddingProvider: "keyword"` skips vectors entirely and still gives you local FTS-based retrieval.
+## Team Collaboration
 
-### Use `--debug` when validating hook behavior
+Reporecall uses a **three-tier configuration pattern** for teams:
 
-`reporecall serve --debug` logs hook requests, sanitized queries, retrieval counts, and context assembly details. Use it to verify that Claude actually received memory context.
+| Tier               | Location                             | Committed | Purpose                             |
+| ------------------ | ------------------------------------ | --------- | ----------------------------------- |
+| **Global**         | `~/.claude/settings.json`            | No        | Personal preferences (model, theme) |
+| **Project Shared** | `.claude/settings.json`, `.mcp.json` | Yes       | Team-wide hooks, MCP config         |
+| **Local**          | `.claude/settings.local.json`        | No        | Custom port, proxy, tokens          |
 
-### Keep claims disciplined
+```bash
+git clone <repo> && cd <repo>
+reporecall init    # generates .claude/settings.json + .mcp.json
+reporecall index   # build the local index
+```
 
-The live-repo benchmark (NDCG@10: 0.548, MRR: 0.777 in keyword mode) provides honest, community-standard numbers measured through the production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, and hook priority scoring). See the [Benchmark section](#benchmark) for full analysis.
+Hooks use `$CLAUDE_PROJECT_DIR` so they resolve correctly on any machine. Claude Code automatically merges local settings over shared settings. Each teammate runs `reporecall init` once after cloning.
 
-## Operational Notes
+## Privacy & Data
 
-### Security & Access Control
+Reporecall runs **entirely on your machine**:
 
-- The daemon binds only to `127.0.0.1` (localhost only, not accessible from network)
-- All non-health/readiness routes require bearer token authentication (timing-safe comparison)
-- API keys should come from environment variables, not committed to config files
-- Intent classifier runs rule-based (zero LLM tokens), adding <1ms to hook latency
-- Request body size capped at 1MB with stream destruction on overflow
-- Rate limiting: sliding window per client IP (100 req/10s for authenticated endpoints, 1000/10s for health/ready probes)
-- Request timeouts: 30s for hook endpoints, 10s for probe endpoints
-- User-supplied regex patterns validated with `safe-regex2` to prevent ReDoS
-- `ollamaUrl` restricted to localhost to prevent SSRF
-- All SQL queries use parameterized statements (no string concatenation of user input)
-- Path traversal prevention on file operations and MCP tool inputs
-- Symlink escape detection prevents indexing files outside the project root
-
-### Data Management
-
-- `clear_index` resets on-disk stores and Merkle state
-- Stale-store recovery forces full rebuild when Merkle says “no changes” but stores are empty
-- `.memory/` folder contains all local data (metadata.db, fts.db, lance/, merkle.json)
-- Tree-sitter WASM parsers are deterministic and safe for untrusted files
-
-### Daemon Lifecycle
-
-- PID file locking prevents concurrent daemon instances
-- Stale PID detection: checks if the process is still alive before claiming a port conflict
-- Graceful shutdown on SIGTERM/SIGINT with 10-step ordered sequence:
-  1. Stop HTTP server (5s drain for in-flight requests)
-  2. Stop scheduler and drain pending indexing jobs
-  3. Stop file watcher
-  4. Close MCP server (if running)
-  5. Destroy metrics collector
-  6. Close all stores (FTS, metadata, vector — includes freeing tiktoken encoder)
-  7. Clean up SQLite WAL sidecar files
-  8. Release PID file lock
-  9. Remove token file
-  10. Flush pino logger
-- Force-exit timeout (10s) prevents indefinite hangs
-
-### Indexing Strategy
-
-- Merkle-based change detection (xxHash64 per file) with mtime pre-filtering: unchanged files are detected in O(1) via filesystem mtime without re-reading or re-hashing
-- Only unchanged files are skipped during incremental indexing
-- File watcher debounces for 2s to batch rapid saves
-- Embedding runs at ~10ms per batch (local ONNX model)
+- No external API calls during retrieval
+- No telemetry or data collection
+- No cloud dependency or uploads
+- All code index data stays local in `.memory/` (metadata.db, fts.db, lance/, merkle.json)
+- All memory files stay local in `.memory/reporecall-memories/` as plain markdown - readable, editable, deletable without tooling
+- Works offline after initial setup
 
 ## Benchmark
 
-### Overview
+Live benchmark on the Reporecall codebase (54 queries, keyword mode, full production pipeline):
 
-The benchmark measures production search quality on the Reporecall codebase itself using community-standard IR metrics with **graded relevance annotations** (0-3 scale, following CodeSearchNet/TREC conventions). 54 queries across 5 categories (exact_lookup, architecture, flow, debugging, meta), each with human-graded relevance judgments. It runs the full production pipeline (`handlePromptContextDetailed`) — the same code path users experience through the Claude Code hook.
+| Metric      | Overall | exact_lookup | flow  | architecture | debugging |
+| ----------- | ------- | ------------ | ----- | ------------ | --------- |
+| **NDCG@10** | 0.455   | 0.552        | 0.484 | 0.308        | 0.350     |
+| **MRR**     | 0.637   | 0.643        | 0.731 | 0.440        | 0.588     |
+| **Queries** | 54      | 14           | 18    | 7            | 8         |
 
-### How to run
+| Metric         | Value  |
+| -------------- | ------ |
+| Route accuracy | 87%    |
+| Median latency | 10.4ms |
+| Avg latency    | 13.3ms |
+| P95 latency    | 36.7ms |
 
-```bash
-npm run benchmark                                     # keyword mode (fast, ~1s)
-npm run benchmark -- --provider semantic              # with vector embeddings
-npm run benchmark -- --output results.json            # custom output path
-```
+7 meta queries (greetings, "what model are you", etc.) correctly routed to SKIP with zero retrieval.
 
-### Current results (keyword mode, v0.2.5)
-
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  Reporecall Live Benchmark (keyword, 54 queries)              ║
-╠═══════════════════════════════════════════════════════════════╣
-║  NDCG@10: 0.548    MRR: 0.777    MAP: 0.285                   ║
-║  P@5: 0.234  P@10: 0.117  R@5: 0.300  R@10: 0.300             ║
-╠═══════════════════════════════════════════════════════════════╣
-║  By Route        Count   NDCG@10   MRR                        ║
-║    R0             20      0.706    0.950                      ║
-║    R1             24      0.478    0.719                      ║
-║    skip            7       —        —                         ║
-║    R2              3      0.058    0.083                      ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Route accuracy: 81.5%  Avg latency: 4.79ms (P50: 3.69ms)     ║
-╚═══════════════════════════════════════════════════════════════╝
-```
-
-### What the numbers mean
-
-| Metric             | Value | What it measures                                      | Interpretation                                                  |
-| ------------------ | ----- | ----------------------------------------------------- | --------------------------------------------------------------- |
-| **NDCG@10**        | 0.548 | Ranking quality of top 10 results (0-1)               | Competitive (CodeSearchNet SOTA: 0.4–0.7)                       |
-| **MRR**            | 0.777 | How quickly the first relevant result appears (0-1)   | Strong — first relevant result typically at rank 1              |
-| **MAP**            | 0.278 | Average precision across all relevant documents (0-1) | Moderate — room for improvement in recall                       |
-| **Route accuracy** | 81.5% | Correct routing (skip/R0/R1/R2) classification        | Good — intent classifier works with zero LLM tokens             |
-| **P@5**            | 0.226 | Fraction of top 5 that are relevant                   | Solid — concept bundles and seed boosting surface relevant code |
-| **R@10**           | 0.291 | Fraction of all relevant chunks found in top 10       | Moderate — recall improves with semantic embeddings             |
-
-### What this tells us
-
-**R0 queries are strong** (NDCG@10: 0.706, MRR: 0.950) — direct lookups and concept queries benefit most from seed boosting, length penalty, and call graph expansion. The right symbol lands at rank 1 nearly every time.
-
-**R1 flow queries are solid** (NDCG@10: 0.443, MRR: 0.667) — flow tree assembly provides relevant call graph context, though sparse edges limit recall.
-
-**Architecture queries now work** (NDCG@10: 0.564, MRR: 0.750) — concept bundles map broad questions like "what is the storage layer?" directly to the relevant symbols without needing exact keyword matches.
-
-**Remaining gap:** Keyword mode still struggles with queries that have no symbol name anchors at all. Semantic embeddings should close this gap.
-
-**By category:**
-
-| Category     | Count | NDCG@10 | MRR   | Notes                                                                        |
-| ------------ | ----- | ------- | ----- | ---------------------------------------------------------------------------- |
-| exact_lookup | 14    | 0.753   | 0.929 | Strong — seed boosting surfaces the right symbol at rank 1                   |
-| architecture | 7     | 0.564   | 0.750 | Good — concept bundles short-circuit broad questions to relevant code        |
-| flow         | 18    | 0.438   | 0.722 | Good — flow tree assembly provides call graph context                        |
-| debugging    | 8     | 0.319   | 0.500 | Moderate — length penalty and test filtering improve signal                  |
-| meta         | 7     | —       | —     | Skip route validation — greetings, thanks, meta-AI queries correctly skipped |
-
-### What the benchmark does NOT measure
-
-- **Semantic mode quality**: These numbers are keyword-only. Vector embeddings should further improve queries where meaning matters more than exact terms.
-- **End-to-end helpfulness**: Whether Claude's answers are actually better with Reporecall context is not measured by IR metrics.
-
-### Methodology
-
-The benchmark:
-
-1. Indexes the Reporecall codebase from scratch (~125 files → ~630 chunks)
-2. Runs each query through the full production pipeline: `sanitizeQuery` → `classifyIntent` → `deriveRoute` → `resolveSeeds` → `handlePromptContextDetailed()` (with seed boosting, concept bundles, graph/sibling expansion, and hook priority scoring)
-3. Maps each result's chunk name to a human-annotated relevance grade (0-3)
-4. Computes standard IR metrics against the ideal ranking
-
-Annotations use the **0-3 graded relevance scale** from CodeSearchNet:
-
-- **3** = highly relevant (the exact function/class being asked about)
-- **2** = relevant (directly related code, e.g., a caller or type definition)
-- **1** = marginally relevant (tangentially related, might provide useful context)
-- **0** = not relevant (default for unannotated results)
-
-Chunk matching uses **symbol names** (not content hashes), disambiguated with `filePath:name` where names collide (e.g., `constructor` appears in many classes).
-
-Results are written to [benchmark-results.json](benchmark-results.json).
-
-## Development
-
-```bash
-npm install
-npm run build
-npm run dev
-npm test
-npm run lint
-npm run benchmark
-npm run smoke
-```
-
-### Smoke test
-
-`npm run smoke` runs `scripts/smoke-test.mjs` - an end-to-end test of all 10 CLI commands and 11 MCP tools against the current project's `.memory/` index. It exits 0 only when every check passes.
-
-Requirements before running:
-
-```bash
-npm run build                          # compile dist/
-node dist/memory.js index --project .  # populate .memory/ (if not already indexed)
-npm run smoke
-```
-
-### Benchmark
-
-See the [Benchmark section](#benchmark) for full methodology and results. Quick reference:
+Methodology: each query runs through the full production pipeline (`handlePromptContextDetailed` with seed boosting, concept bundles, graph expansion, and hook priority scoring). Results scored against human-graded relevance annotations (0-3 scale, CodeSearchNet/TREC conventions).
 
 ```bash
 npm run benchmark                              # keyword mode (~1s)
 npm run benchmark -- --provider semantic       # with vector embeddings
-npm run benchmark -- --output out.json         # custom output path
 ```
 
-To update relevance annotations after code changes:
+## Security & Operational Notes
+
+- **Local-only**: daemon binds to `127.0.0.1`, all data stays in `.memory/`, no telemetry, works offline.
+- **Auth**: bearer-token authentication on all non-health routes with timing-safe comparison. Rate limiting per client IP.
+- **Input safety**: parameterized SQL, path traversal prevention, symlink escape detection, ReDoS-safe regex validation, `ollamaUrl` restricted to localhost.
+- **`.memoryignore`**: exclude generated code, fixtures, or sensitive files from indexing (stacks with `.gitignore`).
+- **Daemon lifecycle**: PID file locking, stale PID detection, graceful 10-step shutdown on SIGTERM/SIGINT, force-exit timeout.
+- **File permissions**: token file and PID file created with restrictive permissions.
+
+## Best Practices
+
+**Keep the index warm.** Run `reporecall serve` during development so the watcher keeps the index current. Use `reporecall index` for CI or one-shot refreshes.
+
+**Scope the repo deliberately.** Use `.memoryignore` to exclude generated code, vendored code, or large irrelevant files.
+
+**Prefer natural-language queries.** Hybrid search works better on descriptive queries than short tokens.
+
+**Use `keyword` mode for zero embedding dependencies.** `embeddingProvider: "keyword"` skips vectors entirely.
+
+**Use `--debug` when validating hook behavior.** Logs hook requests, sanitized queries, retrieval counts, and context assembly details.
+
+**Compact memories periodically.** Run `reporecall memory compact` (or the `compact_memories` MCP tool) every few weeks to deduplicate, archive stale episodes, and promote high-confidence facts.
+
+**Review what's been stored.** Run `reporecall memory list` to audit accumulated memories. Memories are plain markdown in `.memory/reporecall-memories/` - edit or delete them directly.
+
+**Pin critical memories.** Set `pinned: true` in a memory's frontmatter to prevent it from being archived during compaction.
+
+## Cost & License
+
+- **Open source**: MIT license
+- **No ongoing costs**: One-time npm install
+- **No subscription**: Use indefinitely
+- **No API fees**: All processing local
+
+## Development
+
+```bash
+git clone https://github.com/nicholasgriffintn/reporecall.git
+cd reporecall
+npm install
+npm run build
+npm test                    # 618 tests across 45 files
+npm run benchmark           # keyword mode (~1s)
+npm run smoke               # end-to-end CLI + MCP tool verification
+```
+
+### Smoke Test
+
+`npm run smoke` runs an end-to-end test of all CLI commands and MCP tools against the current project's `.memory/` index. Requires `npm run build` and an existing index.
+
+### Updating Annotations
 
 ```bash
 npx tsx benchmark/annotate.ts --project .       # generates benchmark/annotations-draft.json

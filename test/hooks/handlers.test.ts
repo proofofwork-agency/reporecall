@@ -76,7 +76,7 @@ function makeMetadata(conventions?: any): any {
 }
 
 describe("handleSessionStart (3H)", () => {
-  it("should return assembled context from search", async () => {
+  it("should return conventions-only context (no code search)", async () => {
     const search = makeSearch("## src/app.ts\nfunction main() {}");
     const config = makeConfig();
 
@@ -85,8 +85,8 @@ describe("handleSessionStart (3H)", () => {
     expect(context).toHaveProperty("text");
     expect(context).toHaveProperty("tokenCount");
     expect(context).toHaveProperty("chunks");
-    expect(context.text).toContain("main");
-    expect(context.chunks.length).toBeGreaterThan(0);
+    expect(context.text).toContain("Reporecall");
+    expect(context.chunks).toHaveLength(0);
   });
 
   it("should prepend conventions summary when metadata with conventions is provided", async () => {
@@ -106,13 +106,13 @@ describe("handleSessionStart (3H)", () => {
 
     const context = await handleSessionStart(search, config, metadata);
 
-    // Conventions summary should be prepended to the context text
+    // Conventions summary should be present
     expect(context.text).toContain("Codebase Conventions");
     expect(context.text).toContain("camelCase");
     expect(context.text).toContain("PascalCase");
     expect(context.text).toContain("75%");
-    // Original search result text should still be present
-    expect(context.text).toContain("main");
+    // No code search results in session-start (lazy model)
+    expect(context.chunks).toHaveLength(0);
   });
 
   it("should return context without conventions block when metadata has no conventions", async () => {
@@ -122,9 +122,9 @@ describe("handleSessionStart (3H)", () => {
 
     const context = await handleSessionStart(search, config, metadata);
 
-    // No conventions section prepended
+    // No conventions section when metadata returns null
     expect(context.text).not.toContain("Codebase Conventions");
-    expect(context.text).toContain("main");
+    expect(context.text).toContain("Reporecall");
   });
 
   it("should return context without prepend when no metadata argument passed", async () => {
@@ -135,7 +135,7 @@ describe("handleSessionStart (3H)", () => {
     const context = await handleSessionStart(search, config);
 
     expect(context.text).not.toContain("Codebase Conventions");
-    expect(context.text).toContain("main");
+    expect(context.text).toContain("Reporecall");
   });
 });
 

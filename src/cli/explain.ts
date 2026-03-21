@@ -7,8 +7,11 @@ import { sanitizeQuery } from '../daemon/server.js'
 import { handlePromptContextDetailed } from '../hooks/prompt-context.js'
 import { IndexingPipeline } from '../indexer/pipeline.js'
 import { HybridSearch } from '../search/hybrid.js'
+import type { BroadSelectionDiagnostics } from '../search/hybrid.js'
 import { classifyIntent, deriveRoute, type RouteDecision } from '../search/intent.js'
 import { resolveSeeds, type SeedResult } from '../search/seed.js'
+import type { MemorySearch } from '../memory/search.js'
+import type { MemoryClass, MemoryRoute } from '../memory/types.js'
 
 function formatRoute(route: RouteDecision): string {
   switch (route) {
@@ -34,6 +37,10 @@ export interface ExplainResult {
     kind: string
     confidence: number
     reason: string
+    targetId?: string
+    targetKind?: string
+    resolvedAlias?: string
+    resolutionSource?: string
   } | null
   seedCandidates: Array<{
     name: string
@@ -41,9 +48,40 @@ export interface ExplainResult {
     kind: string
     confidence: number
     reason: string
+    targetId?: string
+    targetKind?: string
+    resolvedAlias?: string
+    resolutionSource?: string
   }>
+  resolvedTarget?: string
+  resolvedTargetKind?: string
+  resolvedAlias?: string
+  resolutionSource?: string
+  broadMode?: BroadSelectionDiagnostics['broadMode']
+  dominantFamily?: string
+  selectedFiles?: Array<{
+    filePath: string
+    selectionSource: string
+  }>
+  fallbackReason?: string
   tokensInjected: number
   chunksInjected: number
+  memoryTokensInjected?: number
+  memoriesInjected?: number
+  memoryNames?: string[]
+  memoryRoute?: MemoryRoute
+  memoryDropped?: Array<{
+    name: string
+    class: MemoryClass
+    reason: string
+  }>
+  memoryBudget?: {
+    total: number
+    used: number
+    remaining: number
+    codeFloorRatio: number
+    classBudgets: Record<MemoryClass, number>
+  }
   chunks: Array<{
     name: string
     kind: string
@@ -59,7 +97,8 @@ export async function resolveExplainResult(
   pipeline: Pick<
     IndexingPipeline,
     'getMetadataStore' | 'getFTSStore' | 'getEmbedder' | 'getVectorStore'
-  >
+  >,
+  memorySearchInstance?: MemorySearch
 ): Promise<ExplainResult> {
   const sanitized = sanitizeQuery(query)
 
@@ -125,10 +164,12 @@ export async function resolveExplainResult(
     metadata,
     fts,
     undefined,
-    metadata.getStats().totalChunks
+    metadata.getStats().totalChunks,
+    memorySearchInstance
   )
   route = promptContext.resolvedRoute
   const context = promptContext.context
+  const broadSelection = search.getLastBroadSelectionDiagnostics()
 
   const bestSeed = seedResult?.bestSeed ?? null
   const seedCandidates =
@@ -138,6 +179,10 @@ export async function resolveExplainResult(
       kind: seed.kind,
       confidence: Number(seed.confidence.toFixed(2)),
       reason: seed.reason,
+      targetId: seed.targetId,
+      targetKind: seed.targetKind,
+      resolvedAlias: seed.resolvedAlias,
+      resolutionSource: seed.resolutionSource,
     })) ?? []
 
   return {
@@ -151,11 +196,29 @@ export async function resolveExplainResult(
           kind: bestSeed.kind,
           confidence: Number(bestSeed.confidence.toFixed(2)),
           reason: bestSeed.reason,
+          targetId: bestSeed.targetId,
+          targetKind: bestSeed.targetKind,
+          resolvedAlias: bestSeed.resolvedAlias,
+          resolutionSource: bestSeed.resolutionSource,
         }
       : null,
     seedCandidates,
+    resolvedTarget: bestSeed?.targetId,
+    resolvedTargetKind: bestSeed?.targetKind,
+    resolvedAlias: bestSeed?.resolvedAlias,
+    resolutionSource: bestSeed?.resolutionSource,
+    broadMode: broadSelection?.broadMode,
+    dominantFamily: broadSelection?.dominantFamily,
+    selectedFiles: broadSelection?.selectedFiles,
+    fallbackReason: broadSelection?.fallbackReason,
     tokensInjected: context?.tokenCount ?? 0,
     chunksInjected: context?.chunks.length ?? 0,
+    memoryTokensInjected: promptContext.memoryTokenCount,
+    memoriesInjected: promptContext.memoryCount,
+    memoryNames: promptContext.memoryNames,
+    memoryRoute: promptContext.memoryRoute,
+    memoryDropped: promptContext.memoryDropped,
+    memoryBudget: promptContext.memoryBudget,
     chunks:
       context?.chunks.map((chunk) => ({
         name: chunk.name,
@@ -189,8 +252,23 @@ export function explainCommand(): Command {
 
       const pipeline = new IndexingPipeline(config)
 
+      // Set up memory search if memory index exists and memory is enabled
+      let memorySearchInstance: MemorySearch | undefined
+      let memStore: { close(): void } | undefined
+      const memoryDataDir = resolve(config.dataDir, 'memory-index')
+      if (config.memory && existsSync(resolve(memoryDataDir, 'memories.db'))) {
+        try {
+          const { MemoryStore } = await import('../storage/memory-store.js')
+          const { MemorySearch: MemorySearchClass } = await import('../memory/search.js')
+          memStore = new MemoryStore(memoryDataDir)
+          memorySearchInstance = new MemorySearchClass(memStore as InstanceType<typeof MemoryStore>)
+        } catch {
+          // Memory search unavailable — continue without it
+        }
+      }
+
       try {
-        const result = await resolveExplainResult(query, config, pipeline)
+        const result = await resolveExplainResult(query, config, pipeline, memorySearchInstance)
 
         if (options.json) {
           console.log(JSON.stringify(result, null, 2))
@@ -212,8 +290,25 @@ export function explainCommand(): Command {
         if (result.skipReason) {
           console.log(`Skip reason:    ${result.skipReason}`)
         }
+        console.log(`Memory route:   ${result.memoryRoute ?? 'M0'}`)
+        if (result.memoryBudget) {
+          console.log(
+            `Memory budget:  ${result.memoryBudget.used}/${result.memoryBudget.total} tokens ` +
+              `(floor ${Math.round(result.memoryBudget.codeFloorRatio * 100)}%)`
+          )
+        }
         console.log(`Tokens:         ${result.tokensInjected.toLocaleString()}`)
         console.log(`Chunks:         ${result.chunksInjected}`)
+        if (result.memoriesInjected && result.memoriesInjected > 0) {
+          console.log(`Memory tokens:  ${(result.memoryTokensInjected ?? 0).toLocaleString()}`)
+          console.log(`Memories:       ${result.memoriesInjected} (${result.memoryNames?.join(', ') ?? ''})`)
+          if (result.memoryDropped?.length) {
+            console.log('Memory dropped:')
+            for (const dropped of result.memoryDropped) {
+              console.log(`  - ${dropped.name} [${dropped.class}] (${dropped.reason})`)
+            }
+          }
+        }
 
         if (result.seedCandidates.length > 1) {
           console.log('')
@@ -242,6 +337,7 @@ export function explainCommand(): Command {
         console.error(`Explain failed: ${err}`)
         process.exit(1)
       } finally {
+        memStore?.close()
         await pipeline.closeAsync()
       }
     })

@@ -12,6 +12,14 @@ import { RotatingLog } from "./rotating-log.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
 import type { HookDebugRecord } from "../search/types.js";
+import type { MemoryRuntime } from "./memory/runtime.js";
+
+// --- Header helpers ---------------------------------------------------------
+
+/** Strip non-printable-ASCII chars so setHeader never throws on user content. */
+function safeHeaderValue(value: string): string {
+  return value.replace(/[^\x20-\x7E]/g, "?");
+}
 
 // --- Rate limiter -----------------------------------------------------------
 // Sliding-window, in-memory, per client IP. No external dependencies.
@@ -90,10 +98,31 @@ function looksLikeCodeLine(trimmed: string): boolean {
 }
 
 export function sanitizeQuery(raw: string): string {
+  // 0. Strip Claude Code system-injected XML blocks that leak into hook payloads.
+  //    These contain task notifications, system reminders, and other non-user content.
+  const withoutSystemTags = raw.replace(
+    /<(task-notification|system-reminder|tool-result|antml:[a-z_]+)\b[\s\S]*?<\/\1>/g,
+    " "
+  );
+
+  // 0b. Strip non-XML system boilerplate lines that Claude Code injects outside
+  //     of XML tags (e.g. task-output read instructions, temp file paths).
+  const withoutBoilerplate = withoutSystemTags
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      // "Read the output file to retrieve the result: /private/tmp/..."
+      if (/^Read the output file to retrieve the result:/i.test(t)) return false;
+      // Bare temp-dir file paths: /private/tmp/..., /var/folders/..., /tmp/...
+      if (/^\/(?:private\/tmp|var\/folders|tmp)\/\S+$/.test(t)) return false;
+      return true;
+    })
+    .join("\n");
+
   // 1. Strip backtick-fenced code blocks (``` ... ```) which may contain
   //    multi-line code embedded in an otherwise natural-language prompt.
   //    This handles both ```lang\n...\n``` and bare ```\n...\n```.
-  const withoutFencedBlocks = raw.replace(/```[\s\S]*?```/g, " ");
+  const withoutFencedBlocks = withoutBoilerplate.replace(/```[\s\S]*?```/g, " ");
 
   // 2. Strip inline code spans (`...`) that may contain code fragments
   const withoutInlineCode = withoutFencedBlocks.replace(/`[^`]*`/g, " ");
@@ -218,6 +247,8 @@ export interface DaemonServerOptions {
   ftsInitialized?: boolean;
   debugMode?: boolean;
   ftsStore?: import("../storage/fts-store.js").FTSStore;
+  memorySearch?: import("../memory/search.js").MemorySearch;
+  memoryRuntime?: MemoryRuntime;
 }
 
 export function createDaemonServer(
@@ -425,12 +456,12 @@ export function createDaemonServer(
           }
 
           if (debugMode) {
-            res.setHeader("X-Memory-Debug", JSON.stringify({
+            res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
               requestId,
               chunks: context.chunks.length,
               tokens: context.tokenCount,
               elapsedMs: elapsed,
-            }));
+            })));
           }
 
           json(res, {
@@ -491,7 +522,7 @@ export function createDaemonServer(
             };
             logHook(`[${requestId}] SKIP reason="empty query after sanitization" debug=${JSON.stringify(skipDebug)}`);
             if (debugMode) {
-              res.setHeader("X-Memory-Debug", JSON.stringify({
+              res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
                 route: "skip",
@@ -500,7 +531,7 @@ export function createDaemonServer(
                 elapsedMs: 0,
                 queryClassification: { isCodeQuery: false, needsNavigation: false },
                 skipReason: "empty query after sanitization",
-              }));
+              })));
             }
             json(res, {
               hookSpecificOutput: {
@@ -560,7 +591,7 @@ export function createDaemonServer(
             );
             metadata.incrementRouteStat("skip");
             if (debugMode) {
-              res.setHeader("X-Memory-Debug", JSON.stringify({
+              res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
                 route: "skip",
@@ -569,7 +600,7 @@ export function createDaemonServer(
                 elapsedMs: 0,
                 queryClassification: intent,
                 skipReason: intent.skipReason ?? "non-code query",
-              }));
+              })));
             }
             json(res, {
               hookSpecificOutput: {
@@ -604,7 +635,8 @@ export function createDaemonServer(
             liveOptions.ftsStore ? metadata : undefined,
             liveOptions.ftsStore,
             cachedSeedResult,
-            totalChunks
+            totalChunks,
+            liveOptions.memorySearch
           );
           route = promptContext.resolvedRoute;
           const context = promptContext.context;
@@ -626,7 +658,7 @@ export function createDaemonServer(
             };
             logHook(`[${requestId}] SKIP reason="no context returned" debug=${JSON.stringify(skipDebug)}`);
             if (debugMode) {
-              res.setHeader("X-Memory-Debug", JSON.stringify({
+              res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
                 route: "skip",
@@ -635,7 +667,7 @@ export function createDaemonServer(
                 elapsedMs: skipElapsed,
                 queryClassification: intent,
                 skipReason: "no context returned",
-              }));
+              })));
             }
             json(res, {
               hookSpecificOutput: {
@@ -669,10 +701,20 @@ export function createDaemonServer(
             latencyMs: elapsed,
             query: rawQuery,
             sanitizedQuery: query,
+            memoryRoute: promptContext.memoryRoute ?? "M0",
+            memoryTokenCount: promptContext.memoryTokenCount ?? 0,
+            memoryCount: promptContext.memoryCount ?? 0,
+            memoryNames: promptContext.memoryNames ?? [],
+            memoryDropped: promptContext.memoryDropped,
+            memoryBudgetUsed: promptContext.memoryBudget?.used ?? 0,
+            memoryBudgetTotal: promptContext.memoryBudget?.total ?? 0,
           };
 
+          const memTok = promptContext.memoryTokenCount ?? 0;
+          const codeTok = context.tokenCount - memTok;
+          const memPart = memTok > 0 ? ` + ${memTok} memory tokens (${promptContext.memoryCount} memories)` : "";
           logHook(
-            `[${requestId}] RESULT ${context.chunks.length} chunks (${context.tokenCount} tokens) in ${elapsed}ms route=${route}`
+            `[${requestId}] RESULT ${context.chunks.length} chunks (${codeTok} code tokens${memPart}) in ${elapsed}ms route=${route} memory=${promptContext.memoryRoute ?? "M0"}`
           );
 
           log.debug({
@@ -708,18 +750,69 @@ export function createDaemonServer(
           metadata.incrementStat("hooksFireCount");
           metadata.incrementStat("totalTokensInjected", context.tokenCount);
           metadata.incrementStat("chunksServed", context.chunks.length);
+          metadata.incrementStat(`memoryRoute_${promptContext.memoryRoute ?? "M0"}_count`);
+          if (promptContext.memoryTokenCount && promptContext.memoryTokenCount > 0) {
+            metadata.incrementStat("memoryTokensInjected", promptContext.memoryTokenCount);
+            metadata.incrementStat("memoriesInjected", promptContext.memoryCount ?? 0);
+            metadata.incrementStat("memoryHitCount");
+            if (promptContext.memoryBudget?.used) {
+              metadata.incrementStat("memoryBudgetUsed", promptContext.memoryBudget.used);
+            }
+            if (promptContext.memoryBudget?.total) {
+              metadata.incrementStat("memoryBudgetTotal", promptContext.memoryBudget.total);
+            }
+            const classTokens = promptContext.memoryClassTokens ?? {
+              rule: 0,
+              fact: 0,
+              episode: 0,
+              working: 0,
+            };
+            const classCounts = promptContext.memoryClassCounts ?? {
+              rule: 0,
+              fact: 0,
+              episode: 0,
+              working: 0,
+            };
+            for (const cls of ["rule", "fact", "episode", "working"] as const) {
+              if ((classTokens[cls] ?? 0) > 0) {
+                metadata.incrementStat(`memoryTokens_${cls}`, classTokens[cls]);
+              }
+              if ((classCounts[cls] ?? 0) > 0) {
+                metadata.incrementStat(`memoryCount_${cls}`, classCounts[cls]);
+              }
+            }
+          }
+
+          if (liveOptions.memoryRuntime) {
+            void liveOptions.memoryRuntime.observePrompt({
+              query,
+              codeRoute: route,
+              memoryRoute: promptContext.memoryRoute,
+              activeFiles,
+              topFiles: context.chunks.slice(0, 5).map((chunk) => chunk.filePath),
+              topSymbols: context.chunks.slice(0, 8).map((chunk) => chunk.name),
+              memoryHits: promptContext.memoryResults,
+            });
+          }
 
           if (debugMode) {
-            res.setHeader("X-Memory-Debug", JSON.stringify({
+            res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
               requestId,
               hookEventName: "UserPromptSubmit",
               route,
+              memoryRoute: promptContext.memoryRoute ?? "M0",
               chunks: context.chunks.length,
               tokens: context.tokenCount,
               elapsedMs: elapsed,
               queryClassification: intent,
               ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
-            }));
+              ...(promptContext.memoryTokenCount ? {
+                memoryTokens: promptContext.memoryTokenCount,
+                memoryCount: promptContext.memoryCount,
+                memoryNames: promptContext.memoryNames,
+                memoryDropped: promptContext.memoryDropped,
+              } : {}),
+            })));
           }
 
           json(res, {
@@ -735,6 +828,12 @@ export function createDaemonServer(
                 queryClassification: intent,
                 latencyMs: elapsed,
                 ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
+                ...(promptContext.memoryTokenCount ? {
+                  memoryTokensInjected: promptContext.memoryTokenCount,
+                  memoriesInjected: promptContext.memoryCount,
+                  memoryNames: promptContext.memoryNames,
+                  memoryRoute: promptContext.memoryRoute,
+                } : {}),
               },
             } : {}),
           });

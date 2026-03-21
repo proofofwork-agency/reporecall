@@ -136,7 +136,7 @@ async function main() {
 
   const draft = {
     corpus: "reporecall",
-    version: "0.2.5",
+    version: "0.3.0",
     annotatedAt: new Date().toISOString().split("T")[0],
     scale: {
       "0": "not relevant",

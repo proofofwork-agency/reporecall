@@ -705,6 +705,8 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
             parentName: undefined,
             indexedAt: c!.indexedAt,
             fileMtime: undefined,
+            startLine: c!.startLine,
+            endLine: c!.endLine,
           })),
       getChunksByIds: (ids: string[]) =>
         ids.map((id) => chunkMap.get(id)).filter(Boolean),
@@ -862,5 +864,714 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     expect(resultIds).toContain("method-a");
     // Sibling should appear via sibling expansion
     expect(resultIds).toContain("method-b");
+  });
+
+  it("builds a diverse broad-workflow bundle instead of collapsing to generic flow files", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const mockVectorStore = {
+      search: async () => [
+        { id: "generic-flow", score: 0.95 },
+        { id: "use-auth", score: 0.9 },
+        { id: "auth-callback", score: 0.88 },
+        { id: "auth-page", score: 0.86 },
+        { id: "auth-api", score: 0.84 },
+        { id: "shared-errors", score: 0.82 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 6,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "generic-flow", rank: -10 },
+        { id: "use-auth", rank: -9 },
+        { id: "auth-callback", rank: -8 },
+        { id: "auth-page", rank: -7 },
+        { id: "auth-api", rank: -6 },
+        { id: "shared-errors", rank: -5 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+    const chunks = [
+      { id: "generic-flow", filePath: "src/lib/flow/flowService.ts", name: "flowService", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function flowService() {}", language: "typescript", indexedAt: now },
+      { id: "auth-page", filePath: "src/pages/Auth.tsx", name: "AuthPage", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function AuthPage() {}", language: "typescript", indexedAt: now },
+      { id: "use-auth", filePath: "src/hooks/useAuth.tsx", name: "useAuth", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function useAuth() {}", language: "typescript", indexedAt: now },
+      { id: "auth-callback", filePath: "src/pages/AuthCallback.tsx", name: "AuthCallback", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function AuthCallback() {}", language: "typescript", indexedAt: now },
+      { id: "auth-api", filePath: "supabase/functions/auth/index.ts", name: "authenticateRequest", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function authenticateRequest() {}", language: "typescript", indexedAt: now },
+      { id: "shared-errors", filePath: "src/lib/errors/index.ts", name: "AuthError", kind: "class_declaration", startLine: 1, endLine: 20, content: "export class AuthError extends Error {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids
+          .map((id) => chunkMap.get(id))
+          .filter(Boolean)
+          .map((chunk) => ({
+            id: chunk!.id,
+            filePath: chunk!.filePath,
+            name: chunk!.name,
+            kind: chunk!.kind,
+            parentName: undefined,
+            startLine: chunk!.startLine,
+            endLine: chunk!.endLine,
+            indexedAt: chunk!.indexedAt,
+            fileMtime: undefined,
+          })),
+      getChunksByIds: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext(
+      "add logging to every step in the authentication flow",
+      4000
+    );
+    const names = context.chunks.map((chunk) => chunk.name);
+
+    expect(names).toContain("useAuth");
+    expect(names).toContain("AuthCallback");
+    expect(names).toContain("authenticateRequest");
+    expect(names).not.toEqual(["flowService"]);
+    expect(names.filter((name) => name === "flowService").length).toBeLessThanOrEqual(1);
+  });
+
+  it("uses typed file targets for broad workflow queries without a concept family", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "mcp-cli", filePath: "src/cli/mcp.ts", name: "mcpCommand", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function mcpCommand() {}", language: "typescript", indexedAt: now },
+      { id: "mcp-server", filePath: "src/daemon/mcp-server.ts", name: "createMCPServer", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function createMCPServer() {}", language: "typescript", indexedAt: now },
+      { id: "serve", filePath: "src/cli/serve.ts", name: "serveCommand", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function serveCommand() {}", language: "typescript", indexedAt: now },
+      { id: "logger", filePath: "src/core/logger.ts", name: "getLogger", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function getLogger() {}", language: "typescript", indexedAt: now },
+      { id: "prompt-context", filePath: "src/hooks/prompt-context.ts", name: "handlePromptContextDetailed", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function handlePromptContextDetailed() {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      resolveTargetAliases: (aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        if (!aliases.some((alias) => alias === "mcp" || alias === "stdio" || alias === "hook")) return [];
+        return [
+          {
+            target: { id: "file_module:src/cli/mcp.ts", kind: "file_module", canonicalName: "mcp", normalizedName: "mcp", filePath: "src/cli/mcp.ts", ownerChunkId: "mcp-cli", subsystem: "cli", confidence: 0.95 },
+            alias: "mcp",
+            normalizedAlias: "mcp",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/daemon/mcp-server.ts", kind: "file_module", canonicalName: "mcp-server", normalizedName: "mcp server", filePath: "src/daemon/mcp-server.ts", ownerChunkId: "mcp-server", subsystem: "daemon", confidence: 0.95 },
+            alias: "mcp",
+            normalizedAlias: "mcp",
+            source: "file_path",
+            weight: 0.94,
+          },
+          {
+            target: { id: "file_module:src/cli/serve.ts", kind: "file_module", canonicalName: "serve", normalizedName: "serve", filePath: "src/cli/serve.ts", ownerChunkId: "serve", subsystem: "cli", confidence: 0.9 },
+            alias: "stdio",
+            normalizedAlias: "stdio",
+            source: "derived",
+            weight: 0.82,
+          },
+        ];
+      },
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+    const mockVectorStore = {
+      search: async () => [
+        { id: "prompt-context", score: 0.98 },
+        { id: "logger", score: 0.92 },
+        { id: "mcp-server", score: 0.89 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 3,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "prompt-context", rank: -10 },
+        { id: "logger", rank: -9 },
+        { id: "mcp-server", rank: -7 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext(
+      "trace the full MCP request flow from stdio command to tool registration",
+      4000
+    );
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+
+    expect(paths).toContain("src/cli/mcp.ts");
+    expect(paths).toContain("src/daemon/mcp-server.ts");
+  });
+
+  it("keeps lifecycle workflow bundles centered on shutdown orchestration instead of storage-only file modules", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "pipeline-close", filePath: "src/indexer/pipeline.ts", name: "closeAsync", kind: "method_definition", startLine: 1, endLine: 20, content: "async closeAsync(): Promise<void> {}", language: "typescript", indexedAt: now, parentName: "IndexingPipeline" },
+      { id: "pipeline-stop", filePath: "src/indexer/pipeline.ts", name: "closeAndClearMerkle", kind: "method_definition", startLine: 21, endLine: 35, content: "async closeAndClearMerkle(): Promise<void> {}", language: "typescript", indexedAt: now, parentName: "IndexingPipeline" },
+      { id: "runtime-stop", filePath: "src/daemon/memory/runtime.ts", name: "stop", kind: "method_definition", startLine: 1, endLine: 20, content: "async stop(): Promise<void> {}", language: "typescript", indexedAt: now, parentName: "MemoryRuntime" },
+      { id: "serve-command", filePath: "src/cli/serve.ts", name: "serveCommand", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function serveCommand() {}", language: "typescript", indexedAt: now },
+      { id: "vector-store", filePath: "src/storage/vector-store.ts", name: "VectorStore", kind: "class_declaration", startLine: 1, endLine: 20, content: "export class VectorStore {}", language: "typescript", indexedAt: now },
+      { id: "fts-store", filePath: "src/storage/fts-store.ts", name: "FTSStore", kind: "class_declaration", startLine: 1, endLine: 20, content: "export class FTSStore {}", language: "typescript", indexedAt: now },
+      { id: "metadata-store", filePath: "src/storage/metadata-store.ts", name: "MetadataStore", kind: "class_declaration", startLine: 1, endLine: 20, content: "export class MetadataStore {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: chunk.parentName,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      findChunksByNames: (names: string[]) => chunks.filter((chunk) => names.includes(chunk.name)),
+      resolveTargetAliases: (aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        if (!aliases.includes("storage")) return [];
+        return [
+          {
+            target: { id: "file_module:src/storage/vector-store.ts", kind: "file_module", canonicalName: "VectorStore", normalizedName: "vector store", filePath: "src/storage/vector-store.ts", ownerChunkId: "vector-store", subsystem: "storage", confidence: 0.95 },
+            alias: "storage",
+            normalizedAlias: "storage",
+            source: "file_path",
+            weight: 0.98,
+          },
+          {
+            target: { id: "file_module:src/storage/fts-store.ts", kind: "file_module", canonicalName: "FTSStore", normalizedName: "fts store", filePath: "src/storage/fts-store.ts", ownerChunkId: "fts-store", subsystem: "storage", confidence: 0.95 },
+            alias: "storage",
+            normalizedAlias: "storage",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/storage/metadata-store.ts", kind: "file_module", canonicalName: "MetadataStore", normalizedName: "metadata store", filePath: "src/storage/metadata-store.ts", ownerChunkId: "metadata-store", subsystem: "storage", confidence: 0.95 },
+            alias: "storage",
+            normalizedAlias: "storage",
+            source: "file_path",
+            weight: 0.95,
+          },
+        ];
+      },
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+
+    const mockVectorStore = {
+      search: async () => [
+        { id: "vector-store", score: 0.98 },
+        { id: "fts-store", score: 0.97 },
+        { id: "metadata-store", score: 0.96 },
+        { id: "pipeline-close", score: 0.84 },
+        { id: "runtime-stop", score: 0.83 },
+        { id: "serve-command", score: 0.82 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 6,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "vector-store", rank: -10 },
+        { id: "fts-store", rank: -9 },
+        { id: "metadata-store", rank: -8 },
+        { id: "pipeline-close", rank: -7 },
+        { id: "runtime-stop", rank: -6 },
+        { id: "serve-command", rank: -5 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({
+        embeddingProvider: "local",
+        conceptBundles: [
+          {
+            kind: "lifecycle",
+            pattern: "\\bgraceful\\s+shutdown\\b|\\bshutdown\\b|\\bstartup\\b|\\bteardown\\b|\\bdrain\\b|\\bclose\\s+async\\b",
+            symbols: ["closeAsync", "stop", "serveCommand"],
+            maxChunks: 6,
+          },
+        ],
+      })
+    );
+
+    const context = await search.searchWithContext(
+      "How does the system handle graceful shutdown across all storage layers?",
+      4000
+    );
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+
+    expect(paths).toContain("src/indexer/pipeline.ts");
+    expect(paths).toContain("src/daemon/memory/runtime.ts");
+    expect(diagnostics?.broadMode).toBe("workflow");
+    expect(diagnostics?.dominantFamily).toBe("lifecycle");
+  });
+
+  it("keeps logging workflow bundles centered on hook flow before observability sidecars", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "prompt-context", filePath: "src/hooks/prompt-context.ts", name: "handlePromptContextDetailed", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function handlePromptContextDetailed() {}", language: "typescript", indexedAt: now },
+      { id: "session-start", filePath: "src/hooks/session-start.ts", name: "handleSessionStart", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function handleSessionStart() {}", language: "typescript", indexedAt: now },
+      { id: "daemon-server", filePath: "src/daemon/server.ts", name: "createDaemonServer", kind: "function_declaration", startLine: 1, endLine: 60, content: "export function createDaemonServer() {}", language: "typescript", indexedAt: now },
+      { id: "assembler", filePath: "src/search/context-assembler.ts", name: "assembleContext", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function assembleContext() {}", language: "typescript", indexedAt: now },
+      { id: "hybrid", filePath: "src/search/hybrid.ts", name: "prioritizeForHookContext", kind: "method_definition", startLine: 1, endLine: 40, content: "class HybridSearch { prioritizeForHookContext() {} }", language: "typescript", indexedAt: now },
+      { id: "metrics", filePath: "src/daemon/metrics.ts", name: "incrementRequest", kind: "method_definition", startLine: 1, endLine: 20, content: "incrementRequest(endpoint: string): void {}", language: "typescript", indexedAt: now, parentName: "MetricsCollector" },
+      { id: "logger", filePath: "src/core/logger.ts", name: "getLogger", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function getLogger() {}", language: "typescript", indexedAt: now },
+      { id: "types", filePath: "src/search/types.ts", name: "HookDebugRecord", kind: "interface_declaration", startLine: 1, endLine: 15, content: "export interface HookDebugRecord {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: chunk.parentName,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      findChunksByNames: (names: string[]) => chunks.filter((chunk) => names.includes(chunk.name)),
+      resolveTargetAliases: () => [],
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+
+    const mockVectorStore = {
+      search: async () => [
+        { id: "metrics", score: 0.98 },
+        { id: "logger", score: 0.96 },
+        { id: "prompt-context", score: 0.92 },
+        { id: "session-start", score: 0.9 },
+        { id: "daemon-server", score: 0.89 },
+        { id: "assembler", score: 0.87 },
+        { id: "hybrid", score: 0.86 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 7,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "metrics", rank: -10 },
+        { id: "logger", rank: -9 },
+        { id: "prompt-context", rank: -8 },
+        { id: "session-start", rank: -7 },
+        { id: "daemon-server", rank: -6 },
+        { id: "assembler", rank: -5 },
+        { id: "hybrid", rank: -4 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext(
+      "add logging to every step in the hook request flow",
+      4000
+    );
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+
+    expect(paths.slice(0, 3)).toContain("src/hooks/prompt-context.ts");
+    expect(paths.slice(0, 3)).toContain("src/hooks/session-start.ts");
+    expect(paths.slice(0, 4)).toContain("src/daemon/server.ts");
+  });
+
+  it("builds an inventory bundle from typed auth files instead of flow noise", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "auth-page", filePath: "src/pages/Auth.tsx", name: "Auth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function Auth() {}", language: "typescript", indexedAt: now },
+      { id: "use-auth", filePath: "src/hooks/useAuth.tsx", name: "useAuth", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function useAuth() {}", language: "typescript", indexedAt: now },
+      { id: "auth-callback", filePath: "src/pages/AuthCallback.tsx", name: "AuthCallback", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function AuthCallback() {}", language: "typescript", indexedAt: now },
+      { id: "auth-modal", filePath: "src/components/AuthModal.tsx", name: "AuthModal", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function AuthModal() {}", language: "typescript", indexedAt: now },
+      { id: "auth-utils", filePath: "supabase/functions/_shared/auth-utils.ts", name: "getUserFromAuth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function getUserFromAuth() {}", language: "typescript", indexedAt: now },
+      { id: "storage-noise", filePath: "src/hooks/useStorageAnalytics.ts", name: "useStorageAnalytics", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function useStorageAnalytics() {}", language: "typescript", indexedAt: now },
+      { id: "flow-noise", filePath: "src/lib/flow/typeGuards.ts", name: "isArtifact", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function isArtifact() {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      resolveTargetAliases: (_aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        return [
+          {
+            target: { id: "file_module:src/pages/Auth.tsx", kind: "file_module", canonicalName: "Auth", normalizedName: "auth", filePath: "src/pages/Auth.tsx", ownerChunkId: "auth-page", subsystem: "pages", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/hooks/useAuth.tsx", kind: "file_module", canonicalName: "useAuth", normalizedName: "use auth", filePath: "src/hooks/useAuth.tsx", ownerChunkId: "use-auth", subsystem: "hooks", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/pages/AuthCallback.tsx", kind: "file_module", canonicalName: "AuthCallback", normalizedName: "auth callback", filePath: "src/pages/AuthCallback.tsx", ownerChunkId: "auth-callback", subsystem: "pages", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.94,
+          },
+          {
+            target: { id: "file_module:src/components/AuthModal.tsx", kind: "file_module", canonicalName: "AuthModal", normalizedName: "auth modal", filePath: "src/components/AuthModal.tsx", ownerChunkId: "auth-modal", subsystem: "components", confidence: 0.9 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.9,
+          },
+        ];
+      },
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: (filePath: string) => {
+        if (filePath === "src/hooks/useAuth.tsx") {
+          return [
+            {
+              id: 1,
+              filePath,
+              importedName: "useStorageAnalytics",
+              sourceModule: "../hooks/useStorageAnalytics",
+              resolvedPath: "src/hooks/useStorageAnalytics.ts",
+              isDefault: false,
+              isNamespace: false,
+            },
+          ];
+        }
+        return [];
+      },
+      findImporterFiles: (resolvedPath: string) =>
+        resolvedPath === "src/hooks/useAuth.tsx" ? ["src/hooks/useStorageAnalytics.ts"] : [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+    const mockVectorStore = {
+      search: async () => [
+        { id: "flow-noise", score: 0.98 },
+        { id: "storage-noise", score: 0.94 },
+        { id: "auth-page", score: 0.85 },
+        { id: "use-auth", score: 0.84 },
+        { id: "auth-callback", score: 0.83 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 4,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "flow-noise", rank: -10 },
+        { id: "storage-noise", rank: -8 },
+        { id: "auth-page", rank: -7 },
+        { id: "use-auth", rank: -6 },
+        { id: "auth-callback", rank: -5 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("which files implement the authentication flow", 4000);
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+
+    expect(paths).toContain("src/pages/Auth.tsx");
+    expect(paths).toContain("src/hooks/useAuth.tsx");
+    expect(paths).toContain("src/pages/AuthCallback.tsx");
+    expect(paths).toContain("src/components/AuthModal.tsx");
+    expect(paths).not.toContain("src/lib/flow/typeGuards.ts");
+    expect(paths).not.toContain("src/hooks/useStorageAnalytics.ts");
+    expect(diagnostics?.broadMode).toBe("inventory");
+    expect(diagnostics?.dominantFamily).toBe("auth");
+  });
+
+  it("builds a search inventory bundle from typed file modules instead of prompt-context neighbors", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "hybrid", filePath: "src/search/hybrid.ts", name: "searchWithContext", kind: "method_definition", startLine: 1, endLine: 40, content: "class HybridSearch { searchWithContext() {} }", language: "typescript", indexedAt: now },
+      { id: "seed", filePath: "src/search/seed.ts", name: "resolveSeeds", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function resolveSeeds() {}", language: "typescript", indexedAt: now },
+      { id: "ranker", filePath: "src/search/ranker.ts", name: "reciprocalRankFusion", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function reciprocalRankFusion() {}", language: "typescript", indexedAt: now },
+      { id: "targets", filePath: "src/search/targets.ts", name: "resolveTargetsForQuery", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function resolveTargetsForQuery() {}", language: "typescript", indexedAt: now },
+      { id: "assembler", filePath: "src/search/context-assembler.ts", name: "assembleContext", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function assembleContext() {}", language: "typescript", indexedAt: now },
+      { id: "prompt-context", filePath: "src/hooks/prompt-context.ts", name: "handlePromptContextDetailed", kind: "function_declaration", startLine: 1, endLine: 40, content: "export function handlePromptContextDetailed() {}", language: "typescript", indexedAt: now },
+      { id: "memory-search", filePath: "src/memory/search.ts", name: "search", kind: "method_definition", startLine: 1, endLine: 40, content: "class MemorySearch { search() {} }", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const makeTargetHit = (id: string, filePath: string, canonicalName: string) => ({
+      target: { id: `file_module:${filePath}`, kind: "file_module", canonicalName, normalizedName: canonicalName.toLowerCase(), filePath, ownerChunkId: id, subsystem: "search", confidence: 0.94 },
+      alias: "search",
+      normalizedAlias: "search",
+      source: "file_path",
+      weight: 0.95,
+    });
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      resolveTargetAliases: (_aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        return [
+          makeTargetHit("hybrid", "src/search/hybrid.ts", "hybrid"),
+          makeTargetHit("seed", "src/search/seed.ts", "seed"),
+          makeTargetHit("ranker", "src/search/ranker.ts", "ranker"),
+          makeTargetHit("targets", "src/search/targets.ts", "targets"),
+          makeTargetHit("assembler", "src/search/context-assembler.ts", "context-assembler"),
+        ];
+      },
+      findTargetsBySubsystem: () => [
+        { id: "file_module:src/search/hybrid.ts", kind: "file_module", canonicalName: "hybrid", normalizedName: "hybrid", filePath: "src/search/hybrid.ts", ownerChunkId: "hybrid", subsystem: "search", confidence: 0.94 },
+        { id: "file_module:src/search/seed.ts", kind: "file_module", canonicalName: "seed", normalizedName: "seed", filePath: "src/search/seed.ts", ownerChunkId: "seed", subsystem: "search", confidence: 0.94 },
+        { id: "file_module:src/search/ranker.ts", kind: "file_module", canonicalName: "ranker", normalizedName: "ranker", filePath: "src/search/ranker.ts", ownerChunkId: "ranker", subsystem: "search", confidence: 0.94 },
+        { id: "file_module:src/search/targets.ts", kind: "file_module", canonicalName: "targets", normalizedName: "targets", filePath: "src/search/targets.ts", ownerChunkId: "targets", subsystem: "search", confidence: 0.94 },
+        { id: "file_module:src/search/context-assembler.ts", kind: "file_module", canonicalName: "context-assembler", normalizedName: "context assembler", filePath: "src/search/context-assembler.ts", ownerChunkId: "assembler", subsystem: "search", confidence: 0.94 },
+      ],
+      getImportsForFile: (filePath: string) => {
+        if (filePath === "src/search/hybrid.ts") {
+          return [
+            { id: 1, filePath, importedName: "resolveSeeds", sourceModule: "./seed", resolvedPath: "src/search/seed.ts", isDefault: false, isNamespace: false },
+            { id: 2, filePath, importedName: "reciprocalRankFusion", sourceModule: "./ranker", resolvedPath: "src/search/ranker.ts", isDefault: false, isNamespace: false },
+            { id: 3, filePath, importedName: "assembleContext", sourceModule: "./context-assembler", resolvedPath: "src/search/context-assembler.ts", isDefault: false, isNamespace: false },
+          ];
+        }
+        return [];
+      },
+      findImporterFiles: (resolvedPath: string) =>
+        resolvedPath.startsWith("src/search/") ? ["src/search/hybrid.ts"] : [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+    const mockVectorStore = {
+      search: async () => [
+        { id: "prompt-context", score: 0.99 },
+        { id: "memory-search", score: 0.97 },
+        { id: "hybrid", score: 0.89 },
+        { id: "seed", score: 0.88 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 4,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "prompt-context", rank: -10 },
+        { id: "memory-search", rank: -9 },
+        { id: "hybrid", rank: -6 },
+        { id: "seed", rank: -5 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("which files implement the full search pipeline", 4000);
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+
+    expect(paths).toContain("src/search/hybrid.ts");
+    expect(paths).toContain("src/search/seed.ts");
+    expect(paths).toContain("src/search/ranker.ts");
+    expect(paths).not.toContain("src/hooks/prompt-context.ts");
+    expect(paths).not.toContain("src/memory/search.ts");
+    expect(diagnostics?.broadMode).toBe("inventory");
+    expect(diagnostics?.dominantFamily).toBe("search");
   });
 });

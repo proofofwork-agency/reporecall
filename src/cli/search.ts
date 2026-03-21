@@ -1,9 +1,13 @@
 import { Command } from 'commander'
 import { resolve } from 'path'
+import { existsSync, mkdirSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { IndexingPipeline } from '../indexer/pipeline.js'
 import { HybridSearch } from '../search/hybrid.js'
+import { MemoryStore } from '../storage/memory-store.js'
+import { MemorySearch } from '../memory/search.js'
+import { assembleMemoryContext } from '../memory/context.js'
 
 export function searchCommand(): Command {
   return new Command('search')
@@ -15,6 +19,7 @@ export function searchCommand(): Command {
     .option('--limit <n>', 'Max results', '10')
     .option('--budget [tokens]', 'Token budget for context (omit value for auto)')
     .option('--max-chunks <n>', 'Max context chunks per query')
+    .option('--no-memory', 'Disable the memory layer')
     .action(async (query, options) => {
       const projectRoot = options.project
         ? resolve(options.project)
@@ -30,6 +35,20 @@ export function searchCommand(): Command {
         pipeline.getMetadataStore(),
         config
       )
+
+      // Initialize memory layer (only if enabled and index exists)
+      const memoryEnabled = config.memory && options.memory !== false
+      let memoryStore: MemoryStore | undefined
+      let memorySearchInstance: MemorySearch | undefined
+
+      if (memoryEnabled) {
+        const memoryDataDir = resolve(config.dataDir, 'memory-index')
+        mkdirSync(memoryDataDir, { recursive: true })
+        if (existsSync(resolve(memoryDataDir, 'memories.db'))) {
+          memoryStore = new MemoryStore(memoryDataDir)
+          memorySearchInstance = new MemorySearch(memoryStore)
+        }
+      }
 
       try {
         // If --budget is specified, use searchWithContext for token-budgeted results
@@ -49,9 +68,19 @@ export function searchCommand(): Command {
             const parsed = parseInt(options.maxChunks, 10)
             if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
           }
-          const context = await search.searchWithContext(query, budget)
 
-          if (context.chunks.length === 0) {
+          // Memory search first, then code gets remaining budget
+          const totalBudget = budget ?? config.contextBudget
+          const memoryBudget = config.memoryBudget ?? 500
+          const memResults = memorySearchInstance
+            ? await memorySearchInstance.search(query, { limit: 10 })
+            : []
+          const memContext = assembleMemoryContext(memResults, memoryBudget)
+          const codeBudget = totalBudget - (memContext.tokenCount || 0)
+
+          const context = await search.searchWithContext(query, codeBudget > 0 ? codeBudget : totalBudget)
+
+          if (context.chunks.length === 0 && memContext.memories.length === 0) {
             console.log('No results found.')
             console.log(
               'Make sure the index exists — run "reporecall index" first.'
@@ -59,10 +88,24 @@ export function searchCommand(): Command {
             return
           }
 
+          // Output memory context first, then code
+          if (memContext.text) {
+            console.log(memContext.text)
+            console.log('')
+          }
           console.log(context.text)
           console.log(
-            `\n(${context.chunks.length} chunks, ${context.tokenCount} tokens)`
+            `\n(${context.chunks.length} chunks, ${context.tokenCount} tokens` +
+            (memContext.memories.length > 0 ? `, ${memContext.memories.length} memories, ${memContext.tokenCount} mem tokens` : '') +
+            ')'
           )
+
+          // Record access for recalled memories
+          if (memorySearchInstance) {
+            for (const mem of memContext.memories) {
+              try { memorySearchInstance.recordAccess(mem.id); } catch { /* non-fatal */ }
+            }
+          }
           return
         }
 
@@ -99,6 +142,7 @@ export function searchCommand(): Command {
         console.error(`Search failed: ${err}`)
         process.exit(1)
       } finally {
+        memoryStore?.close()
         await pipeline.closeAsync()
       }
     })

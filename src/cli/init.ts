@@ -1,6 +1,7 @@
 import { Command } from 'commander'
 import { resolve, relative } from 'path'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { homedir } from 'os'
@@ -12,7 +13,7 @@ export function initCommand(): Command {
     )
     .option(
       '--autostart',
-      'Register macOS launch agent for auto-start on login'
+      'Register auto-start on login (macOS launchd / Windows Task Scheduler)'
     )
     .option(
       '--embedding-provider <provider>',
@@ -124,7 +125,7 @@ export function initCommand(): Command {
         // Uses $CLAUDE_PROJECT_DIR for portability — Claude Code provides this
         // automatically at hook runtime with the absolute path to the project root.
         const relPath = relative(projectRoot, tokenPath)
-        if (!/^[\w./\-]+$/.test(relPath)) {
+        if (!/^[\w./\\\-]+$/.test(relPath)) {
           console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
           process.exit(1)
         }
@@ -203,9 +204,15 @@ export function initCommand(): Command {
         mcpConfig.mcpServers = {}
       }
       const mcpServers = mcpConfig.mcpServers as Record<string, unknown>
+      // Resolve the CLI entry point from local node_modules if available,
+      // so .mcp.json works for all teammates regardless of install method.
+      const localBin = resolve(projectRoot, 'node_modules', '.bin', 'reporecall')
+      const cliEntry = existsSync(localBin)
+        ? localBin
+        : (process.argv[1] ? resolve(process.argv[1]) : 'reporecall')
       mcpServers.reporecall = {
-        command: 'npx',
-        args: ['reporecall', 'mcp', '--project', '.']
+        command: process.execPath,
+        args: [cliEntry, 'mcp', '--project', '.']
       }
       mcpConfig.mcpServers = mcpServers
 
@@ -242,13 +249,22 @@ ${MEMORY_MARKER}`
         console.log(`  Updated Reporecall instructions in CLAUDE.md`)
       }
 
-      // Auto-start with macOS launch agent
+      // Auto-start on login
       if (options.autostart) {
-        if (process.platform !== 'darwin') {
-          console.error('Error: --autostart is only supported on macOS')
+        if (process.platform === 'darwin') {
+          setupLaunchAgent(projectRoot)
+        } else if (process.platform === 'win32') {
+          setupWindowsTask(projectRoot)
+        } else {
+          console.error('Error: --autostart is only supported on macOS and Windows')
           process.exit(1)
         }
-        setupLaunchAgent(projectRoot)
+      }
+
+      // Warn on Windows that hooks require a Unix-compatible shell
+      if (process.platform === 'win32') {
+        console.log('\n⚠ Note: Claude Code hooks use bash commands (curl, cat).')
+        console.log('  On Windows, hooks require Git Bash or WSL in your PATH.')
       }
 
       console.log('\nDone! Next steps:')
@@ -347,4 +363,49 @@ ${programArgs}
   writeFileSync(plistPath, plist)
   console.log(`  Created launch agent: ${plistPath}`)
   console.log(`  To start now: launchctl load ${plistPath}`)
+}
+
+function setupWindowsTask(projectRoot: string): void {
+  // Reject paths with characters that could escape cmd.exe quoting in /tr
+  if (/["%^&|<>!]/.test(projectRoot)) {
+    console.error('Error: Project path contains characters unsafe for Windows Task Scheduler.')
+    console.error('Move the project to a path without these characters: " % ^ & | < > !')
+    process.exit(1)
+  }
+
+  // Create a safe task name from the project path
+  const taskName = `Reporecall-${projectRoot.replace(/[:\\\/\s]/g, '-').replace(/^-/, '').replace(/-+/g, '-')}`
+
+  // Find the Reporecall binary
+  const reporecallBin = resolve(
+    projectRoot,
+    'node_modules',
+    '.bin',
+    'reporecall.cmd'
+  )
+  const command = existsSync(reporecallBin)
+    ? `"${reporecallBin}" serve --project "${projectRoot}"`
+    : `npx reporecall serve --project "${projectRoot}"`
+
+  try {
+    // Delete existing task if present (ignore errors if it doesn't exist)
+    try {
+      execFileSync('schtasks', ['/delete', '/tn', taskName, '/f'], { stdio: 'ignore' })
+    } catch {
+      // Task didn't exist — fine
+    }
+
+    execFileSync('schtasks', [
+      '/create', '/tn', taskName,
+      '/tr', command,
+      '/sc', 'onlogon',
+      '/rl', 'limited',
+      '/f'
+    ], { stdio: 'pipe' })
+    console.log(`  Created Windows scheduled task: ${taskName}`)
+    console.log(`  To start now: schtasks /run /tn "${taskName}"`)
+  } catch (err) {
+    console.error(`Error: Failed to create Windows scheduled task: ${err}`)
+    process.exit(1)
+  }
 }

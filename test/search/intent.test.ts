@@ -25,6 +25,14 @@ function expectNav(query: string) {
   expect(deriveRoute(intent)).toBe("R0");
 }
 
+function expectBroadNav(query: string) {
+  const intent = classifyIntent(query);
+  expect(intent.isCodeQuery, `"${query}" should be a code query`).toBe(true);
+  expect(intent.needsNavigation, `"${query}" should need navigation`).toBe(true);
+  expect(intent.prefersBroadContext, `"${query}" should prefer broad context`).toBe(true);
+  expect(deriveRoute(intent)).toBe("R2");
+}
+
 // ── Skip (meta / non-code) ───────────────────────────────────────
 
 describe("classifyIntent — skip (non-code)", () => {
@@ -70,6 +78,47 @@ describe("classifyIntent — skip (non-code)", () => {
     const intent = classifyIntent("hello");
     expect(intent.skipReason).toBe("non-code query");
   });
+
+  // Short conversational directives
+  const conversationalCases = [
+    "ok",
+    "okay",
+    "sure",
+    "yes",
+    "no",
+    "yep",
+    "nope",
+    "got it",
+    "understood",
+    "sounds good",
+    "go ahead",
+    "do it",
+    "perfect",
+    "great",
+    "lgtm",
+    "nice!",
+    "cool",
+    "alright",
+    "continue",
+    "proceed",
+    "carry on",
+    "keep going",
+    "please continue",
+    "please proceed",
+    "don't break what worked",
+    "dont break what works",
+    "make a new dist",
+    "we have a new dist.",
+    "we have a new build",
+    "there is a new version",
+    "check if it worked",
+    "verify if this is ok",
+    "confirm that it works",
+  ];
+
+  for (const q of conversationalCases) {
+    it(`skips conversational "${q}"`, () => expectSkip(q));
+  }
 });
 
 // ── R0 (direct code queries) ─────────────────────────────────────
@@ -100,7 +149,6 @@ describe("classifyIntent — R0 (direct code)", () => {
 describe("classifyIntent — navigational", () => {
   const navCases = [
     "how does auth work?",
-    "how does the search pipeline flow?",
     "how do hooks get registered?",
     "how is the call graph built?",
     "why does AuthService.login fail?",
@@ -108,7 +156,6 @@ describe("classifyIntent — navigational", () => {
     "why do tests timeout?",
     "what happens when a hook fires?",
     "what happens if the index is stale?",
-    "trace the request from hook to assembly",
     "who calls findCallers?",
     "what calls reciprocalRankFusion?",
     "called by the daemon",
@@ -122,6 +169,24 @@ describe("classifyIntent — navigational", () => {
 
   for (const q of navCases) {
     it(`marks "${q}" as navigational`, () => expectNav(q));
+  }
+});
+
+describe("classifyIntent — broad navigational queries", () => {
+  const broadCases = [
+    "trace the full authentication flow from request to callback",
+    "which files implement the authentication flow",
+    "add to every step in the authentication flow a log message",
+    "describe the complete authentication workflow",
+    "show me all files involved in the auth flow",
+    "trace the request from hook to assembly",
+    "audit the complete billing lifecycle",
+    "change logging across the webhook pipeline",
+    "How does the system handle graceful shutdown across all storage layers?",
+  ];
+
+  for (const q of broadCases) {
+    it(`routes "${q}" toward broad context`, () => expectBroadNav(q));
   }
 });
 
@@ -141,6 +206,13 @@ describe("classifyIntent — edge cases (must NOT skip)", () => {
     "show me how the daemon works",
     "how many tokens does countTokens reserve?",
     "what was injected into middleware.ts?",
+    // Must NOT skip: contain words from conversational patterns but are about code
+    "continue processing the queue after errors",
+    "check if the auth token works",
+    "don't break the build pipeline",
+    "create a new dist build script",
+    "go ahead and fix the parser",
+    "verify if this function is correct",
   ];
 
   for (const q of mustNotSkip) {
@@ -164,6 +236,15 @@ describe("deriveRoute — with seedConfidence", () => {
 
   it("returns R0 for navigational without seedConfidence", () => {
     expect(deriveRoute({ isCodeQuery: true, needsNavigation: true })).toBe("R0");
+  });
+
+  it("returns R2 for broad navigational queries even without seed confidence", () => {
+    expect(
+      deriveRoute({ isCodeQuery: true, needsNavigation: true, prefersBroadContext: true })
+    ).toBe("R2");
+    expect(
+      deriveRoute({ isCodeQuery: true, needsNavigation: true, prefersBroadContext: true }, 0.95)
+    ).toBe("R2");
   });
 
   it("returns R1 when seedConfidence >= 0.55", () => {

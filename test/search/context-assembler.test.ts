@@ -80,13 +80,39 @@ describe("assembleContext — maxChunks", () => {
     const ctx = assembleContext(results, 100_000, { maxChunks: 2, scoreFloorRatio: 0 });
     expect(ctx.chunks).toHaveLength(2);
   });
+
+  it("skips oversized broad chunks instead of aborting later smaller chunks", () => {
+    const results: SearchResult[] = [
+      {
+        ...makeResult("small1", 1.0),
+        content: "function small1() { return true; }",
+      },
+      {
+        ...makeResult("huge", 0.95),
+        content: "x\n".repeat(5000),
+      },
+      {
+        ...makeResult("small2", 0.9),
+        content: "function small2() { return true; }",
+      },
+    ];
+
+    const ctx = assembleContext(results, 220, {
+      scoreFloorRatio: 0,
+      compressionRank: 1,
+    });
+
+    const includedIds = ctx.chunks.map((chunk) => chunk.id);
+    expect(includedIds).toContain("small1");
+    expect(includedIds).toContain("small2");
+  });
 });
 
 describe("assembleContext — directive header", () => {
   it("includes directive header by default", () => {
     const results = [makeResult("a", 1.0)];
     const ctx = assembleContext(results, 100_000);
-    expect(ctx.text).toContain("If a `Direct facts` section answers the question, answer directly from it and do not use repository tools.");
+    expect(ctx.text).toContain("Answer from this context first. Use repository tools only if insufficient.");
   });
 
   it("omits directive header when disabled", () => {
@@ -98,15 +124,15 @@ describe("assembleContext — directive header", () => {
 });
 
 describe("assembleContext — summary section", () => {
-  it("includes summary section with chunk names", () => {
+  it("includes chunk content without summary line", () => {
     const results = [
       makeResult("createServer", 1.0),
       makeResult("handleRequest", 0.8),
     ];
     const ctx = assembleContext(results, 100_000, { scoreFloorRatio: 0 });
-    expect(ctx.text).toContain("**Found:**");
-    expect(ctx.text).toContain("`createServer` (function, src/createServer.ts:1-5)");
-    expect(ctx.text).toContain("`handleRequest` (function, src/handleRequest.ts:1-5)");
+    expect(ctx.text).not.toContain("**Found:**");
+    expect(ctx.text).toContain("createServer");
+    expect(ctx.text).toContain("handleRequest");
   });
 
   it("extracts built-in direct facts for MCP tool queries", () => {

@@ -3,6 +3,7 @@ import { resolve } from 'path'
 import { existsSync, statSync, readFileSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
+import { isProcessAlive } from '../core/platform.js'
 
 export function doctorCommand(): Command {
   return new Command('doctor')
@@ -76,7 +77,28 @@ export function doctorCommand(): Command {
         console.log('✓ Vector store exists')
       }
 
-      // Check 5: Embedding provider health
+      // Check 5: Memory store
+      const memoryDbPath = resolve(config.dataDir, 'memory-index', 'memories.db')
+      if (existsSync(memoryDbPath)) {
+        try {
+          const { MemoryStore } = await import('../storage/memory-store.js')
+          const memStore = new MemoryStore(resolve(config.dataDir, 'memory-index'))
+          const memCount = memStore.getCount()
+          const memSize = statSync(memoryDbPath).size
+          console.log(
+            `✓ Memory store healthy (${memCount} memor${memCount === 1 ? 'y' : 'ies'}, ${(memSize / 1024).toFixed(1)} KB)`
+          )
+          memStore.close()
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err)
+          console.log(`⚠ Memory store exists but could not be read: ${reason}`)
+          warnings++
+        }
+      } else {
+        console.log('- Memory store not present (no memories indexed)')
+      }
+
+      // Check 6: Embedding provider health
       if (config.embeddingProvider === 'ollama') {
         try {
           const response = await fetch(`${config.ollamaUrl}/api/tags`)
@@ -107,7 +129,7 @@ export function doctorCommand(): Command {
         console.log('- Keyword-only mode (no embeddings)')
       }
 
-      // Check 6: Stale WAL files (suggest running daemon or re-indexing)
+      // Check 7: Stale WAL files (suggest running daemon or re-indexing)
       const walFiles = ['metadata.db-wal', 'fts.db-wal']
       for (const wal of walFiles) {
         const walPath = resolve(config.dataDir, wal)
@@ -122,7 +144,7 @@ export function doctorCommand(): Command {
         }
       }
 
-      // Check 7: Daemon PID file
+      // Check 8: Daemon PID file
       const pidPath = resolve(config.dataDir, 'daemon.pid')
       if (existsSync(pidPath)) {
         try {
@@ -131,10 +153,9 @@ export function doctorCommand(): Command {
             console.log('⚠ Daemon PID file contains invalid data')
             warnings++
           } else {
-            try {
-              process.kill(pid, 0)
+            if (isProcessAlive(pid)) {
               console.log(`✓ Daemon is running (PID ${pid})`)
-            } catch {
+            } else {
               console.log(
                 `⚠ Stale daemon PID file (PID ${pid} is not running). Safe to delete.`
               )
@@ -149,7 +170,7 @@ export function doctorCommand(): Command {
         console.log('- Daemon is not running')
       }
 
-      // Check 8: Config sanity
+      // Check 9: Config sanity
       const weightSum =
         config.searchWeights.vector +
         config.searchWeights.keyword +

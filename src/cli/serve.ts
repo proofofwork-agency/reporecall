@@ -10,16 +10,21 @@ import {
 } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
-import { getLogger, setLogLevel } from '../core/logger.js'
+import { getLogger, setLogDestination, setLogLevel } from '../core/logger.js'
 import { IndexingPipeline } from '../indexer/pipeline.js'
 import { HybridSearch } from '../search/hybrid.js'
 import { FileWatcher } from '../daemon/watcher.js'
 import { IndexScheduler } from '../daemon/scheduler.js'
 import { createDaemonServer } from '../daemon/server.js'
 import { ReadWriteLock } from '../core/rwlock.js'
+import { isProcessAlive } from '../core/platform.js'
 import { OllamaEmbedder } from '../indexer/embedder.js'
 import { createMCPServer } from '../daemon/mcp-server.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { MemoryStore } from '../storage/memory-store.js'
+import { createMemoryIndexer } from '../memory/indexer.js'
+import { MemorySearch } from '../memory/search.js'
+import { MemoryRuntime } from '../daemon/memory/runtime.js'
 
 export function serveCommand(): Command {
   return new Command('serve')
@@ -32,6 +37,7 @@ export function serveCommand(): Command {
       'Max context chunks per query (0 = dynamic)'
     )
     .option('--debug', 'Enable debug logging for hook/retrieval diagnostics')
+    .option('--no-memory', 'Disable the memory layer')
     .action(async (options) => {
       // Redirect console to stderr FIRST when MCP mode is active,
       // before any code can write to stdout and corrupt the JSON-RPC stream
@@ -40,6 +46,7 @@ export function serveCommand(): Command {
           process.stderr.write(args.join(' ') + '\n')
         console.error = (...args: unknown[]) =>
           process.stderr.write(args.join(' ') + '\n')
+        setLogDestination('stderr')
       }
 
       if (options.debug) {
@@ -95,13 +102,12 @@ export function serveCommand(): Command {
           const existingContent = readFileSync(pidPath, 'utf-8').trim()
           const oldPid = parseInt(existingContent, 10)
           if (!isNaN(oldPid)) {
-            try {
-              process.kill(oldPid, 0)
+            if (isProcessAlive(oldPid)) {
               console.error(
                 `Error: Daemon already running (PID ${oldPid}). Stop it first.`
               )
               process.exit(1)
-            } catch {
+            } else {
               // Process is dead — stale PID file. Clean up sidecars.
               getLogger().warn(
                 { oldPid },
@@ -111,7 +117,9 @@ export function serveCommand(): Command {
                 resolve(config.dataDir, 'metadata.db-wal'),
                 resolve(config.dataDir, 'metadata.db-shm'),
                 resolve(config.dataDir, 'fts.db-wal'),
-                resolve(config.dataDir, 'fts.db-shm')
+                resolve(config.dataDir, 'fts.db-shm'),
+                resolve(config.dataDir, 'memory-index', 'memories.db-wal'),
+                resolve(config.dataDir, 'memory-index', 'memories.db-shm'),
               ]
               for (const f of sidecarFiles) {
                 try {
@@ -220,6 +228,70 @@ export function serveCommand(): Command {
         rwLock
       )
 
+      // --- Memory layer initialization ---
+      const memoryEnabled = config.memory && options.memory !== false
+      let memoryStore: MemoryStore | undefined
+      let memoryIndexer: ReturnType<typeof createMemoryIndexer> | undefined
+      let memorySearchInstance: MemorySearch | undefined
+      let memoryRuntime: MemoryRuntime | undefined
+
+      if (memoryEnabled) {
+        const memoryDataDir = resolve(config.dataDir, 'memory-index')
+        const memoryWritableDir = config.memoryWritableDir
+        mkdirSync(memoryDataDir, { recursive: true })
+        mkdirSync(memoryWritableDir, { recursive: true })
+        memoryStore = new MemoryStore(memoryDataDir)
+        memoryIndexer = createMemoryIndexer(
+          memoryStore,
+          projectRoot,
+          {
+            additionalDirs: config.memoryDirs,
+            writableDir: memoryWritableDir,
+          }
+        )
+        memorySearchInstance = new MemorySearch(memoryStore)
+
+        memoryRuntime = new MemoryRuntime(memoryIndexer, memoryStore, {
+          debounceMs: config.debounceMs,
+          compactionHours: config.memoryCompactionHours,
+          archiveDays: config.memoryArchiveDays,
+          watchEnabled: config.memoryWatch,
+          autoCreate: config.memoryAutoCreate,
+          factPromotionThreshold: config.memoryFactPromotionThreshold,
+          writableDir: memoryWritableDir,
+          projectRoot,
+          workingHistoryLimit: config.memoryWorkingHistoryLimit,
+        })
+
+        const watchedMemoryDirs = memoryIndexer.getMemoryDirs()
+        if (watchedMemoryDirs.length > 0) {
+          console.log(`Memory layer: scanning ${watchedMemoryDirs.length} director${watchedMemoryDirs.length === 1 ? 'y' : 'ies'}`)
+          try {
+            const result = await memoryRuntime.start()
+            if (result.indexed > 0 || result.removed > 0) {
+              console.log(
+                `Memory layer: ${result.indexed} memories indexed, ${result.removed} stale removed`
+              )
+            } else {
+              const total = memoryStore!.getCount()
+              if (total > 0) {
+                console.log(`Memory layer: ${total} memories up to date`)
+              } else {
+                console.log('Memory layer: no memories found')
+              }
+            }
+          } catch (err) {
+            console.error(`Memory layer failed to start: ${err}`)
+            await memoryRuntime.stop().catch(() => {})
+            memoryRuntime = undefined
+          }
+        } else {
+          console.log('Memory layer: no memory directories found')
+        }
+      } else {
+        console.log('Memory layer: disabled')
+      }
+
       // Track actual FTS initialization state via a mutable container so that
       // re-index events after startup can update the flag and the server closure
       // will observe the new value without a restart.
@@ -258,7 +330,9 @@ export function serveCommand(): Command {
         {
           get ftsInitialized() { return ftsState.initialized },
           debugMode: !!options.debug,
-          get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined }
+          get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined },
+          memorySearch: memorySearchInstance,
+          memoryRuntime
         }
       )
 
@@ -292,7 +366,11 @@ export function serveCommand(): Command {
           pipeline,
           pipeline.getMetadataStore(),
           config,
-          rwLock
+          rwLock,
+          memorySearchInstance,
+          memoryIndexer,
+          memoryStore,
+          memoryRuntime
         )
 
         const { StdioServerTransport } =
@@ -333,31 +411,42 @@ export function serveCommand(): Command {
           })
 
           // Step 2: Stop scheduler and drain pending jobs
-          scheduler.stop();
-          await scheduler.drain();
+          scheduler.stop()
+          await scheduler.drain()
 
           // Step 3: Stop file watcher (no more change events)
           await watcher.stop()
 
-          // Step 4: Close MCP server if running
+          // Step 4: Stop memory runtime before closing the store
+          await memoryRuntime?.stop()
+
+          // Step 5: Close MCP server if running
           if (mcpServer) {
             await mcpServer.close()
           }
 
-          // Step 5: Destroy metrics collector (stop timers, disable histogram)
+          // Step 6: Destroy metrics collector (stop timers, disable histogram)
           metrics.destroy()
 
-          // Step 6: Close all stores in order (FTS, metadata, vector via pipeline)
+          // Step 7: Close memory store
+          memoryStore?.close()
+
+          // Step 8: Close all stores in order (FTS, metadata, vector via pipeline)
           // Await vector store close to prevent native library teardown race
           // that can cause libc++abi mutex errors on process exit.
           await pipeline.closeAsync()
 
-          // Step 7: Clean up SQLite WAL sidecars for a clean next startup
+          // Step 9: Clean up SQLite WAL sidecars for a clean next startup
+          const memoryIndexDir = memoryEnabled ? resolve(config.dataDir, 'memory-index') : null
           const sidecarFiles = [
             resolve(config.dataDir, 'metadata.db-wal'),
             resolve(config.dataDir, 'metadata.db-shm'),
             resolve(config.dataDir, 'fts.db-wal'),
-            resolve(config.dataDir, 'fts.db-shm')
+            resolve(config.dataDir, 'fts.db-shm'),
+            ...(memoryIndexDir ? [
+              resolve(memoryIndexDir, 'memories.db-wal'),
+              resolve(memoryIndexDir, 'memories.db-shm'),
+            ] : []),
           ]
           for (const f of sidecarFiles) {
             try {
@@ -370,7 +459,7 @@ export function serveCommand(): Command {
           log.error({ err }, 'Error during shutdown')
         }
 
-        // Step 8: Remove PID file and release advisory lock
+        // Step 10: Remove PID file and release advisory lock
         if (pidFd !== undefined) {
           try {
             closeSync(pidFd)
@@ -384,7 +473,7 @@ export function serveCommand(): Command {
           // ignore — may have already been removed
         }
 
-        // Step 9: Remove token file
+        // Step 11: Remove token file
         try {
           unlinkSync(tokenPath)
         } catch (err) {
@@ -394,7 +483,7 @@ export function serveCommand(): Command {
           )
         }
 
-        // Step 10: Flush pino logger before exiting to ensure all log lines are written
+        // Step 12: Flush pino logger before exiting to ensure all log lines are written
         log.flush()
 
         // All handles closed/unreffed — Node.js will exit naturally.
@@ -404,6 +493,8 @@ export function serveCommand(): Command {
         // addon destructor races.
       }
 
+      // Windows: SIGTERM is not sent by Task Manager/services. Only SIGINT (Ctrl+C) works.
+      // Node.js emulates SIGINT on Windows, so graceful shutdown via Ctrl+C is supported.
       process.on('SIGINT', shutdown)
       process.on('SIGTERM', shutdown)
 

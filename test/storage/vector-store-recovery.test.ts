@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { VectorStore } from "../../src/storage/vector-store.js";
 
 describe("VectorStore corruption recovery", () => {
   it("isCorruptionError correctly identifies corruption messages", () => {
-    const store = new VectorStore("/tmp/vs-test-" + Date.now(), 384);
+    const store = new VectorStore(mkdtempSync(join(tmpdir(), "vs-test-")), 384);
     // Access private method via prototype for testing
     const isCorruption = (store as any).isCorruptionError.bind(store);
 
@@ -18,7 +21,7 @@ describe("VectorStore corruption recovery", () => {
   });
 
   it("isCorrupted flag is set and can be cleared", () => {
-    const store = new VectorStore("/tmp/vs-test-" + Date.now(), 384);
+    const store = new VectorStore(mkdtempSync(join(tmpdir(), "vs-test-")), 384);
     expect(store.isCorrupted()).toBe(false);
 
     // Simulate corruption recovery
@@ -30,7 +33,7 @@ describe("VectorStore corruption recovery", () => {
   });
 
   it("search returns [] after corruption (not throws)", async () => {
-    const tmpDir = "/tmp/vs-test-" + Date.now();
+    const tmpDir = mkdtempSync(join(tmpdir(), "vs-test-"));
     const store = new VectorStore(tmpDir, 384);
 
     // Search on empty store should return []

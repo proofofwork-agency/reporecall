@@ -30,6 +30,7 @@ export interface AssembleOptions {
   directiveHeader?: boolean;  // default true
   query?: string;
   factExtractors?: Array<{ keyword: string; pattern: string; label: string }>;
+  compressionRank?: number;   // chunks after this rank use compressed format (default: undefined = no compression)
 }
 
 export type ConceptContextKind = "ast" | "call_graph" | "search_pipeline" | "storage" | "daemon" | "embedding" | "cli" | "context_assembly" | (string & {});
@@ -54,7 +55,7 @@ export function assembleContext(
 
   // Header
   const header = directiveHeader
-    ? "## Relevant codebase context\n\n> The following codebase context was retrieved by the Memory Engine for this prompt. If a `Direct facts` section answers the question, answer directly from it and do not use repository tools. If the context is insufficient, reply with `Insufficient context`.\n\n"
+    ? "## Relevant codebase context\n\n> Answer from this context first. Use repository tools only if insufficient.\n\n"
     : "## Relevant codebase context\n\n";
   totalTokens += countTokens(header);
 
@@ -69,16 +70,29 @@ export function assembleContext(
 
   for (const result of results) {
     if (result.score < scoreFloor) continue;
-    const fileHeader = `### ${result.filePath}\n`;
-    const fileHeaderTokens = emittedHeaders.has(result.filePath) ? 0 : countTokens(fileHeader);
-    const chunkText = formatChunk(result);
-    const chunkTokens = countTokens(chunkText);
+    let useCompressed = opts.compressionRank !== undefined && included.length >= opts.compressionRank;
+    let fileHeader = `### ${result.filePath}\n`;
+    let fileHeaderTokens = useCompressed || emittedHeaders.has(result.filePath) ? 0 : countTokens(fileHeader);
+    let chunkText = useCompressed ? formatChunkCompressed(result) : formatChunk(result);
+    let chunkTokens = countTokens(chunkText);
 
     if (totalTokens + fileHeaderTokens + chunkTokens > tokenBudget - SUMMARY_RESERVE) {
+      if (!useCompressed && opts.compressionRank !== undefined) {
+        useCompressed = true;
+        fileHeaderTokens = 0;
+        chunkText = formatChunkCompressed(result);
+        chunkTokens = countTokens(chunkText);
+      }
+    }
+
+    if (totalTokens + fileHeaderTokens + chunkTokens > tokenBudget - SUMMARY_RESERVE) {
+      if (opts.compressionRank !== undefined) {
+        continue;
+      }
       break;
     }
 
-    if (!emittedHeaders.has(result.filePath)) {
+    if (!useCompressed && !emittedHeaders.has(result.filePath)) {
       emittedHeaders.add(result.filePath);
       totalTokens += fileHeaderTokens;
     }
@@ -89,16 +103,9 @@ export function assembleContext(
     if (included.length >= maxChunks) break;
   }
 
-  // Build summary line
-  const summaryLine = buildSummary(included);
-  const summaryTokens = countTokens(summaryLine);
+  // Build direct facts (skip summary — chunk list is redundant with the chunks themselves)
   const factsSection = buildDirectFactsSection(opts.query, included, opts.factExtractors);
   const factsTokens = factsSection ? countTokens(factsSection) : 0;
-  // Only include summary if it fits in budget
-  const includeSummary = included.length > 0 && totalTokens + summaryTokens <= tokenBudget;
-  if (includeSummary) {
-    totalTokens += summaryTokens;
-  }
   const includeFacts =
     included.length > 0 &&
     !!factsSection &&
@@ -110,10 +117,6 @@ export function assembleContext(
   // Build final text — emit chunks in score order with file headers interspersed
   const parts: string[] = [header];
 
-  if (includeSummary) {
-    parts.push(summaryLine);
-    parts.push("");
-  }
   if (includeFacts && factsSection) {
     parts.push(factsSection);
     parts.push("");
@@ -121,13 +124,15 @@ export function assembleContext(
 
   const seenFiles = new Set<string>();
 
-  for (const chunk of included) {
-    if (!seenFiles.has(chunk.filePath)) {
+  for (let i = 0; i < included.length; i++) {
+    const chunk = included[i]!;
+    const useCompressed = opts.compressionRank !== undefined && i >= opts.compressionRank;
+    if (!useCompressed && !seenFiles.has(chunk.filePath)) {
       if (seenFiles.size > 0) parts.push(""); // blank line between file groups
       parts.push(`### ${chunk.filePath}\n`);
       seenFiles.add(chunk.filePath);
     }
-    parts.push(formatChunk(chunk));
+    parts.push(useCompressed ? formatChunkCompressed(chunk) : formatChunk(chunk));
   }
   if (included.length > 0) parts.push("");
 
@@ -148,13 +153,6 @@ export function assembleContext(
     chunks: included,
     routeStyle: "standard",
   };
-}
-
-function buildSummary(included: SearchResult[]): string {
-  const entries = included.map(
-    (r) => `\`${r.name}\` (${r.kind}, ${r.filePath}:${r.startLine}-${r.endLine})`
-  );
-  return `**Found:** ${entries.join(", ")}\n`;
 }
 
 function buildDirectFactsSection(
@@ -200,7 +198,7 @@ function buildDirectFactsSection(
   }
 
   return facts.length > 0
-    ? `## Direct facts\nThese facts were extracted directly from the retrieved code. Use them as the answer if they address the question.\n${facts.join("\n")}`
+    ? `## Direct facts\n${facts.join("\n")}`
     : null;
 }
 
@@ -262,6 +260,13 @@ function formatChunk(result: SearchResult): string {
   const lang = result.language || "";
   const location = `Lines ${result.startLine}-${result.endLine}: ${result.kind} ${result.name}`;
   return `\`\`\`${lang}\n// ${location}\n${result.content}\n\`\`\`\n`;
+}
+
+function formatChunkCompressed(result: SearchResult): string {
+  const loc = `${result.filePath}:${result.startLine}-${result.endLine}`;
+  const sig = `${result.kind} ${result.name}`;
+  const doc = result.docstring ? ` — ${result.docstring.slice(0, 120)}` : '';
+  return `- \`${sig}\` (${loc})${doc}\n`;
 }
 
 // --- Metadata-aware chunk type for hydration ---
@@ -367,21 +372,9 @@ export function assembleConceptContext(
     cli: "CLI commands",
     context_assembly: "context assembly",
   };
-  const CONCEPT_NOTES: Record<string, string> = {
-    ast: "This query is about the AST parsing and chunking pipeline, not the call graph.",
-    call_graph: "This query is about the call graph system, not the AST chunking pipeline.",
-    search_pipeline: "This query is about the routing and retrieval pipeline for answering repository search prompts.",
-    storage: "This query is about the storage layer and data stores.",
-    daemon: "This query is about the HTTP daemon server and hook handlers.",
-    embedding: "This query is about the embedding providers and vector encoding.",
-    cli: "This query is about the CLI command structure and options.",
-    context_assembly: "This query is about token budgeting and context assembly strategies.",
-  };
   const title = CONCEPT_TITLES[kind] ?? kind.replace(/_/g, " ");
-  const routeNote = CONCEPT_NOTES[kind] ?? `This query is about the ${title} subsystem.`;
   const header =
-    `## Relevant codebase context (${title})\n\n` +
-    `> ${routeNote} Answer directly from this bundle. Do not use repository tools unless a required detail is missing from this context.\n\n`;
+    `## Relevant codebase context (${title})\n\n`;
   const facts = `## Direct facts\n${buildConceptFacts(kind, chunks).join("\n")}\n\n`;
 
   let totalTokens = countTokens(header) + countTokens(facts);
@@ -425,10 +418,14 @@ export function assembleFlowContext(
   tree: StackTree,
   metadata: HydratableMetadata,
   tokenBudget: number,
-  _query?: string
+  query?: string
 ): AssembledContext {
   const log = getLogger();
   const SUMMARY_RESERVE = 80;
+  const implementationFirst =
+    !!query && /\b(how\s+does|how\s+do|how\s+is|why\s+does|why\s+is|what\s+happens|work|works|implemented|implementation|fail|fails|failing|failure|error|broken)\b/i.test(query);
+  const callerFocused =
+    !!query && /\b(who|what)\s+calls\b|\bcalled\s+by\b|\bwhere\s+is\b.*\bused\b|\busage\b/i.test(query);
 
   // Collect all node IDs for bulk hydration
   const allNodeIds = [
@@ -461,8 +458,7 @@ export function assembleFlowContext(
 
   const header =
     `## Relevant codebase context (flow trace)\n\n` +
-    `> Route: R1 | Seed: ${seedInfo}\n` +
-    `> This caller/seed/callee path was selected to answer the current query. Answer from it directly before considering repository tools.\n\n`;
+    `> Seed: ${seedInfo}\n\n`;
 
   let totalTokens = countTokens(header);
   const included: SearchResult[] = [];
@@ -490,7 +486,10 @@ export function assembleFlowContext(
     if (!callerChunk) continue;
 
     const callerResult = storedChunkToSearchResult(callerChunk, 0.8);
-    const callerText = formatChunk(callerResult);
+    // First caller gets full content (if reasonably sized), rest get compressed
+    const callerLines = callerChunk.endLine - callerChunk.startLine + 1;
+    const useCompressed = callerParts.length >= 1 || callerLines > 80;
+    const callerText = useCompressed ? formatChunkCompressed(callerResult) : formatChunk(callerResult);
     const callerTokens = countTokens(callerText);
 
     if (totalTokens + callerTokens > tokenBudget - SUMMARY_RESERVE) break;
@@ -510,7 +509,10 @@ export function assembleFlowContext(
     if (!calleeChunk) continue;
 
     const calleeResult = storedChunkToSearchResult(calleeChunk, 0.7);
-    const calleeText = formatChunk(calleeResult);
+    // First callee gets full content (if reasonably sized), rest get compressed
+    const calleeLines = calleeChunk.endLine - calleeChunk.startLine + 1;
+    const useCompressed = calleeParts.length >= 1 || calleeLines > 80;
+    const calleeText = useCompressed ? formatChunkCompressed(calleeResult) : formatChunk(calleeResult);
     const calleeTokens = countTokens(calleeText);
 
     if (totalTokens + calleeTokens > tokenBudget - SUMMARY_RESERVE) break;
@@ -520,19 +522,27 @@ export function assembleFlowContext(
     calleeResults.push(calleeResult);
   }
 
-  // Assemble in order: callers -> seed -> callees
-  if (callerParts.length > 0) {
+  const appendCallers = () => {
+    if (callerParts.length === 0) return;
     parts.push(`### Callers (who invokes this)\n`);
     parts.push(...callerParts);
     included.push(...callerResults);
-  }
-
-  parts.push(seedSection);
-
-  if (calleeParts.length > 0) {
+  };
+  const appendCallees = () => {
+    if (calleeParts.length === 0) return;
     parts.push(`### Callees (what this invokes)\n`);
     parts.push(...calleeParts);
     included.push(...calleeResults);
+  };
+
+  if (implementationFirst && !callerFocused) {
+    parts.push(seedSection);
+    appendCallees();
+    appendCallers();
+  } else {
+    appendCallers();
+    parts.push(seedSection);
+    appendCallees();
   }
 
   parts.push("");
@@ -559,9 +569,7 @@ export function assembleFlowContext(
 
 const DEEP_ROUTE_HEADER =
   `## Relevant codebase context (low confidence)\n\n` +
-  `> The retrieval engine could not identify a clear entry point for this query.\n` +
-  `> Repository tools are allowed here because the injected bundle is low confidence.\n` +
-  `> Use \`explain_flow\` for one-shot flow analysis, or \`resolve_seed\` and \`build_stack_tree\` for step-by-step navigation.\n\n`;
+  `> Low confidence — repository tools are allowed.\n\n`;
 
 /**
  * Assemble context for the R2 (deep) route. Wraps the regular chunk-based
@@ -583,9 +591,10 @@ export function assembleDeepRouteContext(
   // Use existing assembleContext with reduced budget and no directive header
   // (the deep route header replaces it)
   const baseContext = assembleContext(chunks, remainingBudget, {
-    scoreFloorRatio: 0.3,
+    scoreFloorRatio: 0,
     directiveHeader: false,
     query,
+    compressionRank: 3,
   });
 
   // Replace the standard header in baseContext.text with our deep route header.

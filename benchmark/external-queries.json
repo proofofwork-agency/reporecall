@@ -1,0 +1,99 @@
+{
+  "version": "0.3.0",
+  "generatedAt": "2026-03-20T00:00:00.000Z",
+  "suites": [
+    {
+      "id": "reporecall-broad-workflows",
+      "corpus": "reporecall",
+      "projectRoot": ".",
+      "queries": [
+        {
+          "id": "search-pipeline-files",
+          "query": "which files implement the full search pipeline",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/search/hybrid.ts": 3,
+            "src/search/reranker.ts": 3,
+            "src/search/ranker.ts": 3,
+            "src/search/targets.ts": 2,
+            "src/search/seed.ts": 2,
+            "src/search/intent.ts": 2,
+            "src/search/context-assembler.ts": 1,
+            "src/search/tree-builder.ts": 1
+          }
+        },
+        {
+          "id": "hook-flow-instrumentation",
+          "query": "add logging to every step in the hook request flow",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/hooks/prompt-context.ts": 3,
+            "src/daemon/server.ts": 3,
+            "src/hooks/session-start.ts": 2,
+            "src/search/context-assembler.ts": 2,
+            "src/search/hybrid.ts": 2
+          }
+        },
+        {
+          "id": "mcp-trace",
+          "query": "trace the full MCP request flow from stdio command to tool registration",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/cli/mcp.ts": 3,
+            "src/daemon/mcp-server.ts": 3,
+            "src/cli/init.ts": 2,
+            "src/cli/serve.ts": 2,
+            "src/core/logger.ts": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "duto-broad-workflows",
+      "corpus": "duto",
+      "projectRoot": "../duto",
+      "queries": [
+        {
+          "id": "auth-flow-files",
+          "query": "which files implement the authentication flow",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/hooks/useAuth.tsx": 3,
+            "src/pages/Auth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/components/AuthModal.tsx": 2,
+            "src/App.tsx": 1,
+            "supabase/functions/_shared/auth-utils.ts": 1
+          }
+        },
+        {
+          "id": "auth-logging",
+          "query": "add logging to every step in the authentication flow",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/hooks/useAuth.tsx": 3,
+            "src/pages/Auth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/components/AuthModal.tsx": 2,
+            "supabase/functions/_shared/auth-utils.ts": 1,
+            "supabase/functions/upload-media/index.ts": 1
+          }
+        },
+        {
+          "id": "auth-redirect-debug",
+          "query": "where does authentication redirect after success or failure",
+          "expectedRoute": "R2",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/pages/Auth.tsx": 2,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/App.tsx": 2,
+            "src/hooks/useAuth.tsx": 2
+          }
+        }
+      ]
+    }
+  ]
+}

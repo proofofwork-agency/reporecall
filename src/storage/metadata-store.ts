@@ -1,7 +1,14 @@
 import { resolve, dirname } from "path";
 import { mkdirSync } from "fs";
 import type Database from "better-sqlite3";
-import type { StoredChunk, ChunkScoringInfo } from "./types.js";
+import type {
+  ChunkScoringInfo,
+  ResolvedTargetAliasHit,
+  StoredChunk,
+  StoredTarget,
+  StoredTargetAlias,
+  TargetKind,
+} from "./types.js";
 import type { CallEdge } from "../analysis/call-graph.js";
 import type { ConventionsReport } from "../analysis/conventions.js";
 import { openSqliteWithRecovery } from "./sqlite-utils.js";
@@ -10,6 +17,7 @@ import { CallEdgeStore } from "./call-edge-store.js";
 import { StatsStore } from "./stats-store.js";
 import { ConventionsStore } from "./conventions-store.js";
 import { ImportStore } from "./import-store.js";
+import { TargetStore } from "./target-store.js";
 import type { ImportRecord } from "./import-store.js";
 
 // Re-export focused stores and types for consumers
@@ -18,6 +26,7 @@ export { CallEdgeStore } from "./call-edge-store.js";
 export { StatsStore } from "./stats-store.js";
 export { ConventionsStore } from "./conventions-store.js";
 export { ImportStore, type ImportRecord } from "./import-store.js";
+export { TargetStore } from "./target-store.js";
 
 /**
  * Facade that composes the focused stores (ChunkStore, CallEdgeStore,
@@ -32,6 +41,7 @@ export class MetadataStore {
   private stats: StatsStore;
   private conventions: ConventionsStore;
   private imports: ImportStore;
+  private targets: TargetStore;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
@@ -42,11 +52,13 @@ export class MetadataStore {
     this.stats = new StatsStore(this.db);
     this.conventions = new ConventionsStore(this.stats);
     this.imports = new ImportStore(this.db);
+    this.targets = new TargetStore(this.db);
 
     this.chunks.initSchema();
     this.callEdges.initSchema();
     this.stats.initSchema();
     this.imports.initSchema();
+    this.targets.initSchema();
   }
 
   // --- Chunk delegation -------------------------------------------------------
@@ -107,6 +119,10 @@ export class MetadataStore {
     return this.chunks.findChunksByNames(names);
   }
 
+  findChunksByNamePrefixes(prefixes: string[], limit?: number): StoredChunk[] {
+    return this.chunks.findChunksByNamePrefixes(prefixes, limit);
+  }
+
   findSiblings(
     parentName: string,
     filePath: string,
@@ -159,27 +175,58 @@ export class MetadataStore {
   findCallers(
     targetName: string,
     limit?: number,
-    targetFilePath?: string
+    targetFilePath?: string,
+    targetId?: string
   ): Array<{ chunkId: string; filePath: string; line: number; callerName: string; callerKind?: string; receiver?: string }> {
-    return this.callEdges.findCallers(targetName, limit, targetFilePath);
+    return this.callEdges.findCallers(targetName, limit, targetFilePath, targetId);
   }
 
   findCallees(
     sourceName: string,
     limit?: number
-  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
+  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string; targetId?: string; targetKind?: string; resolutionSource?: string }> {
     return this.callEdges.findCallees(sourceName, limit);
   }
 
   findCalleesForChunk(
     sourceChunkId: string,
     limit?: number
-  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string }> {
+  ): Array<{ targetName: string; callType: string; line: number; filePath: string; receiver?: string; targetFilePath?: string; targetId?: string; targetKind?: string; resolutionSource?: string }> {
     return this.callEdges.findCalleesForChunk(sourceChunkId, limit);
   }
 
   getTopCallTargets(limit?: number): string[] {
     return this.callEdges.getTopCallTargets(limit);
+  }
+
+  // --- Targets delegation -----------------------------------------------------
+
+  replaceAllTargets(targets: StoredTarget[], aliases: StoredTargetAlias[]): void {
+    this.targets.replaceAll(targets, aliases);
+  }
+
+  findTargetById(id: string): StoredTarget | undefined {
+    return this.targets.findTargetById(id);
+  }
+
+  getTargetsByIds(ids: string[]): StoredTarget[] {
+    return this.targets.getTargetsByIds(ids);
+  }
+
+  resolveTargetAliases(
+    normalizedAliases: string[],
+    limit?: number,
+    kinds?: TargetKind[]
+  ): ResolvedTargetAliasHit[] {
+    return this.targets.resolveAliases(normalizedAliases, limit, kinds);
+  }
+
+  findTargetsByFilePath(filePath: string): StoredTarget[] {
+    return this.targets.findTargetsByFilePath(filePath);
+  }
+
+  findTargetsBySubsystem(subsystems: string[], limit?: number): StoredTarget[] {
+    return this.targets.findTargetsBySubsystem(subsystems, limit);
   }
 
   // --- Conventions delegation -------------------------------------------------
@@ -216,6 +263,13 @@ export class MetadataStore {
 
   removeImportsForFile(filePath: string): void {
     this.imports.removeImportsForFile(filePath);
+  }
+
+  resetIndexData(): void {
+    this.callEdges.clearAll();
+    this.imports.clearAll();
+    this.targets.clearAll();
+    this.chunks.clearAll();
   }
 
   // --- Lifecycle --------------------------------------------------------------

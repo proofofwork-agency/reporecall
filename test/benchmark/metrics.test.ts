@@ -4,9 +4,18 @@ import {
   ndcg,
   mrr,
   averagePrecision,
+  codeCertaintyScore,
+  compressionRatio,
+  computeExpectedSetMetrics,
   precisionAtK,
   recallAtK,
   computeAllMetrics,
+  computeBenchmarkSuiteMetrics,
+  mean,
+  percentile,
+  rate,
+  reductionPct,
+  retrievalCertaintyScore,
 } from "./metrics.js";
 
 describe("IR metrics", () => {
@@ -85,5 +94,85 @@ describe("IR metrics", () => {
     const idealRanking = [3, 1, 0, 0, 0];
     const result = ndcg(worst, idealRanking, 5);
     expect(result).toBeLessThan(0.5);
+  });
+
+  it("computeExpectedSetMetrics handles binary expected-set retrieval", () => {
+    const metrics = computeExpectedSetMetrics(
+      ["a", "x", "b", "y", "z"],
+      ["a", "b", "c"]
+    );
+    expect(metrics.precisionAt3).toBeCloseTo(2 / 3, 5);
+    expect(metrics.recallAt5).toBeCloseTo(2 / 3, 5);
+    expect(metrics.mrr).toBe(1);
+    expect(metrics.ndcg10).toBeGreaterThan(0.7);
+    expect(metrics.hit).toBe(true);
+  });
+
+  it("reductionPct reports relative savings", () => {
+    expect(reductionPct(100, 70)).toBeCloseTo(0.3, 5);
+    expect(reductionPct(0, 0)).toBe(0);
+    expect(reductionPct(100, 120)).toBe(0);
+  });
+
+  it("compressionRatio reports summary compression", () => {
+    expect(compressionRatio(100, 55)).toBeCloseTo(0.45, 5);
+    expect(compressionRatio(0, 0)).toBe(0);
+    expect(compressionRatio(50, 60)).toBe(0);
+  });
+
+  it("mean and rate handle aggregate reporting", () => {
+    expect(mean([1, 2, 3])).toBe(2);
+    expect(mean([])).toBe(0);
+    expect(rate([true, false, true])).toBeCloseTo(2 / 3, 5);
+    expect(rate([])).toBe(0);
+  });
+
+  it("percentile uses nearest-rank semantics", () => {
+    expect(percentile([], 0.95)).toBe(0);
+    expect(percentile([10, 30, 20, 40], 0)).toBe(10);
+    expect(percentile([10, 30, 20, 40], 0.5)).toBe(20);
+    expect(percentile([10, 30, 20, 40], 0.95)).toBe(40);
+  });
+
+  it("computeBenchmarkSuiteMetrics aggregates deterministic benchmark cases", () => {
+    const suite = computeBenchmarkSuiteMetrics([
+      {
+        retrieved: [3, 2, 0, 0],
+        ideal: [3, 2, 0, 0],
+        latencyMs: 4,
+        routeMatched: true,
+        freshnessMatched: true,
+      },
+      {
+        retrieved: [0, 3, 0, 0],
+        ideal: [3, 0, 0, 0],
+        latencyMs: 10,
+        routeMatched: false,
+        freshnessMatched: true,
+      },
+    ]);
+
+    expect(suite.ndcg10).toBeGreaterThan(0.75);
+    expect(suite.mrr).toBeCloseTo(0.75, 5);
+    expect(suite.recall).toBe(1);
+    expect(suite.avgLatencyMs).toBe(7);
+    expect(suite.p95LatencyMs).toBe(10);
+    expect(suite.routeAccuracy).toBe(0.5);
+    expect(suite.freshnessAccuracy).toBe(1);
+  });
+
+  it("retrievalCertaintyScore weights the expected signals", () => {
+    const score = retrievalCertaintyScore({
+      expectedHitCoverage: 0.8,
+      codeFloorPreserved: true,
+      routeAppropriate: true,
+      promptCompleteness: 0.75,
+    });
+    expect(score).toBeCloseTo(0.88, 2);
+  });
+
+  it("codeCertaintyScore combines retrieval and answer grounding", () => {
+    expect(codeCertaintyScore(0.8, 0.7)).toBeCloseTo(0.76, 5);
+    expect(codeCertaintyScore(0.8, null)).toBeCloseTo(0.8, 5);
   });
 });

@@ -110,6 +110,15 @@ export class VectorStore {
     this.corrupted = false;
   }
 
+  async resetAll(): Promise<void> {
+    this.cachedTable = undefined;
+    this.indexBuilt = false;
+    rmSync(this.lanceDir, { recursive: true, force: true });
+    mkdirSync(this.lanceDir, { recursive: true });
+    this.dbPromise = lancedb.connect(this.lanceDir);
+    this.corrupted = false;
+  }
+
   private async getTable(): Promise<lancedb.Table | undefined> {
     if (this.cachedTable) return this.cachedTable;
     try {

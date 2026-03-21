@@ -5,14 +5,15 @@ type TreeMetadata = Pick<
   MetadataStore,
   "findCallers" | "findCallees" | "findChunksByNames" | "getChunksByIds"
 > &
-  Partial<Pick<MetadataStore, "findCalleesForChunk" | "findImporterFiles" | "findChunksByFilePath">>;
+  Partial<Pick<MetadataStore, "findCalleesForChunk" | "findImporterFiles" | "findChunksByFilePath" | "findTargetById">>;
 
 export interface TreeOptions {
-  seed: { chunkId: string; name: string; filePath: string; kind: string };
+  seed: { chunkId: string; name: string; filePath: string; kind: string; targetId?: string; targetKind?: string };
   direction?: "up" | "down" | "both";
   maxDepth?: number;
   maxBranchFactor?: number;
   maxNodes?: number;
+  query?: string;
 }
 
 export interface TreeNode {
@@ -48,6 +49,58 @@ export interface StackTree {
   coverage: CoverageScore;
 }
 
+type TraversalProfile = "balanced" | "implementation" | "callers";
+
+const IMPLEMENTATION_FLOW_RE =
+  /\b(how\s+does|how\s+do|how\s+is|why\s+does|why\s+is|what\s+happens|work|works|working|implemented|implementation|fail|fails|failing|failure|error|broken)\b/i;
+const CALLER_FLOW_RE =
+  /\b(who|what)\s+calls\b|\bcalled\s+by\b|\bwhere\s+is\b.*\bused\b|\busage\b/i;
+
+function getTraversalProfile(query?: string): TraversalProfile {
+  if (!query?.trim()) return "balanced";
+  if (CALLER_FLOW_RE.test(query)) return "callers";
+  if (IMPLEMENTATION_FLOW_RE.test(query)) return "implementation";
+  return "balanced";
+}
+
+function splitPathSegments(filePath: string): string[] {
+  return filePath.toLowerCase().split("/").filter(Boolean);
+}
+
+function commonPathPrefixLength(left: string, right: string): number {
+  const leftParts = splitPathSegments(left);
+  const rightParts = splitPathSegments(right);
+  let count = 0;
+  while (count < leftParts.length && count < rightParts.length && leftParts[count] === rightParts[count]) {
+    count++;
+  }
+  return count;
+}
+
+function scoreCallerCandidate(
+  seedFilePath: string,
+  caller: { filePath: string; callerName: string; callerKind?: string }
+): number {
+  let score = 0;
+  if (!isTestFile(caller.filePath)) score += 100;
+  score += commonPathPrefixLength(seedFilePath, caller.filePath) * 10;
+  if (caller.filePath === seedFilePath) score += 20;
+  if (caller.callerKind && /function|method|class/.test(caller.callerKind)) score += 4;
+  if (/describe|it|test/.test(caller.callerName.toLowerCase())) score -= 50;
+  return score;
+}
+
+function scoreSameFileSibling(
+  seedKind: string,
+  chunk: { filePath: string; name: string; kind: string }
+): number {
+  let score = 0;
+  if (!isTestFile(chunk.filePath)) score += 100;
+  if (seedKind === "class_declaration" && /method_definition|function_declaration/.test(chunk.kind)) score += 20;
+  if (/constructor|describe|it|test/.test(chunk.name.toLowerCase())) score -= 25;
+  return score;
+}
+
 /**
  * Builds a bidirectional call tree starting from a seed chunk.
  * Walks callers (up) and/or callees (down) using the call-edge graph
@@ -67,7 +120,13 @@ export function buildStackTree(
     maxDepth = 2,
     maxBranchFactor = 3,
     maxNodes = 24,
+    query,
   } = options;
+  const traversalProfile = getTraversalProfile(query);
+  const upDepthLimit = traversalProfile === "implementation" ? Math.min(1, maxDepth) : maxDepth;
+  const downDepthLimit = traversalProfile === "callers" ? Math.min(1, maxDepth) : maxDepth;
+  const upBranchLimit = traversalProfile === "implementation" ? Math.max(2, maxBranchFactor - 1) : maxBranchFactor;
+  const downBranchLimit = traversalProfile === "callers" ? Math.max(2, maxBranchFactor - 1) : maxBranchFactor;
 
   const visited = new Set<string>([seed.chunkId]);
   const upTree: TreeNode[] = [];
@@ -78,8 +137,23 @@ export function buildStackTree(
   function resolveCalleeChunkId(
     targetName: string,
     sourceFilePath: string,
-    targetFilePath?: string
+    targetFilePath?: string,
+    targetId?: string
   ): { chunkId: string; name: string; filePath: string; kind: string } | null {
+    if (targetId && metadata.findTargetById) {
+      const target = metadata.findTargetById(targetId);
+      if (target?.ownerChunkId) {
+        const chunk = metadata.getChunksByIds([target.ownerChunkId])[0];
+        if (chunk) {
+          return {
+            chunkId: chunk.id,
+            name: chunk.name,
+            filePath: chunk.filePath,
+            kind: chunk.kind,
+          };
+        }
+      }
+    }
     const matches = metadata.findChunksByNames([targetName]);
     if (matches.length === 0) return null;
 
@@ -119,7 +193,7 @@ export function buildStackTree(
     ];
     let currentDepth = 1;
 
-    while (currentDepth <= maxDepth && totalNodes < maxNodes && frontier.length > 0) {
+    while (currentDepth <= upDepthLimit && totalNodes < maxNodes && frontier.length > 0) {
       // Collect all callers for the entire frontier at this depth
       const pendingCallers: Array<{
         caller: { chunkId: string; filePath: string; line: number; callerName: string };
@@ -127,13 +201,39 @@ export function buildStackTree(
       }> = [];
 
       for (const source of frontier) {
+        // Pass targetId only for non-symbol targets (endpoint, file_module).
+        // Symbol targets use IDs like "symbol:<chunkId>" which are never stored
+        // in call_edges.target_id — those edges are resolved via import path,
+        // not alias lookup — so passing a symbol targetId would match nothing.
+        const edgeTargetId =
+          source.chunkId === startChunkId
+          && seed.targetId
+          && seed.targetKind !== "symbol"
+            ? seed.targetId
+            : undefined;
         const callers = metadata.findCallers(
           source.name,
-          maxBranchFactor * 2,
-          source.filePath
+          upBranchLimit * 3,
+          source.filePath,
+          edgeTargetId
         );
-        callers.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
-        for (const caller of callers) {
+        const realCallers = callers.filter((caller) => !isTestFile(caller.filePath));
+        const callerPool =
+          traversalProfile === "implementation" && realCallers.length === 0
+            ? []
+            : (realCallers.length > 0 ? realCallers : callers);
+        const uniqueCallers = new Map<string, typeof callerPool[number]>();
+        for (const caller of callerPool) {
+          const existing = uniqueCallers.get(caller.filePath);
+          if (!existing || scoreCallerCandidate(seed.filePath, caller) > scoreCallerCandidate(seed.filePath, existing)) {
+            uniqueCallers.set(caller.filePath, caller);
+          }
+        }
+        const rankedCallers = Array.from(uniqueCallers.values())
+          .sort((a, b) => scoreCallerCandidate(seed.filePath, b) - scoreCallerCandidate(seed.filePath, a))
+          .slice(0, upBranchLimit);
+
+        for (const caller of rankedCallers) {
           if (visited.has(caller.chunkId)) continue;
           pendingCallers.push({ caller, sourceChunkId: source.chunkId });
         }
@@ -195,7 +295,7 @@ export function buildStackTree(
     ];
     let currentDepth = 1;
 
-    while (currentDepth <= maxDepth && totalNodes < maxNodes && frontier.length > 0) {
+    while (currentDepth <= downDepthLimit && totalNodes < maxNodes && frontier.length > 0) {
       const nextFrontier: Array<{ name: string; chunkId: string; filePath: string }> = [];
 
       for (const source of frontier) {
@@ -203,11 +303,11 @@ export function buildStackTree(
 
         const calleeRecords = metadata.findCalleesForChunk
           ? metadata.findCalleesForChunk(source.chunkId, maxBranchFactor * 2)
-          : metadata.findCallees(source.name, maxBranchFactor * 2);
+          : metadata.findCallees(source.name, downBranchLimit * 2);
 
         const callees = calleeRecords.sort((a, b) => {
-          const aResolved = a.targetFilePath ? 1 : 0;
-          const bResolved = b.targetFilePath ? 1 : 0;
+          const aResolved = a.targetId || a.targetFilePath ? 1 : 0;
+          const bResolved = b.targetId || b.targetFilePath ? 1 : 0;
           return bResolved - aResolved;
         });
 
@@ -220,11 +320,12 @@ export function buildStackTree(
           kind: string;
         }> = [];
 
-        for (const callee of callees) {
+        for (const callee of callees.slice(0, downBranchLimit * 2)) {
           const match = resolveCalleeChunkId(
             callee.targetName,
             callee.filePath,
-            callee.targetFilePath
+            callee.targetFilePath,
+            callee.targetId
           );
           if (match) {
             resolved.push({
@@ -234,10 +335,32 @@ export function buildStackTree(
             });
           }
         }
+        const realResolved = resolved.filter((node) => !isTestFile(node.filePath));
+        const resolvedPool = realResolved.length > 0 ? realResolved : resolved;
+        const uniqueResolved = new Map<string, typeof resolvedPool[number]>();
+        for (const node of resolvedPool) {
+          const existing = uniqueResolved.get(node.filePath);
+          if (!existing) {
+            uniqueResolved.set(node.filePath, node);
+            continue;
+          }
+          const existingSameFile = existing.filePath === seed.filePath ? 1 : 0;
+          const currentSameFile = node.filePath === seed.filePath ? 1 : 0;
+          if (currentSameFile > existingSameFile) {
+            uniqueResolved.set(node.filePath, node);
+          }
+        }
+        const rankedResolved = Array.from(uniqueResolved.values())
+          .sort((a, b) => {
+            const aSameFile = a.filePath === seed.filePath ? 1 : 0;
+            const bSameFile = b.filePath === seed.filePath ? 1 : 0;
+            const aAffinity = commonPathPrefixLength(seed.filePath, a.filePath);
+            const bAffinity = commonPathPrefixLength(seed.filePath, b.filePath);
+            return (bSameFile - aSameFile) || (bAffinity - aAffinity);
+          })
+          .slice(0, downBranchLimit);
 
-        resolved.sort((a, b) => (isTestFile(a.filePath) ? 1 : 0) - (isTestFile(b.filePath) ? 1 : 0));
-
-        for (const r of resolved) {
+        for (const r of rankedResolved) {
           if (totalNodes >= maxNodes) break;
           if (visited.has(r.chunkId)) continue;
 
@@ -273,9 +396,43 @@ export function buildStackTree(
     }
   }
 
+  function addSameFileSeedSiblings(): void {
+    if (!metadata.findChunksByFilePath) return;
+    const shouldExpandSameFile =
+      seed.targetKind === "endpoint"
+      || seed.targetKind === "file_module"
+      || (traversalProfile === "implementation" && seed.kind === "class_declaration");
+    if (!shouldExpandSameFile) return;
+    const fileChunks = metadata.findChunksByFilePath(seed.filePath)
+      .filter((chunk) => chunk.id !== seed.chunkId && !isTestFile(chunk.filePath))
+      .sort((a, b) => scoreSameFileSibling(seed.kind, b) - scoreSameFileSibling(seed.kind, a))
+      .slice(0, traversalProfile === "implementation" ? 3 : maxBranchFactor);
+    for (const chunk of fileChunks) {
+      if (totalNodes >= maxNodes) break;
+      if (visited.has(chunk.id)) continue;
+      visited.add(chunk.id);
+      totalNodes++;
+      downTree.push({
+        chunkId: chunk.id,
+        name: chunk.name,
+        filePath: chunk.filePath,
+        kind: chunk.kind,
+        depth: 1,
+        direction: "down",
+      });
+      edges.push({
+        from: seed.chunkId,
+        to: chunk.id,
+        callType: "module",
+      });
+    }
+  }
+
   if (direction === "up" || direction === "both") {
     buildUpBFS(seed.name, seed.chunkId, seed.filePath);
   }
+
+  addSameFileSeedSiblings();
 
   if (direction === "down" || direction === "both") {
     buildDownBFS(seed.name, seed.chunkId);

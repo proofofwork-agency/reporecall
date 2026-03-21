@@ -18,6 +18,7 @@ import type { ImportRecord } from "../storage/import-store.js";
 import { analyzeConventions } from "../analysis/conventions.js";
 import { resolveCallTarget } from "../analysis/resolve.js";
 import { freeEncoder } from "../search/context-assembler.js";
+import { buildTargetCatalog, INDEX_FORMAT_VERSION } from "../search/targets.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -73,11 +74,33 @@ export class IndexingPipeline {
     this.merkle = deps?.merkle ?? new MerkleTree(config.dataDir);
   }
 
+  private async ensureIndexFormat(): Promise<void> {
+    const currentVersion = this.metadata.getStat("index_format_version");
+    if (currentVersion === INDEX_FORMAT_VERSION) return;
+
+    const log = getLogger();
+    log.info(`Index format mismatch (${currentVersion ?? "none"} -> ${INDEX_FORMAT_VERSION}) — rebuilding local index`);
+    this.metadata.resetIndexData();
+    this.fts.resetAll();
+    await this.vectors.resetAll();
+    this.merkle.clear();
+    this.metadata.setStat("index_format_version", INDEX_FORMAT_VERSION);
+  }
+
+  private rebuildTargetCatalog(): void {
+    const { targets, aliases } = buildTargetCatalog(
+      this.metadata.getAllChunks(),
+      this.config.implementationPaths
+    );
+    this.metadata.replaceAllTargets(targets, aliases);
+  }
+
   async indexAll(
     onProgress?: (progress: IndexProgress) => void,
     _isRetry = false
   ): Promise<{ filesProcessed: number; chunksCreated: number }> {
     const log = getLogger();
+    await this.ensureIndexFormat();
 
     // Phase 1: Scan files
     onProgress?.({
@@ -269,14 +292,24 @@ export class IndexingPipeline {
       this.metadata.upsertImports(allImportRecords);
     }
 
+    this.rebuildTargetCatalog();
+
     // Resolve call edge targets using stored imports and chunks
     for (const edge of allCallEdges) {
-      const resolvedPath = resolveCallTarget(
-        { targetName: edge.targetName, filePath: edge.filePath, receiver: edge.receiver },
+      const resolution = resolveCallTarget(
+        {
+          targetName: edge.targetName,
+          filePath: edge.filePath,
+          receiver: edge.receiver,
+          literalTargets: edge.literalTargets,
+        },
         this.metadata
       );
-      if (resolvedPath) {
-        edge.targetFilePath = resolvedPath;
+      if (resolution) {
+        edge.targetFilePath = resolution.filePath;
+        edge.targetId = resolution.targetId;
+        edge.targetKind = resolution.targetKind;
+        edge.resolutionSource = resolution.resolutionSource;
       }
     }
 
@@ -350,6 +383,7 @@ export class IndexingPipeline {
     chunksCreated: number;
   }> {
     const log = getLogger();
+    await this.ensureIndexFormat();
     let totalChunks = 0;
     const successPaths = new Set<string>();
 
@@ -419,14 +453,24 @@ export class IndexingPipeline {
           this.metadata.upsertImports(buildImportRecords(rawImports, relPath, this.config.projectRoot));
         }
 
+        this.rebuildTargetCatalog();
+
         // Resolve call edge targets using stored imports and chunks
         for (const edge of callEdges) {
-          const resolvedPath = resolveCallTarget(
-            { targetName: edge.targetName, filePath: edge.filePath, receiver: edge.receiver },
+          const resolution = resolveCallTarget(
+            {
+              targetName: edge.targetName,
+              filePath: edge.filePath,
+              receiver: edge.receiver,
+              literalTargets: edge.literalTargets,
+            },
             this.metadata
           );
-          if (resolvedPath) {
-            edge.targetFilePath = resolvedPath;
+          if (resolution) {
+            edge.targetFilePath = resolution.filePath;
+            edge.targetId = resolution.targetId;
+            edge.targetKind = resolution.targetKind;
+            edge.resolutionSource = resolution.resolutionSource;
           }
         }
 
@@ -480,6 +524,7 @@ export class IndexingPipeline {
 
   async removeFiles(paths: string[]): Promise<void> {
     const log = getLogger();
+    await this.ensureIndexFormat();
     const safePaths: string[] = [];
     for (const relPath of paths) {
       const absPath = resolve(this.config.projectRoot, relPath);
@@ -494,6 +539,7 @@ export class IndexingPipeline {
     }
     if (safePaths.length > 0) {
       await this.vectors.removeByFiles(safePaths);
+      this.rebuildTargetCatalog();
     }
     this.merkle.save();
   }

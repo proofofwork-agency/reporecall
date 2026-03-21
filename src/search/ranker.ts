@@ -1,4 +1,10 @@
-import { STOP_WORDS } from "./utils.js";
+import {
+  type ExpandedQueryTerm,
+  expandQueryTerms,
+  getQueryTermVariants,
+  isTestFile,
+  STOP_WORDS,
+} from "./utils.js";
 
 export interface RankedItem {
   id: string;
@@ -25,10 +31,12 @@ export function reciprocalRankFusion(
     testPenaltyFactor?: number;
     anonymousPenaltyFactor?: number;
     queryTerms?: string[];
+    expandedQueryTerms?: ExpandedQueryTerm[];
+    broadQuery?: boolean;
     chunkLineRanges?: Map<string, { startLine: number; endLine: number }>;
   }
 ): RankedItem[] {
-  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, anonymousPenaltyFactor, queryTerms, chunkLineRanges } =
+  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
     options;
   const scores = new Map<string, RankedItem>();
 
@@ -99,10 +107,9 @@ export function reciprocalRankFusion(
 
   // Test file penalty: demote chunks from test/spec/benchmark paths
   if (chunkFilePaths && testPenaltyFactor != null && testPenaltyFactor !== 1.0) {
-    const TEST_PATH_RE = /(?:^|\/)(test|spec|__tests__|__fixtures__|fixtures|benchmark|examples)\/|\.(?:test|spec)\.|(?:^|\/)(?:benchmark|demo)\.[^/]+$/;
     for (const [id, item] of scores) {
       const filePath = chunkFilePaths.get(id);
-      if (filePath && TEST_PATH_RE.test(filePath)) {
+      if (filePath && isTestFile(filePath)) {
         item.score *= testPenaltyFactor;
       }
     }
@@ -118,28 +125,70 @@ export function reciprocalRankFusion(
     }
   }
 
-  // Query-term filename/symbol boost: if query terms appear in file basename or chunk name, boost
+  // Query-term filename/symbol boost: if query terms appear in file basename or chunk name, boost.
+  // CamelCase identifier terms (e.g. "saveFlow" → "saveflow") get a stronger 1.7x boost because
+  // they are explicit code references, not incidental word matches like "work" in "workflow".
   if (queryTerms && queryTerms.length > 0 && chunkFilePaths) {
     const terms = queryTerms
       .map((t) => t.toLowerCase())
       .filter((t) => t.length >= 2 && !STOP_WORDS.has(t));
+    const expandedTerms = (expandedQueryTerms && expandedQueryTerms.length > 0
+      ? expandedQueryTerms
+      : expandQueryTerms(terms))
+      .filter((term) => term.term.length >= 2 && !STOP_WORDS.has(term.term));
+    const totalExpandedWeight = expandedTerms.reduce((sum, term) => sum + term.weight, 0) || 1;
+
+    // Detect which lowercased terms came from camelCase identifiers in the original query.
+    const camelTerms = new Set(
+      queryTerms
+        .filter((t) => /[a-z][A-Z]/.test(t))
+        .map((t) => t.toLowerCase())
+    );
 
     if (terms.length > 0) {
       for (const [id, item] of scores) {
-        const filePath = chunkFilePaths.get(id) ?? "";
-        const basename = filePath.split("/").pop()?.replace(/\.[^.]+$/, "").toLowerCase() ?? "";
+        const filePath = (chunkFilePaths.get(id) ?? "").toLowerCase();
         const chunkName = (chunkNames?.get(id) ?? "").toLowerCase();
 
         let matchCount = 0;
-        for (const term of terms) {
-          if (basename.includes(term) || chunkName.includes(term)) {
+        let matchedWeight = 0;
+        let matchBoost = 1.0;
+        let hasLongAnchorMatch = false;
+        const matchedFamilies = new Set<string>();
+        let onlyGenericMatches = true;
+
+        for (const term of expandedTerms) {
+          const variants = getQueryTermVariants(term.term);
+          if (variants.some((variant) => filePath.includes(variant) || chunkName.includes(variant))) {
             matchCount++;
+            matchedWeight += term.weight;
+            matchBoost *= camelTerms.has(term.term) ? 1.7 : term.term.length >= 8 ? 1.45 : term.weight >= 0.7 ? 1.3 : 1.18;
+            if (term.term.length >= 8 && term.weight >= 0.7) hasLongAnchorMatch = true;
+            if (term.family) matchedFamilies.add(term.family);
+            if (!term.generic) onlyGenericMatches = false;
           }
         }
 
         if (matchCount > 0) {
-          // 1.3x per matching term, compounding
-          item.score *= Math.pow(1.3, matchCount);
+          const coverageRatio = matchedWeight / totalExpandedWeight;
+          if (terms.length >= 3 && coverageRatio < 0.5) {
+            if (hasLongAnchorMatch) {
+              item.score *= 1 + (matchBoost - 1) * coverageRatio;
+            } else {
+              item.score *= Math.max(0.65, 0.55 + coverageRatio * 0.5);
+            }
+          } else {
+            item.score *= matchBoost;
+          }
+
+          if (broadQuery) {
+            if (matchedFamilies.size > 0) {
+              item.score *= 1 + Math.min(0.32, matchedFamilies.size * 0.11);
+            }
+            if (onlyGenericMatches) {
+              item.score *= 0.6;
+            }
+          }
         }
       }
     }

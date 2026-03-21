@@ -88,7 +88,21 @@ describe('resolveExplainResult', () => {
     expect(result.route).toBe('R1')
     expect(result.seed?.name).toBe('validate')
     expect(result.seed?.confidence).toBeGreaterThanOrEqual(0.7)
+    expect(result.resolvedTarget).toBeTruthy()
     expect(result.tokensInjected).toBeGreaterThan(0)
     expect(result.chunksInjected).toBeGreaterThan(0)
+  })
+
+  it('includes broad inventory diagnostics for file-set questions', async () => {
+    const result = await resolveExplainResult(
+      'which files implement the authentication flow',
+      config,
+      pipeline
+    )
+
+    expect(result.route).toBe('R2')
+    expect(result.broadMode).toBe('inventory')
+    expect(result.selectedFiles?.length ?? 0).toBeGreaterThan(0)
+    expect(result.selectedFiles?.some((file) => file.filePath === 'src/auth.ts')).toBe(true)
   })
 })

@@ -21,6 +21,7 @@ function createMockMetadata(opts: {
     findChunksByNames: vi.fn((names: string[]) => {
       return (opts.chunks ?? []).filter((c) => names.includes(c.name));
     }),
+    resolveTargetAliases: vi.fn(() => []),
   };
 }
 
@@ -44,7 +45,7 @@ describe("resolveCallTarget", () => {
       metadata
     );
 
-    expect(result).toBe("src/auth.ts");
+    expect(result).toEqual({ filePath: "src/auth.ts", resolutionSource: "import" });
     expect(metadata.findImportByName).toHaveBeenCalledWith(
       "validate",
       "src/app.ts"
@@ -74,7 +75,7 @@ describe("resolveCallTarget", () => {
       metadata
     );
 
-    expect(result).toBe("src/auth-service.ts");
+    expect(result).toEqual({ filePath: "src/auth-service.ts", resolutionSource: "import" });
   });
 
   it("skips receiver lookup when receiver is 'this'", () => {
@@ -101,7 +102,7 @@ describe("resolveCallTarget", () => {
     );
 
     // Should fall through to same-file check since "this" is skipped
-    expect(result).toBe("src/app.ts");
+    expect(result).toEqual({ filePath: "src/app.ts", resolutionSource: "same_file" });
   });
 
   it("skips receiver lookup when receiver is 'self'", () => {
@@ -128,7 +129,7 @@ describe("resolveCallTarget", () => {
     );
 
     // Should fall through to same-file check since "self" is skipped
-    expect(result).toBe("src/app.ts");
+    expect(result).toEqual({ filePath: "src/app.ts", resolutionSource: "same_file" });
   });
 
   it("skips receiver lookup when receiver is 'super'", () => {
@@ -155,7 +156,7 @@ describe("resolveCallTarget", () => {
     );
 
     // Should fall through to same-file check since "super" is skipped
-    expect(result).toBe("src/app.ts");
+    expect(result).toEqual({ filePath: "src/app.ts", resolutionSource: "same_file" });
   });
 
   it("resolves same-file when chunk exists in the same file", () => {
@@ -181,7 +182,7 @@ describe("resolveCallTarget", () => {
       metadata
     );
 
-    expect(result).toBe("src/utils.ts");
+    expect(result).toEqual({ filePath: "src/utils.ts", resolutionSource: "same_file" });
     expect(metadata.findChunksByNames).toHaveBeenCalledWith(["helperFn"]);
   });
 
@@ -255,7 +256,45 @@ describe("resolveCallTarget", () => {
     );
 
     // Import takes priority
-    expect(result).toBe("src/auth.ts");
+    expect(result).toEqual({ filePath: "src/auth.ts", resolutionSource: "import" });
+  });
+
+  it("resolves literal-dispatch aliases to typed targets", () => {
+    const metadata = createMockMetadata({ imports: [], chunks: [] });
+    metadata.resolveTargetAliases.mockReturnValue([
+      {
+        target: {
+          id: "endpoint:supabase/functions/generate-image/index.ts",
+          kind: "endpoint",
+          canonicalName: "generate-image",
+          normalizedName: "generate image",
+          filePath: "supabase/functions/generate-image/index.ts",
+          ownerChunkId: "serve-handler",
+          subsystem: "functions",
+          confidence: 0.98,
+        },
+        alias: "generate-image",
+        normalizedAlias: "generate image",
+        source: "literal",
+        weight: 0.95,
+      },
+    ]);
+
+    const result = resolveCallTarget(
+      {
+        targetName: "invoke",
+        filePath: "src/client.ts",
+        literalTargets: ["generate-image"],
+      },
+      metadata
+    );
+
+    expect(result).toEqual({
+      filePath: "supabase/functions/generate-image/index.ts",
+      targetId: "endpoint:supabase/functions/generate-image/index.ts",
+      targetKind: "endpoint",
+      resolutionSource: "alias_literal",
+    });
   });
 
   it("skips import without resolvedPath and falls through", () => {

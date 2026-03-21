@@ -3,6 +3,7 @@ import { mkdirSync } from "fs";
 import type Database from "better-sqlite3";
 import { openSqliteWithRecovery } from "./sqlite-utils.js";
 import { getLogger } from "../core/logger.js";
+import { GENERIC_BROAD_TERMS, STOP_WORDS } from "../search/utils.js";
 
 export interface FTSResult {
   id: string;
@@ -24,6 +25,10 @@ export class FTSStore {
   private upsertInsertStmt!: Database.Statement;
   private removeByFileStmt!: Database.Statement;
   private searchStmt!: Database.Statement;
+  private countStmt!: Database.Statement;
+  private clearStmt!: Database.Statement;
+  private _totalDocs: number | null = null;
+  private _dfCache = new Map<string, number>();
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "fts.db");
@@ -78,6 +83,10 @@ export class FTSStore {
        ORDER BY rank
        LIMIT ?`
     );
+    this.countStmt = this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM chunks_fts WHERE chunks_fts MATCH ?`
+    );
+    this.clearStmt = this.db.prepare(`DELETE FROM chunks_fts`);
   }
 
   upsert(chunk: {
@@ -88,7 +97,6 @@ export class FTSStore {
     kind: string;
   }): void {
     this.db.transaction(() => {
-      // Delete existing entry if any
       this.upsertDeleteStmt.run(chunk.id);
       this.upsertInsertStmt.run(
         chunk.id,
@@ -99,10 +107,14 @@ export class FTSStore {
         chunk.filePath
       );
     })();
+    this._totalDocs = null;
+    this._dfCache.clear();
   }
 
   removeByFile(filePath: string): void {
     this.removeByFileStmt.run(filePath);
+    this._totalDocs = null;
+    this._dfCache.clear();
   }
 
   bulkRemoveByFiles(filePaths: string[]): void {
@@ -112,48 +124,165 @@ export class FTSStore {
         this.removeByFileStmt.run(filePath);
       }
     })();
+    this._totalDocs = null;
+    this._dfCache.clear();
   }
 
   search(query: string, limit: number = 50): FTSResult[] {
     const normalized = splitIdentifiers(query);
-    const terms = normalized
+    const allTerms = normalized
       .replace(/['"*(){}[\]^~\\:]/g, " ")
       .split(/\s+/)
-      .filter((w) => w.length > 0)
-      .map((w) => `"${w}"`);
+      .filter((w) => w.length > 0);
 
+    // Strip stop words; fall back to all terms if everything is a stop word
+    const contentTerms = allTerms.filter(
+      (w) => w.length >= 2 && !STOP_WORDS.has(w.toLowerCase())
+    );
+    const terms = contentTerms.length > 0 ? contentTerms : allTerms;
     if (terms.length === 0) return [];
 
-    // Try phrase match first for multi-word queries (better for debugging queries)
+    // 1. Phrase match
     if (terms.length > 1) {
-      const phraseQuery = `"${normalized.replace(/['"*(){}[\]^~\\:]/g, " ").trim()}"`;
-      const phraseResults = this.runFtsQuery(phraseQuery, limit);
-      if (phraseResults.length > 0) {
-        return phraseResults;
+      const r = this.runFtsQuery(`"${terms.join(" ")}"`, limit);
+      if (r.length > 0) return r;
+    }
+
+    // 1.5. CamelCase compound phrase anchor.
+    // The FTS index stores split identifiers: "saveFlowToDatabase" → "save flow to database".
+    // So "saveFlow" in the query → phrase "save flow" → selectively anchors on those docs.
+    // This beats the rarest-term step because "save" and "flow" individually are common,
+    // but "save flow" as an adjacent phrase is rare and specific.
+    const camelPhrases = query
+      .split(/\s+/)
+      .filter((w) => /[a-z][A-Z]/.test(w)) // true camelCase (lowercase→uppercase transition)
+      .map((w) => {
+        const sanitized = w.replace(/['"*(){}[\]^~\\:]/g, "");
+        return splitIdentifiers(sanitized).trim();
+      });
+
+    for (const phrase of camelPhrases) {
+      if (!phrase.includes(" ")) continue; // single token, no compound to anchor on
+      // Scope to name field and exclude file-level chunks (SQL migrations, whole-file docs).
+      // "saveFlow" → name:"save flow" NOT kind:file  → hits saveFlowToDatabase but not saved_flows migrations.
+      const r = this.runFtsQuery(`name:"${phrase}" NOT kind:file`, limit);
+      if (r.length > 0) return r;
+      // Fallback: full-text phrase (catches identifiers in content but not in a function name).
+      const r2 = this.runFtsQuery(`"${phrase}"`, limit);
+      if (r2.length > 0) return r2;
+    }
+
+    // 2. Anchor on rarest term + OR the rest
+    // Finds chunks containing the most discriminative term, ranked by how many others match
+    if (terms.length > 1) {
+      const anchor = this.rarestTerm(terms);
+      if (anchor !== null) {
+        const rest = terms.filter((t) => t !== anchor).map((t) => `"${t}"`);
+        const q =
+          rest.length > 0
+            ? `"${anchor}" AND (${rest.join(" OR ")})`
+            : `"${anchor}"`;
+        const r = this.runFtsQuery(q, limit);
+        if (r.length > 0) return r;
       }
     }
 
-    // Try AND (all terms must match) for precision
-    if (terms.length > 1) {
-      const andQuery = terms.join(" AND ");
-      const andResults = this.runFtsQuery(andQuery, limit);
-      if (andResults.length > 0) {
-        return andResults;
+    // 3. Selective OR fallback: keep real anchors, drop only high-DF generic
+    // broad terms, and replace zero-DF terms with a prefix expansion. This
+    // reduces domain-overloaded floods like "flow" without discarding common
+    // but meaningful subsystem anchors such as "search" or "daemon".
+    const total = this.getTotalDocs();
+    const maxDf = total > 0 ? Math.floor(total * 0.15) : Infinity;
+    const expanded: string[] = [];
+
+    for (const term of terms) {
+      const df = this.getDocFreq(term);
+      const isHighDf = df > maxDf;
+      const isGenericBroadTerm = GENERIC_BROAD_TERMS.has(term);
+      const allowExact = df > 0 && (!isHighDf || !isGenericBroadTerm);
+
+      if (allowExact) expanded.push(`"${term}"`);
+      if ((df === 0 || allowExact) && term.length >= 6) {
+        expanded.push(`"${term.slice(0, 4)}*"`);
+      }
+      if (df === 0 && term.length >= 4 && term.length < 6) {
+        expanded.push(`"${term.slice(0, 4)}*"`);
       }
     }
 
-    // Fall back to OR for recall
-    const orQuery = terms.join(" OR ");
-    return this.runFtsQuery(orQuery, limit);
+    if (expanded.length === 0) {
+      for (const term of terms) {
+        expanded.push(`"${term}"`);
+        if (term.length >= 6) expanded.push(`"${term.slice(0, 4)}*"`);
+      }
+    }
+    return this.runFtsQuery(expanded.join(" OR "), limit);
+  }
+
+  // Returns the term with the lowest doc frequency if it's under 15% of total docs, else null.
+  private rarestTerm(terms: string[]): string | null {
+    const total = this.getTotalDocs();
+    if (total === 0) return null;
+    const maxDf = Math.floor(total * 0.15);
+    let rarest: string | null = null;
+    let lowestDf = Infinity;
+    for (const term of terms) {
+      const df = this.getDocFreq(term);
+      if (df < lowestDf) {
+        lowestDf = df;
+        rarest = term;
+      }
+    }
+    return lowestDf <= maxDf ? rarest : null;
+  }
+
+  private getTotalDocs(): number {
+    if (this._totalDocs === null) {
+      const row = this.db
+        .prepare(`SELECT COUNT(*) as cnt FROM chunks_fts`)
+        .get() as { cnt: number };
+      this._totalDocs = row.cnt;
+    }
+    return this._totalDocs;
+  }
+
+  private getDocFreq(term: string): number {
+    const cached = this._dfCache.get(term);
+    if (cached !== undefined) return cached;
+    try {
+      const row = this.countStmt.get(`"${term}"`) as { cnt: number };
+      if (this._dfCache.size >= 256) {
+        const oldest = this._dfCache.keys().next().value;
+        if (oldest !== undefined) this._dfCache.delete(oldest);
+      }
+      this._dfCache.set(term, row.cnt);
+      return row.cnt;
+    } catch {
+      return 0;
+    }
   }
 
   private runFtsQuery(ftsQuery: string, limit: number): FTSResult[] {
-    const rows = this.searchStmt.all(ftsQuery, limit) as Array<{ id: string; rank: number }>;
-
-    return rows.map((r) => ({ id: r.id, rank: r.rank }));
+    try {
+      const rows = this.searchStmt.all(ftsQuery, limit) as Array<{
+        id: string;
+        rank: number;
+      }>;
+      return rows.map((r) => ({ id: r.id, rank: r.rank }));
+    } catch {
+      return [];
+    }
   }
 
-  bulkUpsert(chunks: Array<{ id: string; name: string; filePath: string; content: string; kind: string }>): void {
+  bulkUpsert(
+    chunks: Array<{
+      id: string;
+      name: string;
+      filePath: string;
+      content: string;
+      kind: string;
+    }>
+  ): void {
     this.db.transaction(() => {
       for (const chunk of chunks) {
         this.upsertDeleteStmt.run(chunk.id);
@@ -167,6 +296,14 @@ export class FTSStore {
         );
       }
     })();
+    this._totalDocs = null;
+    this._dfCache.clear();
+  }
+
+  resetAll(): void {
+    this.clearStmt.run();
+    this._totalDocs = null;
+    this._dfCache.clear();
   }
 
   close(): void {

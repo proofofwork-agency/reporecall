@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { resolve, sep } from 'path'
-import { realpathSync } from 'fs'
+import { realpathSync, unlinkSync, mkdirSync } from 'fs'
 import type { HybridSearch } from '../search/hybrid.js'
 import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
@@ -11,6 +11,14 @@ import { resolveSeeds } from '../search/seed.js'
 import { buildStackTree } from '../search/tree-builder.js'
 import { assembleFlowContext } from '../search/context-assembler.js'
 import { createRequire } from 'module'
+import type { MemorySearch } from '../memory/search.js'
+import type { MemoryIndexer } from '../memory/indexer.js'
+import type { MemoryClass, MemoryScope, MemoryStatus, MemoryType } from '../memory/types.js'
+import type { MemoryStore } from '../storage/memory-store.js'
+import { resolveMemoryClass, resolveMemoryScope, resolveMemoryStatus, resolveMemorySummary } from '../memory/types.js'
+import { assembleMemoryContext } from '../memory/context.js'
+import type { MemoryRuntime } from './memory/runtime.js'
+import { writeManagedMemoryFile } from '../memory/files.js'
 
 const require = createRequire(import.meta.url)
 
@@ -21,7 +29,7 @@ function loadVersion(): string {
     try {
       return require('../package.json').version
     } catch {
-      return '0.2.5'
+      return 'unknown'
     }
   }
 }
@@ -53,12 +61,25 @@ function errorResult(err: unknown) {
   }
 }
 
+function memoryClassBudgets(tokenBudget: number): Record<MemoryClass, number> {
+  return {
+    rule: Math.floor(tokenBudget * 0.35),
+    working: Math.floor(tokenBudget * 0.2),
+    fact: Math.floor(tokenBudget * 0.3),
+    episode: Math.floor(tokenBudget * 0.15),
+  }
+}
+
 export function createMCPServer(
   search: HybridSearch,
   pipeline: IndexingPipeline,
   initialMetadata: MetadataStore,
   config: MemoryConfig,
-  lock?: ReadWriteLock
+  lock?: ReadWriteLock,
+  memorySearch?: MemorySearch,
+  memoryIndexer?: MemoryIndexer,
+  memoryStore?: MemoryStore,
+  memoryRuntime?: MemoryRuntime
 ): McpServer {
   let metadata = initialMetadata
   const server = new McpServer({
@@ -596,7 +617,8 @@ export function createMCPServer(
             direction: direction ?? 'both',
             maxDepth: maxDepth ?? 2,
             maxBranchFactor: 3,
-            maxNodes: 24
+            maxNodes: 24,
+            query
           })
 
           const flowBudget = resolveContextBudget(
@@ -645,6 +667,577 @@ export function createMCPServer(
       }
     }
   )
+
+  // --- Memory tools (only registered when memory layer is available) ---
+
+  if (memorySearch && memoryIndexer) {
+    server.registerTool(
+      'recall_memories',
+      {
+        description:
+          'Search project and user memories using local keyword retrieval. Returns relevant memories from prior sessions.',
+        inputSchema: {
+          query: z.string().min(1).describe('Search query for memory recall'),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(50)
+            .optional()
+            .describe('Max results (default 10)'),
+          types: z
+            .array(z.enum(['user', 'feedback', 'project', 'reference']))
+            .optional()
+            .describe('Filter by memory type'),
+          classes: z
+            .array(z.enum(['rule', 'fact', 'episode', 'working']))
+            .optional()
+            .describe('Filter by memory class'),
+          scopes: z
+            .array(z.enum(['global', 'project', 'branch']))
+            .optional()
+            .describe('Filter by memory scope'),
+          statuses: z
+            .array(z.enum(['active', 'archived', 'superseded']))
+            .optional()
+            .describe('Filter by memory status'),
+          activeFiles: z.array(z.string()).optional().describe('Active file paths for contextual boosting'),
+          topCodeFiles: z.array(z.string()).optional().describe('Top code file paths for contextual boosting'),
+          topCodeSymbols: z.array(z.string()).optional().describe('Top code symbols for contextual boosting'),
+          minConfidence: z.number().min(0).max(1).optional().describe('Minimum confidence score'),
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ query, limit, types, classes, scopes, statuses, activeFiles, topCodeFiles, topCodeSymbols, minConfidence }) => {
+        try {
+          const doSearch = async () => {
+            const results = await memorySearch.search(query, {
+              limit,
+              types: types as MemoryType[] | undefined,
+              classes: classes as MemoryClass[] | undefined,
+              scopes: scopes as MemoryScope[] | undefined,
+              statuses: statuses as MemoryStatus[] | undefined,
+              activeFiles,
+              topCodeFiles,
+              topCodeSymbols,
+              minConfidence,
+            })
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    results.map((r) => ({
+                      name: r.name,
+                      description: r.description,
+                      type: r.type,
+                      class: r.class,
+                      scope: r.scope,
+                      status: r.status,
+                      summary: r.summary,
+                      confidence: r.confidence,
+                      content: r.content,
+                      score: r.score,
+                      filePath: r.filePath
+                    })),
+                    null,
+                    2
+                  )
+                }
+              ]
+            }
+          }
+          return lock ? await lock.withRead(doSearch) : doSearch()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'explain_memory',
+      {
+        description:
+          'Explain how memory recall would behave for a query, including selected memories, dropped memories, route, and budget split.',
+        inputSchema: {
+          query: z.string().min(1).describe('Search query for memory explanation'),
+          limit: z.number().int().min(1).max(50).optional().describe('Max results (default 8)'),
+          tokenBudget: z.number().min(0).optional().describe('Memory token budget (default 500)'),
+          types: z.array(z.enum(['user', 'feedback', 'project', 'reference'])).optional().describe('Filter by memory type'),
+          classes: z.array(z.enum(['rule', 'fact', 'episode', 'working'])).optional().describe('Filter by memory class'),
+          scopes: z.array(z.enum(['global', 'project', 'branch'])).optional().describe('Filter by memory scope'),
+          statuses: z.array(z.enum(['active', 'archived', 'superseded'])).optional().describe('Filter by memory status'),
+          activeFiles: z.array(z.string()).optional().describe('Active file paths for contextual boosting'),
+          topCodeFiles: z.array(z.string()).optional().describe('Top code file paths for contextual boosting'),
+          topCodeSymbols: z.array(z.string()).optional().describe('Top code symbols for contextual boosting'),
+          minConfidence: z.number().min(0).max(1).optional().describe('Minimum confidence score'),
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ query, limit, tokenBudget, types, classes, scopes, statuses, activeFiles, topCodeFiles, topCodeSymbols, minConfidence }) => {
+        try {
+          const doExplain = async () => {
+            const results = await memorySearch.search(query, {
+              limit: limit ?? 8,
+              types: types as MemoryType[] | undefined,
+              classes: classes as MemoryClass[] | undefined,
+              scopes: scopes as MemoryScope[] | undefined,
+              statuses: statuses as MemoryStatus[] | undefined,
+              activeFiles,
+              topCodeFiles,
+              topCodeSymbols,
+              minConfidence,
+            })
+            const assembled = assembleMemoryContext(results, tokenBudget ?? 500, {
+              classBudgets: memoryClassBudgets(tokenBudget ?? 500),
+            })
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    {
+                      route: assembled.route,
+                      budget: assembled.budget,
+                      selected: assembled.memories.map((memory) => ({
+                        name: memory.name,
+                        class: resolveMemoryClass(memory),
+                        scope: resolveMemoryScope(memory),
+                        status: resolveMemoryStatus(memory),
+                        summary: resolveMemorySummary(memory),
+                        score: memory.score,
+                        filePath: memory.filePath,
+                      })),
+                      dropped: assembled.dropped.map((memory) => ({
+                        name: memory.name,
+                        class: memory.class ?? resolveMemoryClass(memory),
+                        reason: memory.dropReason,
+                        filePath: memory.filePath,
+                      })),
+                      text: assembled.text,
+                      tokenCount: assembled.tokenCount,
+                    },
+                    null,
+                    2
+                  )
+                }
+              ]
+            }
+          }
+          return lock ? await lock.withRead(doExplain) : doExplain()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'compact_memories',
+      {
+        description:
+          'Refresh and compact memory indexes. Falls back to a safe refresh if the compactor is not available.',
+        inputSchema: {
+          confirm: z.boolean().describe('Must be true to proceed')
+        },
+        annotations: { destructiveHint: true }
+      },
+      async ({ confirm }) => {
+        try {
+          if (!confirm) {
+            return {
+              content: [
+                { type: 'text' as const, text: 'Aborted: confirm must be true' }
+              ]
+            }
+          }
+
+          const doCompact = async () => {
+            const result = memoryRuntime
+              ? memoryRuntime.compact(config.memoryArchiveDays)
+              : memoryIndexer.compact({
+                  archiveEpisodeOlderThanDays: config.memoryArchiveDays
+                })
+            memoryIndexer.regenerateIndex()
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ compacted: true, result }, null, 2)
+                }
+              ]
+            }
+          }
+
+          return lock ? await lock.withWrite(doCompact) : doCompact()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'clear_working_memory',
+      {
+        description:
+          'Clear generated working memory entries from the local managed store.',
+        inputSchema: {
+          confirm: z.boolean().describe('Must be true to proceed')
+        },
+        annotations: { destructiveHint: true }
+      },
+      async ({ confirm }) => {
+        try {
+          if (!confirm) {
+            return {
+              content: [
+                { type: 'text' as const, text: 'Aborted: confirm must be true' }
+              ]
+            }
+          }
+
+          const doClear = async () => {
+            if (memoryRuntime) {
+              const cleared = await memoryRuntime.clearWorkingMemory()
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({ cleared }, null, 2)
+                  }
+                ]
+              }
+            }
+
+            if (!memoryStore) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({ cleared: 0, reason: 'No memory store available' }, null, 2)
+                  }
+                ]
+              }
+            }
+
+            const workingMemories = memoryStore.getAll().filter((memory) => {
+              const sourceKind = memory.sourceKind ?? 'generated'
+              return resolveMemoryClass(memory) === 'working' && (sourceKind === 'generated' || sourceKind === 'claude_auto')
+            })
+
+            let cleared = 0
+            for (const memory of workingMemories) {
+              memoryStore.remove(memory.id)
+              cleared += 1
+            }
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ cleared }, null, 2)
+                }
+              ]
+            }
+          }
+
+          return lock ? await lock.withWrite(doClear) : doClear()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'store_memory',
+      {
+        description:
+          'Create or update a memory file. The memory will be indexed for future recall.',
+        inputSchema: {
+          name: z.string().min(1).max(200).describe('Memory name (used as filename)'),
+          description: z
+            .string()
+            .min(1)
+            .max(500)
+            .describe('One-line description of the memory'),
+          memoryType: z
+            .enum(['user', 'feedback', 'project', 'reference'])
+            .describe('Memory category'),
+          content: z.string().min(1).describe('Memory content (markdown)'),
+          class: z
+            .enum(['rule', 'fact', 'episode', 'working'])
+            .optional()
+            .describe('Optional memory class'),
+          scope: z
+            .enum(['global', 'project', 'branch'])
+            .optional()
+            .describe('Optional memory scope'),
+          status: z
+            .enum(['active', 'archived', 'superseded'])
+            .optional()
+            .describe('Optional lifecycle status'),
+          summary: z.string().max(500).optional().describe('Optional compressed summary'),
+          sourceKind: z
+            .enum(['claude_auto', 'reporecall_local', 'generated'])
+            .optional()
+            .describe('Optional source kind'),
+          pinned: z.boolean().optional().describe('Whether the memory should stay pinned'),
+          relatedFiles: z.array(z.string()).optional().describe('Related file paths'),
+          relatedSymbols: z.array(z.string()).optional().describe('Related symbols'),
+          supersedesId: z.string().optional().describe('Superseded memory ID'),
+          confidence: z.number().min(0).max(1).optional().describe('Confidence score'),
+          reason: z.string().max(500).optional().describe('Lifecycle or compaction reason'),
+        },
+        annotations: { destructiveHint: true }
+      },
+      async ({ name, description, memoryType, content, class: memoryClass, scope, status, summary, sourceKind, pinned, relatedFiles, relatedSymbols, supersedesId, confidence, reason }) => {
+        try {
+          const writableDirs = memoryIndexer.getWritableDirs()
+          if (writableDirs.length === 0) {
+            return errorResult(new Error('No memory directory configured'))
+          }
+
+          const targetDir = writableDirs[0]!
+          mkdirSync(targetDir, { recursive: true })
+
+          // Consolidation check: warn if a memory with similar name exists
+          if (memoryStore) {
+            const existing = memoryStore.getByName(name)
+            if (existing) {
+              // Same name — will overwrite (existing behavior)
+            } else {
+              // Check FTS for similar content
+              const similar = memoryStore.search(name, 3)
+              for (const match of similar) {
+                const existingMem = memoryStore.get(match.id)
+                if (existingMem && existingMem.name !== name) {
+                  return {
+                    content: [
+                      {
+                        type: 'text' as const,
+                        text: JSON.stringify({
+                          stored: false,
+                          warning: `Similar memory already exists: "${existingMem.name}". Consider updating that memory instead, or use the same name to overwrite.`,
+                          existingName: existingMem.name,
+                          existingDescription: existingMem.description
+                        })
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+
+          const safeName = name
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .toLowerCase()
+            .slice(0, 100)
+
+          // Write and index atomically under the write lock
+          const doIndex = async () => {
+            const filePath = writeManagedMemoryFile(targetDir, safeName, {
+              name,
+              description,
+              memoryType,
+              content,
+              class: memoryClass,
+              scope,
+              status,
+              summary,
+              sourceKind,
+              pinned,
+              relatedFiles,
+              relatedSymbols,
+              supersedesId,
+              confidence,
+              reason,
+            })
+            await memoryIndexer.indexFile(filePath)
+            return filePath
+          }
+          let filePath: string
+          if (lock) {
+            filePath = await lock.withWrite(doIndex)
+          } else {
+            filePath = await doIndex()
+          }
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({ stored: true, filePath, name })
+              }
+            ]
+          }
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'forget_memory',
+      {
+        description:
+          'Delete a memory by name. Removes the file and its index entries.',
+        inputSchema: {
+          name: z.string().min(1).describe('Name of the memory to forget')
+        },
+        annotations: { destructiveHint: true }
+      },
+      async ({ name }) => {
+        try {
+          const doForget = async () => {
+            // Exact name lookup first, fall back to search if store unavailable
+            const match = memoryStore
+              ? memoryStore.getByName(name)
+              : (await memorySearch.search(name, { limit: 5 })).find(
+                  (r) => r.name === name || r.name.toLowerCase() === name.toLowerCase()
+                )
+
+            if (!match) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `No memory found with name "${name}"`
+                  }
+                ]
+              }
+            }
+
+            // Delete the file — validate path is within allowed directories
+            const memDirs = memoryIndexer.getMemoryDirs()
+            const abs = resolve(match.filePath)
+            const pathAllowed = memDirs.some((dir) => {
+              return abs.startsWith(dir + sep) || abs === dir
+            })
+            if (!pathAllowed) {
+              return {
+                content: [{ type: 'text' as const, text: `Memory file path is outside allowed directories` }]
+              }
+            }
+            try {
+              unlinkSync(abs)
+            } catch {
+              // File may already be gone
+            }
+
+            // Remove from index
+            await memoryIndexer.removeByFilePath(abs)
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    forgotten: true,
+                    name: match.name,
+                    filePath: match.filePath
+                  })
+                }
+              ]
+            }
+          }
+
+          return lock ? await lock.withWrite(doForget) : doForget()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'list_memories',
+      {
+        description:
+          'List all stored memories with metadata. Optionally filter by type.',
+        inputSchema: {
+          memoryType: z
+            .enum(['user', 'feedback', 'project', 'reference'])
+            .optional()
+            .describe('Filter by memory type'),
+          memoryClass: z
+            .enum(['rule', 'fact', 'episode', 'working'])
+            .optional()
+            .describe('Filter by memory class'),
+          memoryScope: z
+            .enum(['global', 'project', 'branch'])
+            .optional()
+            .describe('Filter by memory scope'),
+          memoryStatus: z
+            .enum(['active', 'archived', 'superseded'])
+            .optional()
+            .describe('Filter by memory status'),
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ memoryType, memoryClass, memoryScope, memoryStatus }) => {
+        try {
+          const doList = () => {
+            if (!memoryStore) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({ memories: [], count: 0 })
+                  }
+                ]
+              }
+            }
+            const memories = memoryType
+              ? memoryStore.getByType(memoryType as MemoryType)
+              : memoryStore.getAll()
+            const filtered = memories.filter((memory) => {
+              if (memoryClass && resolveMemoryClass(memory) !== memoryClass) return false
+              if (memoryScope && resolveMemoryScope(memory) !== memoryScope) return false
+              if (memoryStatus && resolveMemoryStatus(memory) !== memoryStatus) return false
+              return true
+            })
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    {
+                      memories: filtered.map((m) => ({
+                        name: m.name,
+                        type: m.type,
+                        class: resolveMemoryClass(m),
+                        scope: resolveMemoryScope(m),
+                        status: resolveMemoryStatus(m),
+                        description: m.description,
+                        summary: resolveMemorySummary(m),
+                        accessCount: m.accessCount,
+                        lastAccessed: m.lastAccessed,
+                        importance: m.importance,
+                        pinned: m.pinned,
+                        sourceKind: m.sourceKind,
+                        confidence: m.confidence,
+                        relatedFiles: m.relatedFiles,
+                        relatedSymbols: m.relatedSymbols,
+                        supersedesId: m.supersedesId,
+                        reason: m.reason,
+                        filePath: m.filePath
+                      })),
+                      count: filtered.length
+                    },
+                    null,
+                    2
+                  )
+                }
+              ]
+            }
+          }
+          return lock ? await lock.withRead(async () => doList()) : doList()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+  }
 
   return server
 }

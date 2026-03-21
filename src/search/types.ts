@@ -45,4 +45,15 @@ export interface HookDebugRecord {
   latencyMs: number;
   query: string;
   sanitizedQuery: string;
+  memoryRoute?: "M0" | "M1" | "M2";
+  memoryTokenCount?: number;
+  memoryCount?: number;
+  memoryNames?: string[];
+  memoryDropped?: Array<{
+    name: string;
+    class: string;
+    reason: string;
+  }>;
+  memoryBudgetUsed?: number;
+  memoryBudgetTotal?: number;
 }

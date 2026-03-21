@@ -3,7 +3,10 @@ import { resolve } from 'path'
 import { statSync, existsSync, readFileSync, readdirSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
+import { isProcessAlive } from '../core/platform.js'
 import { MetadataStore } from '../storage/metadata-store.js'
+import { MemoryStore } from '../storage/memory-store.js'
+import { resolveMemoryStatus } from '../memory/types.js'
 
 export function statsCommand(): Command {
   return new Command('stats')
@@ -37,6 +40,44 @@ export function statsCommand(): Command {
       const lanceDir = resolve(config.dataDir, 'lance')
       if (existsSync(lanceDir)) {
         storageBytes += dirSize(lanceDir)
+      }
+      const memoryDb = resolve(config.dataDir, 'memory-index', 'memories.db')
+      let memoryStore: MemoryStore | undefined
+      let memoryFreshness: string | undefined
+      let memoryTotals: {
+        total: number
+        active: number
+        archived: number
+        superseded: number
+        pinned: number
+      } | undefined
+      if (existsSync(memoryDb)) {
+        storageBytes += statSync(memoryDb).size
+        try {
+          memoryStore = new MemoryStore(resolve(config.dataDir, 'memory-index'))
+          const memories = memoryStore.getAll()
+          const newest = memories.reduce((acc, memory) => {
+            const mtime = new Date(memory.fileMtime).getTime()
+            return Number.isFinite(mtime) && mtime > acc ? mtime : acc
+          }, 0)
+          if (newest > 0) {
+            memoryFreshness = formatTimeSince(new Date(newest))
+          }
+          memoryTotals = memories.reduce(
+            (acc, memory) => {
+              acc.total += 1
+              const status = resolveMemoryStatus(memory)
+              if (status === 'archived') acc.archived += 1
+              else if (status === 'superseded') acc.superseded += 1
+              else acc.active += 1
+              if (memory.pinned) acc.pinned += 1
+              return acc
+            },
+            { total: 0, active: 0, archived: 0, superseded: 0, pinned: 0 }
+          )
+        } catch {
+          memoryStore = undefined
+        }
       }
 
       // Format languages
@@ -89,6 +130,57 @@ export function statsCommand(): Command {
         const avgChunksPerQuery = (chunksServedNum / hooksNum).toFixed(1)
         console.log(`  Avg chunks/query:    ${avgChunksPerQuery}`)
       }
+      // Memory stats
+      const memoriesInjected = metadata.getStat('memoriesInjected') ?? '0'
+      const memoryTokensInjected = metadata.getStat('memoryTokensInjected') ?? '0'
+      const memoryHitCount = metadata.getStat('memoryHitCount') ?? '0'
+      const memoryHitNum = parseInt(memoryHitCount, 10)
+      const memoriesInjectedNum = parseInt(memoriesInjected, 10)
+      const memoryTokensNum = parseInt(memoryTokensInjected, 10)
+
+      if (memoryHitNum > 0 || existsSync(resolve(config.dataDir, 'memory-index', 'memories.db'))) {
+        console.log(``)
+        console.log(`Memory:`)
+        console.log(`  Queries with memory:  ${memoryHitCount}${hooksNum > 0 ? ` (${((memoryHitNum / hooksNum) * 100).toFixed(0)}% hit rate)` : ''}`)
+        console.log(`  Memories injected:    ${Number(memoriesInjected).toLocaleString()}`)
+        console.log(`  Memory tokens:        ${Number(memoryTokensInjected).toLocaleString()}`)
+        if (memoryHitNum > 0) {
+          console.log(`  Avg tokens/hit:       ${Math.round(memoryTokensNum / memoryHitNum).toLocaleString()}`)
+          console.log(`  Avg memories/hit:     ${(memoriesInjectedNum / memoryHitNum).toFixed(1)}`)
+        }
+        if (memoryFreshness) {
+          console.log(`  Freshness:            newest update ${memoryFreshness} ago`)
+        }
+        if (memoryTotals) {
+          console.log(`  Inventory:            ${memoryTotals.total} total (${memoryTotals.active} active, ${memoryTotals.archived} archived, ${memoryTotals.superseded} superseded, ${memoryTotals.pinned} pinned)`)
+        }
+        const classTokens = [
+          ['rule', metadata.getStat('memoryTokens_rule'), metadata.getStat('memoryCount_rule')],
+          ['working', metadata.getStat('memoryTokens_working'), metadata.getStat('memoryCount_working')],
+          ['fact', metadata.getStat('memoryTokens_fact'), metadata.getStat('memoryCount_fact')],
+          ['episode', metadata.getStat('memoryTokens_episode'), metadata.getStat('memoryCount_episode')],
+        ] as const
+        if (classTokens.some(([, tokens, count]) => Number(tokens ?? '0') > 0 || Number(count ?? '0') > 0)) {
+          console.log(`  Avg tokens/class:`)
+          for (const [label, tokens, count] of classTokens) {
+            const countNum = Number(count ?? '0')
+            const tokenNum = Number(tokens ?? '0')
+            if (countNum > 0) {
+              console.log(`    ${label}: ${Math.round(tokenNum / countNum).toLocaleString()} tokens`)
+            }
+          }
+        }
+        const memoryCompactionCount = metadata.getStat('memoryCompactionCount') ?? '0'
+        const memoryArchivedCount = metadata.getStat('memoryArchivedCount') ?? '0'
+        const memorySupersededCount = metadata.getStat('memorySupersededCount') ?? '0'
+        if (Number(memoryCompactionCount) > 0 || Number(memoryArchivedCount) > 0 || Number(memorySupersededCount) > 0) {
+          console.log(`  Compaction:`)
+          console.log(`    Runs: ${memoryCompactionCount}`)
+          console.log(`    Archived: ${memoryArchivedCount}`)
+          console.log(`    Superseded: ${memorySupersededCount}`)
+        }
+      }
+
       if (latency.count > 0) {
         console.log(``)
         console.log(`Search Latency (${latency.count} queries):`)
@@ -116,10 +208,9 @@ export function statsCommand(): Command {
       const pidPath = resolve(config.dataDir, 'daemon.pid')
       if (existsSync(pidPath)) {
         const pid = readFileSync(pidPath, 'utf-8').trim()
-        try {
-          process.kill(parseInt(pid, 10), 0)
+        if (isProcessAlive(parseInt(pid, 10))) {
           console.log(`\nDaemon: running (PID ${pid})`)
-        } catch {
+        } else {
           console.log(`\nDaemon: not running (stale PID file)`)
         }
       } else {
@@ -127,6 +218,7 @@ export function statsCommand(): Command {
       }
 
       metadata.close()
+      memoryStore?.close()
     })
 }
 

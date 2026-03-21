@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "fs";
-import { resolve } from "path";
+import { isAbsolute, resolve } from "path";
 import { z } from "zod";
 import safe from "safe-regex2";
 import { getLogger } from "./logger.js";
@@ -45,6 +45,34 @@ export interface MemoryConfig {
     symbols: string[];
     maxChunks: number;
   }>;
+  /** Enable or disable the memory layer (default true) */
+  memory: boolean;
+  /** Token budget reserved for memory context injection (default 500) */
+  memoryBudget: number;
+  /** Additional directories to scan for memory .md files */
+  memoryDirs: string[];
+  /** Enable live memory directory watching while daemon runs */
+  memoryWatch: boolean;
+  /** Absolute floor ratio reserved for code context before memory */
+  memoryCodeFloorRatio: number;
+  /** Budget for always-on rule memories */
+  memoryHotBudget: number;
+  /** Budget for generated working state */
+  memoryWorkingBudget: number;
+  /** Budget for episode summaries */
+  memoryEpisodeBudget: number;
+  /** Archive episode memories older than this many days */
+  memoryArchiveDays: number;
+  /** Run compaction every N hours while daemon runs */
+  memoryCompactionHours: number;
+  /** Writable managed memory directory */
+  memoryWritableDir: string;
+  /** Allow deterministic automatic memory creation */
+  memoryAutoCreate: boolean;
+  /** Number of repeated retrievals before promoting a fact */
+  memoryFactPromotionThreshold: number;
+  /** Number of working-memory snapshots to retain */
+  memoryWorkingHistoryLimit: number;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -54,7 +82,7 @@ const UserConfigSchema = z.object({
   embeddingDimensions: z.number().int().min(1).optional(),
   ollamaUrl: z.string().url().refine((u) => {
     const h = new URL(u).hostname;
-    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+    return h === "localhost" || h === "127.0.0.1" || h === "::1";
   }, { message: "ollamaUrl must point to localhost (use localhost, 127.0.0.1, or [::1])" }).optional(),
   extensions: z.array(z.string()).optional(),
   ignorePatterns: z.array(z.string()).optional(),
@@ -97,6 +125,20 @@ const UserConfigSchema = z.object({
     symbols: z.array(z.string()).min(1),
     maxChunks: z.number().int().min(1).default(4),
   })).optional(),
+  memory: z.boolean().optional(),
+  memoryBudget: z.number().min(0).optional(),
+  memoryDirs: z.array(z.string()).optional(),
+  memoryWatch: z.boolean().optional(),
+  memoryCodeFloorRatio: z.number().min(0).max(1).optional(),
+  memoryHotBudget: z.number().min(0).optional(),
+  memoryWorkingBudget: z.number().min(0).optional(),
+  memoryEpisodeBudget: z.number().min(0).optional(),
+  memoryArchiveDays: z.number().int().min(1).optional(),
+  memoryCompactionHours: z.number().positive().optional(),
+  memoryWritableDir: z.string().optional(),
+  memoryAutoCreate: z.boolean().optional(),
+  memoryFactPromotionThreshold: z.number().int().min(1).optional(),
+  memoryWorkingHistoryLimit: z.number().int().min(1).optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -140,6 +182,20 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   debounceMs: 2000,
   port: 37222,
   implementationPaths: ["src/", "lib/", "bin/"],
+  memory: true,
+  memoryBudget: 500,
+  memoryDirs: [],
+  memoryWatch: true,
+  memoryCodeFloorRatio: 0.8,
+  memoryHotBudget: 120,
+  memoryWorkingBudget: 80,
+  memoryEpisodeBudget: 150,
+  memoryArchiveDays: 30,
+  memoryCompactionHours: 6,
+  memoryWritableDir: ".memory/reporecall-memories",
+  memoryAutoCreate: true,
+  memoryFactPromotionThreshold: 3,
+  memoryWorkingHistoryLimit: 1,
   factExtractors: [],
   conceptBundles: [
     {
@@ -157,8 +213,8 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     {
       kind: "search_pipeline",
       pattern: "\\bsearch\\s+pipeline\\b|\\bretrieval\\s+pipeline\\b|\\bintent\\s+classification\\s+route\\b|\\bhybrid\\s+search\\b|\\bsearch\\s+routing\\b|\\bquery\\s+routing\\b|\\broute\\s+selection\\b",
-      symbols: ["classifyIntent", "deriveRoute", "handlePromptContextDetailed", "searchWithContext", "search", "resolveSeeds"],
-      maxChunks: 5,
+      symbols: ["searchWithContext", "search", "buildDeepRouteContext", "assembleDeepRouteContext", "handlePromptContextDetailed", "resolveSeeds", "classifyIntent", "deriveRoute"],
+      maxChunks: 8,
     },
     {
       kind: "storage",
@@ -169,8 +225,8 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     {
       kind: "daemon",
       pattern: "\\bdaemon\\b|\\bhttp\\s+server\\b|\\bserver\\s+architect",
-      symbols: ["createDaemonServer", "handlePromptContext", "sanitizeQuery", "IndexScheduler"],
-      maxChunks: 4,
+      symbols: ["handlePromptContextDetailed", "handleSessionStart", "createDaemonServer", "serveCommand", "handlePromptContext", "sanitizeQuery", "IndexScheduler"],
+      maxChunks: 6,
     },
     {
       kind: "embedding",
@@ -189,6 +245,12 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
       pattern: "\\btoken\\s+budget\\b|\\bcontext\\s+assembl|\\bbudget\\s+strat",
       symbols: ["assembleContext", "assembleConceptContext", "assembleDeepRouteContext", "AssembledContext", "countTokens"],
       maxChunks: 5,
+    },
+    {
+      kind: "lifecycle",
+      pattern: "\\bgraceful\\s+shutdown\\b|\\bshutdown\\b|\\bstartup\\b|\\bteardown\\b|\\bdrain\\b|\\bclose\\s+async\\b",
+      symbols: ["shutdown", "closeAsync", "drain", "stop", "serveCommand", "handleSessionStart"],
+      maxChunks: 6,
     },
   ],
 };
@@ -237,6 +299,13 @@ export function loadConfig(projectRoot: string): MemoryConfig {
       return [...merged, ...additions];
     })(),
   };
+
+  merged.memoryDirs = (merged.memoryDirs ?? []).map((dir) =>
+    isAbsolute(dir) ? dir : resolve(projectRoot, dir)
+  );
+  merged.memoryWritableDir = isAbsolute(merged.memoryWritableDir)
+    ? merged.memoryWritableDir
+    : resolve(projectRoot, merged.memoryWritableDir);
 
   // Validate search weight sum
   const weightSum = merged.searchWeights.vector + merged.searchWeights.keyword + merged.searchWeights.recency;

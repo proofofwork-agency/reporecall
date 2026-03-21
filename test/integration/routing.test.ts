@@ -262,9 +262,8 @@ describe("R2 deep route", () => {
     if (searchResults.length > 0) {
       const deepContext = assembleDeepRouteContext(searchResults, config.contextBudget, "how does the architecture handle requests?");
 
-      expect(deepContext.text).toContain("resolve_seed");
-      expect(deepContext.text).toContain("build_stack_tree");
       expect(deepContext.text).toContain("low confidence");
+      expect(deepContext.text).toContain("repository tools are allowed");
     }
   });
 
@@ -280,8 +279,8 @@ describe("R2 deep route", () => {
       pipeline.getFTSStore()
     );
     expect(result).not.toBeNull();
-    expect(result!.text).toContain("resolve_seed");
-    expect(result!.text).toContain("build_stack_tree");
+    expect(result!.text).toContain("low confidence");
+    expect(result!.text).toContain("repository tools are allowed");
   });
 });
 

@@ -33,6 +33,24 @@ function countLines(content: string): number {
     : content.split('\n').length;
 }
 
+function buildWholeFileChunk(
+  id: string,
+  relPath: string,
+  content: string,
+  language: string
+): CodeChunk {
+  return {
+    id,
+    filePath: relPath,
+    name: relPath,
+    kind: "file",
+    content,
+    startLine: 1,
+    endLine: Math.max(1, countLines(content)),
+    language,
+  };
+}
+
 function extractName(node: SyntaxNode): string {
   const nameNode =
     node.childForFieldName("name") ??
@@ -47,6 +65,27 @@ function extractName(node: SyntaxNode): string {
   ) {
     const varName = node.parent.childForFieldName("name");
     if (varName) return varName.text;
+  }
+
+  // For arrow/function callbacks passed directly to a call:
+  //   Deno.serve(async (req) => { ... })  →  "serve_handler"
+  //   app.get("/path", (req, res) => {})  →  "get_handler"
+  if (
+    (node.type === "arrow_function" || node.type === "function") &&
+    node.parent?.type === "arguments"
+  ) {
+    const callExpr = node.parent.parent;
+    if (callExpr?.type === "call_expression") {
+      const fn = callExpr.childForFieldName("function");
+      if (fn) {
+        // member_expression: Deno.serve → "serve", app.get → "get"
+        const calleeName =
+          fn.type === "member_expression"
+            ? fn.childForFieldName("property")?.text
+            : fn.text;
+        if (calleeName) return `${calleeName}_handler`;
+      }
+    }
   }
 
   // For export statements, try to get the name from the declaration
@@ -215,68 +254,61 @@ export async function chunkFileWithCalls(
   if (!lang) {
     const id = h.h64ToString(`${relPath}:file:0`);
     return {
-      chunks: [
-        {
-          id,
-          filePath: relPath,
-          name: relPath,
-          kind: "file",
-          content,
-          startLine: 1,
-          endLine: Math.max(1, countLines(content)),
-          language: langName,
-        },
-      ],
+      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
       callEdges: [],
       rawImports: [],
-      language: null,
+      language: langName,
     };
   }
 
   const parser = createParser(lang);
-  const tree = parser.parse(content);
+  let tree: Parser.Tree | null = null;
+  try {
+    tree = parser.parse(content);
+  } catch {
+    const id = h.h64ToString(`${relPath}:file:0`);
+    return {
+      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
+      callEdges: [],
+      rawImports: [],
+      language: langName,
+    };
+  }
   if (!tree) {
     const id = h.h64ToString(`${relPath}:file:0`);
     return {
-      chunks: [
-        {
-          id,
-          filePath: relPath,
-          name: relPath,
-          kind: "file",
-          content,
-          startLine: 1,
-          endLine: Math.max(1, countLines(content)),
-          language: langName,
-        },
-      ],
+      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
       callEdges: [],
       rawImports: [],
-      language: null,
+      language: langName,
     };
   }
 
   const nodes: Parser.SyntaxNode[] = [];
-  walkForExtractables(tree.rootNode, config, nodes);
+  try {
+    walkForExtractables(tree.rootNode, config, nodes);
+  } catch {
+    const id = h.h64ToString(`${relPath}:file:0`);
+    return {
+      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
+      callEdges: [],
+      rawImports: [],
+      language: langName,
+    };
+  }
 
   if (nodes.length === 0) {
     const id = h.h64ToString(`${relPath}:file:0`);
+    // Still extract imports — the tree parsed fine, just no extractable nodes
+    const tsJsLanguages = new Set(["typescript", "tsx", "javascript"]);
+    const fallbackImports = tsJsLanguages.has(langName)
+      ? extractImports(tree.rootNode, langName)
+      : [];
     return {
-      chunks: [
-        {
-          id,
-          filePath: relPath,
-          name: relPath,
-          kind: "file",
-          content,
-          startLine: 1,
-          endLine: Math.max(1, countLines(content)),
-          language: langName,
-        },
-      ],
+      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
       callEdges: [],
-      rawImports: [],
-      language: null,
+      rawImports: fallbackImports,
+      language: langName,
     };
   }
 

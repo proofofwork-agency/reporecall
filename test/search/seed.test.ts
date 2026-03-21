@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { resolveSeeds, extractExplicitTargets, scoreFTSCandidate } from "../../src/search/seed.js";
-import type { StoredChunk } from "../../src/storage/types.js";
+import type { ResolvedTargetAliasHit, StoredChunk } from "../../src/storage/types.js";
 import type { FTSResult } from "../../src/storage/fts-store.js";
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,11 @@ function makeChunk(overrides: Partial<StoredChunk> & { id: string; name: string;
 
 interface FakeMetadata {
   findChunksByNames(names: string[]): StoredChunk[];
+  findChunksByNamePrefixes?(prefixes: string[], limit?: number): StoredChunk[];
   getChunk(id: string): StoredChunk | undefined;
+  getChunksByIds?(ids: string[]): StoredChunk[];
+  findChunksByFilePath?(filePath: string): StoredChunk[];
+  resolveTargetAliases?(normalizedAliases: string[]): ResolvedTargetAliasHit[];
 }
 
 interface FakeFTS {
@@ -32,8 +36,22 @@ function createFakeMetadata(chunks: StoredChunk[]): FakeMetadata {
     findChunksByNames(names: string[]): StoredChunk[] {
       return chunks.filter((c) => names.includes(c.name));
     },
+    findChunksByNamePrefixes(prefixes: string[], limit = 20): StoredChunk[] {
+      return chunks.filter((c) =>
+        prefixes.some((p) => p.length >= 4 && c.name.startsWith(p))
+      ).slice(0, limit);
+    },
     getChunk(id: string): StoredChunk | undefined {
       return chunks.find((c) => c.id === id);
+    },
+    getChunksByIds(ids: string[]): StoredChunk[] {
+      return chunks.filter((c) => ids.includes(c.id));
+    },
+    findChunksByFilePath(filePath: string): StoredChunk[] {
+      return chunks.filter((c) => c.filePath === filePath);
+    },
+    resolveTargetAliases(): ResolvedTargetAliasHit[] {
+      return [];
     },
   };
 }
@@ -78,10 +96,14 @@ describe("extractExplicitTargets", () => {
     expect(targets.filter((t) => /^[A-Z]/.test(t))).toHaveLength(0);
   });
 
-  it("does not extract all-caps acronyms (AST, FTS, MCP)", () => {
+  it("does not extract blocklisted all-caps acronyms (AST, MCP)", () => {
     expect(extractExplicitTargets("show me the AST graph")).not.toContain("AST");
-    expect(extractExplicitTargets("how does FTS work?")).not.toContain("FTS");
     expect(extractExplicitTargets("what is the MCP server?")).not.toContain("MCP");
+  });
+
+  it("extracts non-blocklisted uppercase acronyms (FTS)", () => {
+    expect(extractExplicitTargets("how does FTS work?")).toContain("FTS");
+    expect(extractExplicitTargets("why does the FTS search return empty results?")).toContain("FTS");
   });
 
   it("does not extract short route labels (R0, R1, R2)", () => {
@@ -118,6 +140,135 @@ describe("resolveSeeds", () => {
       expect(result.bestSeed!.name).toBe("AuthService");
       expect(result.bestSeed!.confidence).toBeGreaterThanOrEqual(0.9);
       expect(result.bestSeed!.reason).toBe("explicit_target");
+    });
+  });
+
+  describe("resolved typed targets", () => {
+    it("resolves hyphenated endpoint slugs before FTS fallback", () => {
+      const endpointChunk = makeChunk({
+        id: "serve-handler",
+        name: "serve_handler",
+        filePath: "supabase/functions/generate-image/index.ts",
+        kind: "function_declaration",
+      });
+      const metadata = createFakeMetadata([endpointChunk]);
+      metadata.resolveTargetAliases = () => [
+        {
+          target: {
+            id: "endpoint:supabase/functions/generate-image/index.ts",
+            kind: "endpoint",
+            canonicalName: "generate-image",
+            normalizedName: "generate image",
+            filePath: "supabase/functions/generate-image/index.ts",
+            ownerChunkId: "serve-handler",
+            subsystem: "functions",
+            confidence: 0.98,
+          },
+          alias: "generate-image",
+          normalizedAlias: "generate image",
+          source: "slug",
+          weight: 0.95,
+        },
+      ];
+      const fts = createFakeFTS([]);
+
+      const result = resolveSeeds("how does generate-image work?", metadata as any, fts as any);
+
+      expect(result.bestSeed).not.toBeNull();
+      expect(result.bestSeed?.filePath).toBe("supabase/functions/generate-image/index.ts");
+      expect(result.bestSeed?.reason).toBe("resolved_target");
+      expect(result.bestSeed?.targetKind).toBe("endpoint");
+    });
+
+    it("keeps subsystem nouns routable without outranking direct symbols", () => {
+      const pipelineChunk = makeChunk({
+        id: "index-pipeline",
+        name: "IndexingPipeline",
+        filePath: "src/indexer/pipeline.ts",
+        kind: "class_declaration",
+      });
+      const metadata = createFakeMetadata([pipelineChunk]);
+      metadata.resolveTargetAliases = () => [
+        {
+          target: {
+            id: "subsystem:indexer",
+            kind: "subsystem",
+            canonicalName: "indexer",
+            normalizedName: "indexer",
+            filePath: "src/indexer/pipeline.ts",
+            ownerChunkId: "index-pipeline",
+            subsystem: "indexer",
+            confidence: 0.84,
+          },
+          alias: "indexing",
+          normalizedAlias: "indexing",
+          source: "derived",
+          weight: 0.88,
+        },
+      ];
+      const fts = createFakeFTS([]);
+
+      const result = resolveSeeds("why does indexing fail", metadata as any, fts as any);
+
+      expect(result.bestSeed?.filePath).toBe("src/indexer/pipeline.ts");
+      expect(["subsystem", "symbol"]).toContain(result.bestSeed?.targetKind);
+      expect(result.bestSeed?.reason).toBe("resolved_target");
+    });
+
+    it("prefers direct symbol matches over derived subsystem expansions on multi-term queries", () => {
+      const pipelineChunk = makeChunk({
+        id: "index-pipeline",
+        name: "IndexingPipeline",
+        filePath: "src/indexer/pipeline.ts",
+        kind: "class_declaration",
+      });
+      const storageChunk = makeChunk({
+        id: "stats-store",
+        name: "StatsStore",
+        filePath: "src/storage/stats-store.ts",
+        kind: "class_declaration",
+      });
+      const metadata = createFakeMetadata([pipelineChunk, storageChunk]);
+      metadata.resolveTargetAliases = () => [
+        {
+          target: {
+            id: "subsystem:storage",
+            kind: "subsystem",
+            canonicalName: "storage",
+            normalizedName: "storage",
+            filePath: "src/storage/stats-store.ts",
+            ownerChunkId: "stats-store",
+            subsystem: "storage",
+            confidence: 0.84,
+          },
+          alias: "storage",
+          normalizedAlias: "storage",
+          source: "derived",
+          weight: 0.86,
+        },
+        {
+          target: {
+            id: "symbol:indexing",
+            kind: "symbol",
+            canonicalName: "IndexingPipeline",
+            normalizedName: "indexing pipeline",
+            filePath: "src/indexer/pipeline.ts",
+            ownerChunkId: "index-pipeline",
+            subsystem: "indexer",
+            confidence: 0.98,
+          },
+          alias: "IndexingPipeline",
+          normalizedAlias: "indexing pipeline",
+          source: "symbol",
+          weight: 1,
+        },
+      ];
+      const fts = createFakeFTS([]);
+
+      const result = resolveSeeds("how does the indexing pipeline process files?", metadata as any, fts as any);
+
+      expect(result.bestSeed?.name).toBe("IndexingPipeline");
+      expect(result.bestSeed?.targetKind).toBe("symbol");
     });
   });
 
@@ -291,6 +442,125 @@ describe("resolveSeeds", () => {
     });
   });
 
+  describe("prefix variants in FTS fallback", () => {
+    it("generates prefix queries that bridge natural-language to code abbreviations", () => {
+      const authChunk = makeChunk({
+        id: "auth-provider",
+        name: "AuthProvider",
+        filePath: "src/auth/provider.ts",
+        kind: "class_declaration",
+        content: "export class AuthProvider {}",
+      });
+      // FTS returns auth chunk when searching prefix "auth" (from "authentication")
+      let searchedQueries: string[] = [];
+      const fts = {
+        search(query: string, _limit?: number): FTSResult[] {
+          searchedQueries.push(query);
+          // Return auth chunk for any query containing "auth"
+          if (query.includes("auth")) {
+            return [{ id: "auth-provider", rank: -6.0 }];
+          }
+          return [];
+        },
+      };
+      const metadata = createFakeMetadata([authChunk]);
+
+      resolveSeeds(
+        "add to every step in the authentication flow a log message",
+        metadata as any,
+        fts as any
+      );
+
+      // The prefix "auth" (from "authentication".slice(0,4)) should be among searched queries
+      expect(searchedQueries.some((q) => q === "auth")).toBe(true);
+    });
+
+    it("prefers implementation auth seeds over e2e helpers for broad auth-flow queries", () => {
+      const authProvider = makeChunk({
+        id: "auth-provider",
+        name: "AuthProvider",
+        filePath: "src/hooks/useAuth.tsx",
+        kind: "function_declaration",
+      });
+      const useAuth = makeChunk({
+        id: "use-auth",
+        name: "useAuth",
+        filePath: "src/hooks/useAuth.tsx",
+        kind: "function_declaration",
+      });
+      const e2eHelper = makeChunk({
+        id: "e2e-auth",
+        name: "setupMockAuth",
+        filePath: "e2e/helpers/auth.ts",
+        kind: "function_declaration",
+      });
+      const noisyFlow = makeChunk({
+        id: "flow-noise",
+        name: "stripBunnyCDNSigningParams",
+        filePath: "src/lib/flow/flowService.ts",
+        kind: "function_declaration",
+      });
+      const metadata = createFakeMetadata([authProvider, useAuth, e2eHelper, noisyFlow]);
+      const fts = createFakeFTS([
+        { id: "flow-noise", rank: -8.0 },
+        { id: "e2e-auth", rank: -7.5 },
+        { id: "auth-provider", rank: -7.0 },
+        { id: "use-auth", rank: -6.5 },
+      ]);
+
+      const result = resolveSeeds(
+        "add to every step in the authentication flow a log message",
+        metadata as any,
+        fts as any
+      );
+
+      expect(result.bestSeed).not.toBeNull();
+      expect(result.bestSeed!.filePath).toBe("src/hooks/useAuth.tsx");
+      expect(result.bestSeed!.confidence).toBeGreaterThanOrEqual(0.55);
+      expect(result.seeds.some((seed) => seed.filePath === "e2e/helpers/auth.ts")).toBe(false);
+    });
+
+    it("does not stop before later higher-confidence auth candidates", () => {
+      const authModal = makeChunk({
+        id: "auth-modal",
+        name: "AuthModal",
+        filePath: "src/components/AuthModal.tsx",
+        kind: "function_declaration",
+      });
+      const authProvider = makeChunk({
+        id: "auth-provider",
+        name: "AuthProvider",
+        filePath: "src/hooks/useAuth.tsx",
+        kind: "function_declaration",
+      });
+      const noisy = Array.from({ length: 8 }, (_, i) =>
+        makeChunk({
+          id: `noise-${i}`,
+          name: `flowHandler${i}`,
+          filePath: `src/lib/flow/handler${i}.ts`,
+          kind: "function_declaration",
+        })
+      );
+      const metadata = createFakeMetadata([...noisy, authModal, authProvider]);
+      const fts = createFakeFTS([
+        ...noisy.map((chunk, i) => ({ id: chunk.id, rank: -(20 - i) })),
+        { id: "auth-modal", rank: -6.5 },
+        { id: "auth-provider", rank: -6.2 },
+      ]);
+
+      const result = resolveSeeds(
+        "add to every step in the authentication flow a log message",
+        metadata as any,
+        fts as any
+      );
+
+      expect(result.bestSeed).not.toBeNull();
+      expect(["src/components/AuthModal.tsx", "src/hooks/useAuth.tsx"]).toContain(
+        result.bestSeed!.filePath
+      );
+    });
+  });
+
   describe("no match", () => {
     it("returns null bestSeed for completely unrelated query", () => {
       const metadata = createFakeMetadata([]);
@@ -430,6 +700,54 @@ describe("scoreFTSCandidate", () => {
     });
     const score = scoreFTSCandidate(chunk, ["search", "pipeline"], -20.0);
     expect(score).toBeLessThanOrEqual(0.85);
+  });
+
+  it("penalises low coverage-ratio on multi-term queries below 0.55", () => {
+    // Simulates "add to every step in the authentication flow a log message"
+    // → stripBunnyCDNSigningParams in src/lib/flow/flowservice.ts
+    // "sign" substring-matches "signing" in name → +1
+    // "flow" substring-matches path → +1
+    // localityCount = 2 but ratio 2/7 = 0.28 → still below 0.5 → scaling applies
+    const chunk = makeChunk({
+      id: "flow-1",
+      name: "stripBunnyCDNSigningParams",
+      filePath: "src/lib/flow/flowservice.ts",
+      kind: "function_declaration",
+    });
+    const score = scoreFTSCandidate(
+      chunk,
+      ["add", "every", "step", "authentication", "flow", "log", "message"],
+      -8.0
+    );
+    expect(score).toBeLessThan(0.55);
+  });
+
+  it("keeps strong long-term auth anchors above the R1 threshold", () => {
+    const chunk = makeChunk({
+      id: "auth-provider",
+      name: "AuthProvider",
+      filePath: "src/hooks/useAuth.tsx",
+      kind: "function_declaration",
+    });
+    const score = scoreFTSCandidate(
+      chunk,
+      ["add", "every", "step", "authentication", "flow", "log", "message"],
+      -7.0
+    );
+    expect(score).toBeGreaterThanOrEqual(0.55);
+  });
+
+  it("does not penalise 2-term queries matching both terms", () => {
+    const chunk = makeChunk({
+      id: "sp-1",
+      name: "searchPipeline",
+      filePath: "src/search/pipeline.ts",
+      kind: "function_declaration",
+      content: "export function searchPipeline() {}",
+    });
+    // 2 content terms — both match name+path → no scaling
+    const score = scoreFTSCandidate(chunk, ["search", "pipeline"], -8.0);
+    expect(score).toBeGreaterThanOrEqual(0.55);
   });
 
   it("generic navigational query scores high enough for R1 with good FTS hit", () => {

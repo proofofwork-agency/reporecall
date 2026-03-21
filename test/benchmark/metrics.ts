@@ -69,6 +69,21 @@ export interface AllMetrics {
   r10: number;
 }
 
+export interface ExpectedSetMetrics {
+  precisionAt3: number;
+  recallAt5: number;
+  mrr: number;
+  ndcg10: number;
+  hit: boolean;
+}
+
+export interface RetrievalCertaintyInputs {
+  expectedHitCoverage: number;
+  codeFloorPreserved: boolean;
+  routeAppropriate: boolean;
+  promptCompleteness: number;
+}
+
 /** Convenience wrapper — computes all standard metrics in one call. */
 export function computeAllMetrics(
   retrieved: number[],
@@ -84,4 +99,168 @@ export function computeAllMetrics(
     r5: recallAtK(retrieved, 5, totalRelevant),
     r10: recallAtK(retrieved, 10, totalRelevant),
   };
+}
+
+export interface BenchmarkCaseMetrics {
+  retrieved: number[];
+  ideal: number[];
+  latencyMs?: number;
+  routeMatched?: boolean;
+  freshnessMatched?: boolean;
+}
+
+export interface BenchmarkSuiteMetrics extends AllMetrics {
+  recall: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  routeAccuracy: number;
+  freshnessAccuracy: number;
+}
+
+export function mean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Nearest-rank percentile.
+ * Accepts p in [0, 1] where 0.95 = p95.
+ */
+export function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  if (p <= 0) return Math.min(...values);
+  if (p >= 1) return Math.max(...values);
+
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.ceil(sorted.length * p) - 1;
+  return sorted[Math.max(0, Math.min(sorted.length - 1, rank))] ?? 0;
+}
+
+export function computeBenchmarkSuiteMetrics(
+  cases: BenchmarkCaseMetrics[],
+): BenchmarkSuiteMetrics {
+  if (cases.length === 0) {
+    return {
+      ndcg10: 0,
+      mrr: 0,
+      map: 0,
+      p5: 0,
+      p10: 0,
+      r5: 0,
+      r10: 0,
+      recall: 0,
+      avgLatencyMs: 0,
+      p95LatencyMs: 0,
+      routeAccuracy: 0,
+      freshnessAccuracy: 0,
+    };
+  }
+
+  const perCase = cases.map((testCase) => {
+    const base = computeAllMetrics(testCase.retrieved, testCase.ideal);
+    const totalRelevant = testCase.ideal.filter((rel) => rel >= 1).length;
+    return {
+      ...base,
+      recall: recallAtK(testCase.retrieved, testCase.retrieved.length, totalRelevant),
+    };
+  });
+
+  const latencies = cases
+    .map((testCase) => testCase.latencyMs)
+    .filter((latency): latency is number => typeof latency === "number");
+  const routeChecks = cases
+    .map((testCase) => testCase.routeMatched)
+    .filter((matched): matched is boolean => typeof matched === "boolean");
+  const freshnessChecks = cases
+    .map((testCase) => testCase.freshnessMatched)
+    .filter((matched): matched is boolean => typeof matched === "boolean");
+
+  return {
+    ndcg10: mean(perCase.map((metric) => metric.ndcg10)),
+    mrr: mean(perCase.map((metric) => metric.mrr)),
+    map: mean(perCase.map((metric) => metric.map)),
+    p5: mean(perCase.map((metric) => metric.p5)),
+    p10: mean(perCase.map((metric) => metric.p10)),
+    r5: mean(perCase.map((metric) => metric.r5)),
+    r10: mean(perCase.map((metric) => metric.r10)),
+    recall: mean(perCase.map((metric) => metric.recall)),
+    avgLatencyMs: mean(latencies),
+    p95LatencyMs: percentile(latencies, 0.95),
+    routeAccuracy: routeChecks.length === 0
+      ? 0
+      : mean(routeChecks.map((matched) => (matched ? 1 : 0))),
+    freshnessAccuracy: freshnessChecks.length === 0
+      ? 0
+      : mean(freshnessChecks.map((matched) => (matched ? 1 : 0))),
+  };
+}
+
+export function rate(values: boolean[]): number {
+  if (values.length === 0) return 0;
+  return values.filter(Boolean).length / values.length;
+}
+
+export function reductionPct(baseline: number, candidate: number): number {
+  if (baseline <= 0) return 0;
+  return Math.max(0, (baseline - candidate) / baseline);
+}
+
+export function compressionRatio(fullTokens: number, compressedTokens: number): number {
+  if (fullTokens <= 0) return 0;
+  return Math.max(0, 1 - compressedTokens / fullTokens);
+}
+
+export function computeExpectedSetMetrics(
+  retrievedIds: string[],
+  expectedIds: string[],
+): ExpectedSetMetrics {
+  const expectedSet = new Set(expectedIds);
+  const binaryRelevance = retrievedIds.map((id) => (expectedSet.has(id) ? 1 : 0));
+  const ideal = expectedIds.map(() => 1);
+  const totalRelevant = expectedSet.size;
+
+  return {
+    precisionAt3: precisionAtK(binaryRelevance, 3),
+    recallAt5: recallAtK(binaryRelevance, 5, totalRelevant),
+    mrr: mrr(binaryRelevance),
+    ndcg10: ndcg(binaryRelevance, ideal, 10),
+    hit: binaryRelevance.some((grade) => grade >= 1),
+  };
+}
+
+export function retrievalCertaintyScore(inputs: RetrievalCertaintyInputs): number {
+  const expectedHitCoverage = clamp01(inputs.expectedHitCoverage);
+  const promptCompleteness = clamp01(inputs.promptCompleteness);
+  const codeFloor = inputs.codeFloorPreserved ? 1 : 0;
+  const routeAppropriate = inputs.routeAppropriate ? 1 : 0;
+
+  return round3(
+    expectedHitCoverage * 0.35 +
+      codeFloor * 0.25 +
+      routeAppropriate * 0.2 +
+      promptCompleteness * 0.2
+  );
+}
+
+export function codeCertaintyScore(
+  retrievalScore: number,
+  answerGroundingScore?: number | null
+): number {
+  const retrieval = clamp01(retrievalScore);
+  if (answerGroundingScore === undefined || answerGroundingScore === null) {
+    return round3(retrieval);
+  }
+  const answer = clamp01(answerGroundingScore);
+  return round3(retrieval * 0.6 + answer * 0.4);
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }

@@ -191,8 +191,13 @@ describe('initCommand — real file creation', () => {
     const mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
     expect(mcpConfig.mcpServers).toBeDefined()
     expect(mcpConfig.mcpServers.reporecall).toBeDefined()
-    expect(mcpConfig.mcpServers.reporecall.command).toBe('npx')
-    expect(mcpConfig.mcpServers.reporecall.args).toEqual(['reporecall', 'mcp', '--project', '.'])
+    expect(mcpConfig.mcpServers.reporecall.command).toBe(process.execPath)
+    expect(mcpConfig.mcpServers.reporecall.args).toEqual([
+      resolve(process.argv[1]),
+      'mcp',
+      '--project',
+      '.',
+    ])
   })
 
   it('preserves existing MCP servers when updating .mcp.json', async () => {

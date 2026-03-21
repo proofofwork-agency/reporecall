@@ -74,7 +74,7 @@ describe("assembleFlowContext", () => {
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
     expect(result.text).toContain("## Relevant codebase context (flow trace)");
-    expect(result.text).toContain("Route: R1");
+    expect(result.text).toContain("> Seed:");
     expect(result.text).toContain("handleLogin");
   });
 
@@ -295,9 +295,7 @@ describe("assembleDeepRouteContext", () => {
     const result = assembleDeepRouteContext(chunks, 10000);
 
     expect(result.text).toContain("## Relevant codebase context (low confidence)");
-    expect(result.text).toContain("retrieval engine could not identify a clear entry point");
-    expect(result.text).toContain("`resolve_seed`");
-    expect(result.text).toContain("`build_stack_tree`");
+    expect(result.text).toContain("Low confidence — repository tools are allowed.");
   });
 
   it("includes the regular chunk context after the marker", () => {

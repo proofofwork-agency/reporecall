@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.0] — 2026-03-21
+
+### Features
+
+- **Memory V1** — Persistent cross-session memory layer for project knowledge, user preferences, conventions, and working state. Memories stored as markdown in `.memory/reporecall-memories/`, indexed with FTS, injected alongside code context. Budget-controlled per memory class (rule/fact/episode/working).
+- **7 new MCP tools** — `recall_memories`, `store_memory`, `forget_memory`, `list_memories`, `explain_memory`, `compact_memories`, `clear_working_memory`.
+- **Memory runtime** — Automatic memory directory watching, compaction, fact promotion, and working memory generation while daemon runs.
+- **Target resolution catalog** — New `TargetStore` indexes symbols, file modules, endpoints, and routes with alias-based lookup. Enables literal-dispatch resolution (e.g., `invoke("generate-image")` resolves to the handler file).
+- **Broad workflow search** — New `selectBroadWorkflowBundle` for architecture and inventory queries. Includes corpus-aware term expansion, dominant family detection, and import corroboration.
+
+### Performance
+
+- **Seed resolution cache** — Thread resolved `SeedResult` through all call sites. Eliminates 2-3 redundant `resolveSeeds()` calls per search (~8-15ms saved per query).
+- **Query embedding LRU cache** — 50-entry LRU cache on `HybridSearch` for query embeddings. Saves 15-40ms (local) or 50-200ms (Ollama/OpenAI) per cache hit. Cache cleared on `updateStores()` to prevent stale vectors after re-index.
+
+### Fixes
+
+- **System tag stripping** — `sanitizeQuery` now strips `<system-reminder>`, `<task-notification>`, `<tool-result>`, and `antml:*` XML blocks that Claude Code injects into hook payloads. Also strips bare temp-dir paths and "Read the output file" boilerplate.
+- **Conversational query skip** — Intent classifier now skips short conversational directives ("ok", "go ahead", "check if it worked") that previously triggered irrelevant retrieval.
+- **safeHeaderValue** — X-Memory-Debug headers strip non-printable ASCII to prevent `setHeader` throws.
+- **Chunker crash resilience** — Tree-sitter parse errors fall back to whole-file chunks instead of crashing.
+- **Deno.serve() handler naming** — Arrow function callbacks named `serve_handler` instead of `<anonymous>`.
+- **ollamaUrl validation** — Fixed IPv6 localhost check (`[::1]` -> `::1`).
+- **Fallback chunk language** — File-level fallback chunks preserve detected language instead of returning null.
+
+### Refactoring
+
+- **Session-start slimmed** — No longer performs code search on session start; returns only behavior instruction + conventions summary.
+- **FTS search strategy overhaul** — Rarest-term anchoring, camelCase compound phrase matching, selective OR with document-frequency filtering, stop word removal.
+- **Index format versioning** — Automatic full rebuild on format mismatch.
+
+### Benchmarks
+
+- Route accuracy improved: 81.5% -> 87%
+- R2 broad queries improved significantly: NDCG 0.058 -> 0.351
+- R0 exact lookup regressed (under investigation — memory-system symbols polluting annotations)
+
 ## [0.2.5] — 2026-03-19
 
 ### Fixes

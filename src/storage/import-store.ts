@@ -17,6 +17,7 @@ export class ImportStore {
   private findImporterFilesStmt!: Statement;
   private findByNameStmt!: Statement;
   private findByNameWithFileStmt!: Statement;
+  private clearStmt!: Statement;
 
   constructor(private readonly db: Database.Database) {}
 
@@ -70,6 +71,7 @@ export class ImportStore {
       `SELECT file_path, imported_name, source_module, resolved_path, is_default, is_namespace
        FROM imports WHERE imported_name = ? AND file_path = ?`
     );
+    this.clearStmt = this.db.prepare(`DELETE FROM imports`);
   }
 
   upsertImports(imports: ImportRecord[]): void {
@@ -143,5 +145,9 @@ export class ImportStore {
       isDefault: r.is_default === 1,
       isNamespace: r.is_namespace === 1,
     }));
+  }
+
+  clearAll(): void {
+    this.clearStmt.run();
   }
 }

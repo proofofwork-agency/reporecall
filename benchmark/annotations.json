@@ -1,7 +1,7 @@
 {
   "corpus": "reporecall",
-  "version": "0.2.5",
-  "annotatedAt": "2026-03-18",
+  "version": "0.3.0",
+  "annotatedAt": "2026-03-21",
   "scale": {
     "0": "not relevant",
     "1": "marginally relevant",
@@ -611,8 +611,8 @@
       "relevance": {
         "handlePromptContextDetailed": 3,
         "handleSessionStart": 3,
-        "serve": 2,
-        "startDaemon": 2
+        "createDaemonServer": 2,
+        "serveCommand": 2
       }
     },
     {
@@ -621,10 +621,13 @@
       "category": "debugging",
       "expectedRoute": "R2",
       "relevance": {
-        "closeAsync": 3,
-        "shutdown": 3,
-        "pipeline": 2,
-        "drain": 2
+        "closeAsync": 2,
+        "drain": 2,
+        "IndexingPipeline": 2,
+        "stop": 2,
+        "VectorStore": 2,
+        "ChunkStore": 2,
+        "MetadataStore": 3
       }
     }
   ]
