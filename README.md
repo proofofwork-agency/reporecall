@@ -563,13 +563,8 @@ Hook sufficiency: **2/6** code queries fully answerable from hooks alone. Averag
 
 **Where it falls short (v0.3.3):**
 
-- Hook sufficiency is 33% - seed resolver prefers React components over handler/engine logic
 - R2 (broad architecture) route rarely fires - architectural queries often get narrow R0/R1 treatment
 - MCP tools fill the gap but require an explicit tool call
-
-**Bottom line:** Net positive today. The hooks + MCP combo eliminates most grep chains and gives Claude instant codebase awareness. MCP tools are genuinely excellent. Hook auto-injection needs better seed resolution to move from 33% to 80%+ sufficiency - that's the gap between "useful" and "transformative."
-
-Full benchmark data and gap analysis: [`todo-opus.md`](./todo-opus.md)
 
 ## Security & Operational Notes
 
