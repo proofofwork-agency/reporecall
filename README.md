@@ -10,7 +10,9 @@
 
 **Local codebase memory and project knowledge for Claude Code**
 
-Reporecall indexes your codebase locally - AST chunks, call graph, keyword + vector search - and injects the right context before Claude processes your prompt. Starting with v0.3.0, it also maintains persistent cross-session memory for project decisions, coding conventions, and working state. It runs as a Claude Code hook and MCP server, entirely on your machine - no cloud storage or external API calls.
+**Claude Code greps your codebase one file at a time. Reporecall gives it the whole picture instantly.** Pre-indexed search, call graph, and structured project memory - injected before Claude starts thinking. No grep chains, no wasted tool calls, no re-reading files it already saw. (AST chunking, hybrid FTS + vector search, bidirectional call graph, token-budgeted context assembly.)
+
+Indexes locally, remembers across sessions, runs entirely on your machine. One hook, 18 tools, zero cloud dependency.
 
 ## The Problem
 
