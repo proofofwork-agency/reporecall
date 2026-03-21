@@ -196,7 +196,7 @@ describe('initCommand — real file creation', () => {
       resolve(process.argv[1]),
       'mcp',
       '--project',
-      '.',
+      tmpDir,
     ])
   })
 

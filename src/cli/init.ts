@@ -1,5 +1,5 @@
 import { Command } from 'commander'
-import { resolve, relative } from 'path'
+import { resolve, relative, dirname } from 'path'
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { detectProjectRoot } from '../core/project.js'
@@ -204,15 +204,20 @@ export function initCommand(): Command {
         mcpConfig.mcpServers = {}
       }
       const mcpServers = mcpConfig.mcpServers as Record<string, unknown>
-      // Resolve the CLI entry point from local node_modules if available,
-      // so .mcp.json works for all teammates regardless of install method.
-      const localBin = resolve(projectRoot, 'node_modules', '.bin', 'reporecall')
-      const cliEntry = existsSync(localBin)
-        ? localBin
-        : (process.argv[1] ? resolve(process.argv[1]) : 'reporecall')
+      // Resolve the actual JS entry point (not the .bin shell wrapper) so
+      // `node <entry>` works. Fall back to process.argv[1] for global installs.
+      const pkgJsonPath = resolve(projectRoot, 'node_modules', '@proofofwork-agency', 'reporecall', 'package.json')
+      let cliEntry: string
+      if (existsSync(pkgJsonPath)) {
+        const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'))
+        const binRelative = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.reporecall ?? 'dist/memory.js'
+        cliEntry = resolve(dirname(pkgJsonPath), binRelative)
+      } else {
+        cliEntry = process.argv[1] ? resolve(process.argv[1]) : 'reporecall'
+      }
       mcpServers.reporecall = {
         command: process.execPath,
-        args: [cliEntry, 'mcp', '--project', '.']
+        args: [cliEntry, 'mcp', '--project', projectRoot]
       }
       mcpConfig.mcpServers = mcpServers
 
