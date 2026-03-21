@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.3] — 2026-03-21
+
+### Fixes
+
+- **Session-start wording** — Session instruction now uses tool-neutral wording ("use whichever tool fits") matching CLAUDE.md, instead of prioritizing MCP tools over Grep/Read.
+- **Context header directive** — R0 "Only fetch files NOT listed above" directive now conditional on file list being non-empty. Empty results no longer show a misleading directive.
+- **"X in Y" seed disambiguator** — Regex now gates on identifier-like capture groups (camelCase, snake_case, PascalCase). No longer fires on natural language like "errors in production" or "logged in user".
+- **PreToolUse hook** — Reverted hard deny to soft echo nudge. Agents and subagents no longer blocked; nudge reminds Claude that context was already injected.
+- **CLAUDE.md template** — Tool-neutral 3-point instruction chain: answer from context, fill gaps with any tool, avoid redundant searches.
+- **R0/R1/R2 context headers** — All routes now include `> Files included:` line listing injected file paths, so Claude (and PreToolUse nudge) can see what's already in context.
+
+### Improvements
+
+- **Intent classifier** — Tightened route thresholds and seed scoring for more accurate R0/R1/R2 classification.
+- **Memory dedup** — FTS dedup fix, query expansion fix, working memory timestamps.
+- **Arrow function naming** — Object literal arrow functions now named after their property key in the chunker.
+
 ## [0.3.0] — 2026-03-21
 
 ### Features

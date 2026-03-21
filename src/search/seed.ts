@@ -148,7 +148,21 @@ export function scoreFTSCandidate(
       (variant) => chunkNameLower.includes(variant) || variant.includes(chunkNameLower)
     )
   );
-  const nameScore = isExactMatch ? 0.30 : isPartialMatch ? 0.15 : 0.0;
+  // Substring bonus: when a significant query term (4+ chars) appears as a substring
+  // of the candidate name, boost the partial match. This fixes cases like
+  // "handleCallback" → AuthCallback should beat AngleId because "Callback" overlaps.
+  const hasSubstringOverlap = !isExactMatch && !isPartialMatch && nameMatchTerms.some(
+    (term) => term.term.length >= 4 && chunkNameLower.includes(term.term)
+  );
+  let nameScore = isExactMatch ? 0.30 : isPartialMatch ? 0.15 : hasSubstringOverlap ? 0.10 : 0.0;
+
+  // Prefix bonus: when the first query term is a prefix of the candidate name or vice-versa,
+  // apply a strong bonus. This fixes Porter stemming false matches where "signInWithPassword"
+  // and "getSignedLogoUrl" share the stem "sign" — the prefix match ensures the actual target wins.
+  const firstTerm = queryTermsLower[0] ?? "";
+  if (firstTerm.length >= 3 && (chunkNameLower.startsWith(firstTerm) || firstTerm.startsWith(chunkNameLower))) {
+    nameScore += 0.25;
+  }
 
   // Signal 2: FTS rank contribution (0 to 0.25)
   const rankContrib = 0.25 * Math.min(1, Math.abs(rank) / 10);
@@ -181,12 +195,18 @@ export function scoreFTSCandidate(
   // "flow" dominating "authentication flow" results). Scale ALL signal
   // contributions proportionally instead of applying a small fixed penalty.
   // This is deterministic and language-agnostic — no hardcoded word lists.
-  const namePathText = (chunk.name + " " + chunk.filePath).toLowerCase();
+  // Split camelCase/PascalCase name into components for better coverage matching.
+  // "creditManager" → ["credit", "manager"], so "credit" counts as a name match.
+  // Filter out short components (< 3 chars) from all-caps abbreviations like "CDN" → "c","d","n".
+  const nameComponents = chunk.name
+    .replace(/([A-Z])/g, " $1").toLowerCase().split(/\s+/).filter((c) => c.length >= 3);
+  const namePathText = (nameComponents.join(" ") + " " + chunk.filePath).toLowerCase();
   const matchingLocalityWeight = contentTerms.reduce(
     (sum, term) =>
       sum
       + (
         textMatchesQueryTerm(namePathText, term.term)
+        || nameComponents.some((comp) => comp.includes(term.term) || (comp.length >= 4 && term.term.includes(comp)))
         || getQueryTermVariants(term.term).some((variant) => variant.includes(chunkNameLower))
           ? term.weight
           : 0
@@ -289,6 +309,28 @@ function filePathMentionedInQuery(filePath: string, query: string): boolean {
  * Returns the chunks sorted by preference (best first).
  */
 function disambiguate(chunks: StoredChunk[], query: string): StoredChunk[] {
+  // "X in Y" pattern: when query mentions both an inner function and its container,
+  // prefer the more specific (inner) chunk. E.g., "signOut in useAuth" → prefer signOut.
+  const queryLower = query.toLowerCase();
+  const inMatch = queryLower.match(/\b(\w+)\s+in\s+(\w+)\b/);
+  // Only apply "X in Y" disambiguation when at least one capture looks like a code identifier
+  // (contains uppercase transition = camelCase, or underscore = snake_case, or starts with uppercase).
+  // This avoids firing on natural language like "errors in production" or "logged in user".
+  const looksLikeIdentifier = (s: string): boolean =>
+    /[a-z][A-Z]/.test(s) || s.includes('_') || /^[A-Z]/.test(s);
+  if (inMatch && (looksLikeIdentifier(inMatch[1]!) || looksLikeIdentifier(inMatch[2]!))) {
+    const innerName = inMatch[1]!.toLowerCase();
+    const sorted = [...chunks].sort((a, b) => {
+      const aIsInner = a.name.toLowerCase().includes(innerName) ? 1 : 0;
+      const bIsInner = b.name.toLowerCase().includes(innerName) ? 1 : 0;
+      if (aIsInner !== bIsInner) return bIsInner - aIsInner;
+      const aIsTest = isTestFile(a.filePath) ? 1 : 0;
+      const bIsTest = isTestFile(b.filePath) ? 1 : 0;
+      return aIsTest - bIsTest;
+    });
+    if (sorted.length > 0) return sorted;
+  }
+
   return [...chunks].sort((a, b) => {
     // Prefer chunks whose file path is mentioned in the query
     const aPathMatch = filePathMentionedInQuery(a.filePath, query) ? 1 : 0;
@@ -332,7 +374,21 @@ function compareSeedCandidates(a: SeedCandidate, b: SeedCandidate): number {
   };
   const targetDiff = targetRank(b) - targetRank(a);
   if (targetDiff !== 0) return targetDiff;
-  return (KIND_RANK[b.kind] ?? 1) - (KIND_RANK[a.kind] ?? 1);
+
+  const kindDiff = (KIND_RANK[b.kind] ?? 1) - (KIND_RANK[a.kind] ?? 1);
+  if (kindDiff !== 0) return kindDiff;
+
+  // Path-based tiebreaker: prefer business logic over UI components.
+  // Fixes seed bias where React inspectors/components outrank handlers.
+  const pathRank = (candidate: SeedCandidate): number => {
+    const p = candidate.filePath.toLowerCase();
+    if (/\/(lib|handlers|engine|execution|services?)\//.test(p)) return 3;
+    if (/\/(utils?|helpers?)\//.test(p)) return 2;
+    if (/\/(hooks|stores?)\//.test(p)) return 1;
+    if (/\/(components?|ui|views?)\//.test(p)) return 0;
+    return 2;
+  };
+  return pathRank(b) - pathRank(a);
 }
 
 /**
@@ -608,7 +664,7 @@ export function resolveSeeds(
   // to trace behaviour, not data shapes.
   candidates.sort(compareSeedCandidates);
 
-  const bestSeed = candidates.find((c) => c.confidence >= 0.55) ?? null;
+  const bestSeed = candidates.find((c) => c.confidence >= 0.40) ?? null;
 
   return {
     seeds: candidates,

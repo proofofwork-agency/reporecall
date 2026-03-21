@@ -163,8 +163,6 @@ describe("classifyIntent — navigational", () => {
     "the search is broken",
     "failing tests in indexer",
     "there's an error in the parser",
-    "explain the architecture",
-    "describe the design of the chunker",
   ];
 
   for (const q of navCases) {
@@ -183,6 +181,8 @@ describe("classifyIntent — broad navigational queries", () => {
     "audit the complete billing lifecycle",
     "change logging across the webhook pipeline",
     "How does the system handle graceful shutdown across all storage layers?",
+    "explain the architecture",
+    "describe the design of the chunker",
   ];
 
   for (const q of broadCases) {
@@ -247,23 +247,24 @@ describe("deriveRoute — with seedConfidence", () => {
     ).toBe("R2");
   });
 
-  it("returns R1 when seedConfidence >= 0.55", () => {
+  it("returns R1 when seedConfidence >= 0.40", () => {
+    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.40)).toBe("R1");
     expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.55)).toBe("R1");
     expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.7)).toBe("R1");
     expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.95)).toBe("R1");
     expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 1.0)).toBe("R1");
   });
 
-  it("returns R2 when seedConfidence < 0.55", () => {
-    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.54)).toBe("R2");
-    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.5)).toBe("R2");
-    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.0)).toBe("R2");
+  it("returns R0 when seedConfidence < 0.40", () => {
+    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.39)).toBe("R0");
+    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.20)).toBe("R0");
+    expect(deriveRoute({ isCodeQuery: true, needsNavigation: true }, 0.0)).toBe("R0");
   });
 
-  it("0.55 is the exact boundary for navigational R1", () => {
+  it("0.40 is the exact boundary for navigational R1", () => {
     const nav: QueryIntent = { isCodeQuery: true, needsNavigation: true };
-    expect(deriveRoute(nav, 0.55)).toBe("R1");
-    expect(deriveRoute(nav, 0.5499)).toBe("R2");
+    expect(deriveRoute(nav, 0.40)).toBe("R1");
+    expect(deriveRoute(nav, 0.3999)).toBe("R0");
   });
 
   it("returns R0 for non-navigational even with seedConfidence", () => {

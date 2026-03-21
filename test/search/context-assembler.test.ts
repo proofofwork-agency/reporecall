@@ -112,7 +112,8 @@ describe("assembleContext — directive header", () => {
   it("includes directive header by default", () => {
     const results = [makeResult("a", 1.0)];
     const ctx = assembleContext(results, 100_000);
-    expect(ctx.text).toContain("Answer from this context first. Use repository tools only if insufficient.");
+    expect(ctx.text).toContain("Answer from this context first. Only fetch files NOT listed above.");
+    expect(ctx.text).toContain("> Files included:");
   });
 
   it("omits directive header when disabled", () => {

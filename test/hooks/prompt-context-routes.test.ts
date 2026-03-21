@@ -209,6 +209,7 @@ describe("handlePromptContext — route integration", () => {
     expect(result).not.toBeNull();
     // Should contain flow trace header from assembleFlowContext
     expect(result!.text).toContain("flow trace");
+    expect(result!.text).toContain("Files included:");
   });
 
   it("R1 route degrades to R2 when tree coverage is weak", async () => {
@@ -268,7 +269,7 @@ describe("handlePromptContext — route integration", () => {
 
     expect(result.resolvedRoute).toBe("R2");
     expect(result.context).not.toBeNull();
-    expect(result.context!.text).toContain("low confidence");
+    expect(result.context!.text).toContain("broad search");
   });
 
   it("R1 route falls through to R2 when seed confidence is low", async () => {
@@ -301,7 +302,7 @@ describe("handlePromptContext — route integration", () => {
 
     expect(result).not.toBeNull();
     // Should fall through to R2 (deep route) since no seed found
-    expect(result!.text).toContain("low confidence");
+    expect(result!.text).toContain("broad search");
   });
 
   it("R2 route uses deep route context assembly", async () => {
@@ -319,8 +320,9 @@ describe("handlePromptContext — route integration", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(result!.text).toContain("low confidence");
-    expect(result!.text).toContain("repository tools are allowed");
+    expect(result!.text).toContain("broad search");
+    expect(result!.text).toContain("Files included:");
+    expect(result!.text).toContain("Reporecall MCP tools can fill gaps");
   });
 
   it("R1 without metadata/fts falls back to R0", async () => {

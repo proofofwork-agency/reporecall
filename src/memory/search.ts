@@ -169,14 +169,6 @@ export class MemorySearch {
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit);
 
-    // Apply minimum score threshold: drop results below 40% of top score.
-    // This prevents flooding with irrelevant memories on broad code queries.
-    if (results.length > 1) {
-      const topScore = results[0]![1];
-      const minThreshold = topScore * 0.6;
-      results = results.filter(([, score]) => score >= minThreshold);
-    }
-
     // Type filter
     if (options?.types && options.types.length > 0) {
       const typeSet = new Set(options.types);
@@ -208,6 +200,14 @@ export class MemorySearch {
         const memory = memoriesById.get(id);
         return !!memory && statusSet.has(resolveMemoryStatus(memory));
       });
+    }
+
+    // Apply relative score threshold after category filters so it operates
+    // within the filtered set — prevents cross-class score dominance.
+    if (results.length > 1) {
+      const topScore = results[0]![1];
+      const minThreshold = topScore * 0.7;
+      results = results.filter(([, score]) => score >= minThreshold);
     }
 
     // Min score filter
@@ -327,12 +327,13 @@ const CLASS_BOOSTS: Record<MemoryClass, number> = {
   episode: 0.01,
 };
 
-function buildContextualQuery(query: string, options?: MemorySearchOptions): string {
-  const parts = [query];
-  if (options?.activeFiles?.length) parts.push(...options.activeFiles);
-  if (options?.topCodeFiles?.length) parts.push(...options.topCodeFiles);
-  if (options?.topCodeSymbols?.length) parts.push(...options.topCodeSymbols);
-  return parts.filter((part) => part.trim().length > 0).join(" ");
+function buildContextualQuery(query: string, _options?: MemorySearchOptions): string {
+  // Only search with the actual query terms.
+  // Active files and top code symbols are used for contextual boosting
+  // in the scoring phase (lines 146-151), not for FTS query expansion.
+  // Appending file names to the FTS query caused broad OR matches that
+  // pulled in unrelated memories (BUG: memory noise — 5-6 irrelevant per query).
+  return query;
 }
 
 function matchesAny(text: string, candidates: string[]): boolean {

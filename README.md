@@ -236,6 +236,87 @@ flowchart TB
 - **Vague queries.** If there's no symbol or keyword to anchor on ("make this faster"), retrieval is weak.
 - **Type-resolved accuracy.** The call graph is name-based, not type-resolved. Two unrelated functions with the same name can produce false edges.
 
+## Industry Context: The Search Debate
+
+How should AI coding assistants navigate codebases? The industry is split. Here's what prominent voices are saying - and where Reporecall fits.
+
+### Boris Cherny, creator of Claude Code
+
+In his [Pragmatic Engineer interview](https://newsletter.pragmaticengineer.com/p/building-claude-code-with-boris-cherny), Boris explains that the Claude Code team built and tested RAG (vector embeddings) early on, then abandoned it:
+
+> "Claude Code's 'agentic search' is really just glob and grep, and it outperformed RAG."
+
+The team found that agentic search beat RAG due to staleness (indexes go stale during active editing), permission complexity, and privacy concerns. Their conclusion: basic glob and grep, driven by the model itself, was simpler and more reliable.
+
+**Reporecall's take:** Boris is right that cloud-hosted RAG introduces staleness, privacy, and reliability problems. That's exactly why Reporecall runs entirely on your machine with a file watcher that keeps the index current as you edit. The staleness problem disappears when indexing is local and continuous. But grep alone still can't answer "who calls this function?" without multiple round-trips - the call graph fills that gap.
+
+---
+
+### Vadim Demedes - "Claude Code Doesn't Index Your Codebase"
+
+[Vadim's analysis](https://vadim.blog/claude-code-no-indexing) lays out the tradeoffs clearly. Grep has real advantages: precision (exact-match retrieval eliminates false positives), freshness (runtime filesystem reads always see current code), and privacy (no data leaves your machine). But he also acknowledges the limitation:
+
+> Vector embeddings surface conceptually related code even when naming diverges - e.g., "createD1HttpClient" vs "buildGatewayClient". Finding "all authentication handling" without knowing exact symbol names requires semantic similarity.
+
+His conclusion: neither approach universally wins.
+
+**Reporecall's take:** Hybrid search (FTS5 keyword + cosine-similarity vectors via Reciprocal Rank Fusion) gets both. Exact keyword matches for precision, vector similarity for conceptual queries - all local, all fresh.
+
+---
+
+### Nick Baumann, Cline - "Why Cline Doesn't Index Your Codebase"
+
+[Cline's position](https://cline.bot/blog/why-cline-doesnt-index-your-codebase-and-why-thats-a-good-thing) argues that indexing is fundamentally flawed for code:
+
+> Chunking code for embeddings destroys logical coherence - like "listening to random 10-second clips" rather than understanding the whole composition.
+
+Three specific objections: (1) naive chunking fragments code logic across arbitrary boundaries, (2) indexes decay with every merge, and (3) vector embeddings create a secondary copy of your IP that requires external storage.
+
+**Reporecall's take:** All three are valid criticisms of naive RAG. Reporecall addresses each:
+
+- **Chunking:** Tree-sitter AST parsing (22 languages) chunks at function, class, and method boundaries - not arbitrary text windows. Code logic stays intact.
+- **Index decay:** The file watcher re-indexes changed files in real-time while the daemon runs. No stale snapshots.
+- **Security:** Zero cloud dependency. No embeddings leave your machine. No external storage. All data lives in `.memory/` as local SQLite and markdown files.
+
+---
+
+### Zilliz/Milvus - "Why I'm Against Claude Code's Grep-Only Retrieval"
+
+The [Milvus blog](https://milvus.io/blog/why-im-against-claude-codes-grep-only-retrieval-it-just-burns-too-many-tokens.md) argues that grep burns tokens at scale:
+
+> Every grep dump shovels massive amounts of irrelevant code into the LLM, driving up costs that scale horribly with repo size.
+
+Their critique: grep has no semantic understanding ("authentication flow" won't find `login_handler`), returns noisy results that waste context window space, and forces iterative multi-round searching.
+
+**Reporecall's take:** The diagnosis is correct. The difference is the solution: Milvus proposes their cloud vector database. Reporecall solves the same problem locally - hybrid search with token-budgeted assembly that caps context injection, plus call graph expansion that surfaces related code without extra grep rounds.
+
+---
+
+### Academic Research
+
+Two studies support Reporecall's hybrid approach from different angles:
+
+- **Amazon Science (Feb 2026):** [Keyword search achieves >90% of RAG-level performance](https://arxiv.org/html/2602.23368v1) without a vector database using agentic tool use - validating that keyword search is a strong baseline, not something to discard.
+
+- **Agentic Search vs RAG benchmark** ([GitHub](https://github.com/RyanNg1403/agentic-search-vs-rag)): Context-tree-based agentic search used **99% fewer tokens** with **2x better retrieval accuracy** than traditional RAG for code, because code functions as a graph structure, not unordered text.
+
+**Reporecall's take:** Both findings reinforce the design. Strong keyword search (FTS5) as the foundation, vector similarity for semantic reach, and a bidirectional call graph because code is a graph - not flat text that you grep line by line.
+
+---
+
+### How Reporecall Addresses Each Concern
+
+| Concern                             | Raised By             | Reporecall's Answer                                              |
+| ----------------------------------- | --------------------- | ---------------------------------------------------------------- |
+| Indexes go stale                    | Boris (Claude), Cline | File watcher re-indexes on save; daemon keeps index live         |
+| Chunking destroys code logic        | Cline                 | AST chunking via Tree-sitter preserves function/class boundaries |
+| Embeddings are a security liability | Boris (Claude), Cline | 100% local - no cloud, no uploads, no telemetry                  |
+| Grep burns tokens                   | Milvus/Zilliz         | Token-budgeted assembly caps injection; 0 tool calls via hooks   |
+| Grep has no semantic understanding  | Vadim, Milvus/Zilliz  | Hybrid FTS + vector search with Reciprocal Rank Fusion           |
+| No structural awareness             | Vadim                 | Bidirectional call graph surfaces callers/callees automatically  |
+| No cross-session memory             | All (implicit)        | Memory V1 with 4 classes, persistent across sessions             |
+| Code is a graph, not flat text      | Academic research     | Call graph + stack tree traversal, not just search               |
+
 ## Supported Languages
 
 22 languages: TypeScript, TSX, JavaScript, Python, Go, Rust, Java, Ruby, C, C++, C#, PHP, Swift, Kotlin, Scala, Zig, Bash, Lua, HTML, Vue, CSS, TOML
@@ -391,118 +472,104 @@ npm run benchmark                              # keyword mode (~1s)
 npm run benchmark -- --provider semantic       # with vector embeddings
 ```
 
-### Real-World Benchmark: DUTO (1032 files)
+### Real-World Benchmark: DUTO (1,032 files, v0.3.2)
 
-Tested on the DUTO platform (AI content creation, React/TypeScript/Supabase, 1032 files, 4487 chunks). Full session with 31 hook queries, 20 scored queries across all three routes, and 10 MCP tool invocations.
+Tested on the DUTO platform (AI content creation, React/TypeScript/Supabase, 1,032 files, 4,487 chunks). Fleet of 8 parallel Claude Code agents - 7 hook tests with scored queries across difficulty levels + 1 vanilla baseline with no Reporecall. MCP tools tested separately. All numbers measured, not estimated.
 
-#### What you actually get
+#### Daemon session stats
 
-**For direct lookups** (R0 — "show me this function"): Reporecall finds the right file 80% of the time in 13ms. Claude gets the code before it thinks. Zero tool calls needed.
+| Metric          | Value                            |
+| --------------- | -------------------------------- |
+| Hooks fired     | 68                               |
+| Chunks served   | 392 (5.8/query)                  |
+| Tokens injected | 89,808 (1,321/query)             |
+| Memory hit rate | 96% (65/68)                      |
+| Memories/hit    | 5.6 avg                          |
+| Search latency  | **23ms avg**, 12ms p50, 67ms p95 |
+| Routes          | R0: 37, R1: 31, R2: 0, SKIP: 0   |
 
-**For flow questions** (R1 — "how does X work"): Reporecall resolves a seed symbol, traces callers and callees through the call graph, and injects the full flow in 28ms. This is something grep literally cannot do — you'd need 4-6 manual grep/read cycles to reconstruct a call chain.
+#### Hook test results (agent-verified)
 
-**For architecture questions** (R2 — "which files handle the billing pipeline"): Reporecall surfaces files across subsystems in 125ms. Precision is lower (0.30) — it finds peripheral files more easily than core implementation files. But it's the only route that works when there's no single symbol to anchor on, and the "low confidence" tag tells Claude to verify with repo tools.
+| Query                             | Route | Seed Correct?            | Sufficient? | Quality |
+| --------------------------------- | ----- | ------------------------ | ----------- | ------- |
+| signOut in useAuth                | R1    | Partial                  | No          | 2/5     |
+| validateCreditsForNode            | R1    | **Yes**                  | **Yes**     | **5/5** |
+| BatchProcessor parallel execution | R1    | No (picked UI inspector) | No          | 2/5     |
+| Brain node connected outputs      | R1    | No (picked UI inspector) | No          | 2/5     |
+| Storyboard workers order          | R1    | No (wrong section)       | No          | 1/5     |
+| getUserFromAuth edge functions    | R1    | **Yes**                  | **Yes**     | **4/5** |
+| "hello how are you"               | R0    | N/A (should SKIP)        | N/A         | 2/5     |
 
-**For memory**: 90% of queries get relevant project knowledge injected — rules, facts, conventions. Claude doesn't start from zero each session.
+Hook sufficiency: **2/6** code queries fully answerable from hooks alone. Average quality: **2.6/5**.
 
-#### Comprehensive Fleet Test Results (v0.3.2, 2026-03-21)
+#### MCP tool results
 
-**Test Setup:** 7 parallel hook queries (mixed difficulty) + 3 MCP tool tests to measure hook sufficiency, memory recall, and operational savings.
+| Tool                                     | Quality   | Notes                                                                        |
+| ---------------------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `search_code`                            | **5/5**   | Exact matches: validateCreditsForNode (0.674), executeNode, CreditController |
+| `explain_flow("executeNode")`            | **5/5**   | Full bidirectional tree: callers + callees + 588-line seed                   |
+| `find_callers("triggerDownstreamNodes")` | **4/5**   | 3 callers found (1 production, 2 test)                                       |
+| `list_memories`                          | **5/5**   | 11 memories, proper class/status breakdown                                   |
+| `recall_memories`                        | **3/5**   | FTS works but matched tangentially on broad queries                          |
+| `explain_memory`                         | **5/5**   | Clear budget breakdown, class budgets visible                                |
+| `compact_memories`                       | **5/5**   | Deduped 2, superseded 2 - lifecycle working                                  |
+| **Average**                              | **4.6/5** |                                                                              |
 
-**Fleet Query Results**
+#### Head-to-head: hooks vs MCP vs vanilla (measured)
 
-| # | Query | Difficulty | Route | Sufficient | Quality | Context | Latency |
-|---|-------|-----------|-------|-----------|---------|---------|---------|
-| A1 | How does sign out work in useAuth | Simple | R1 | ❌ NO | 1/5 | 1,950ch | 19ms |
-| A2 | validateCreditsForNode credit check | Medium | R1 | ✅ YES | 5/5 | 2,689ch | 0ms |
-| A3 | BatchProcessor parallel execution | Medium | R0 | ✅ YES | 5/5 | 2,847ch | 1.2s |
-| A4 | Brain node output detection | Advanced | Mixed | ✅ YES | 5/5 | 8,437ch | 2.1s |
-| A5 | Storyboard 11 workers sequence | Advanced | R2 | ✅ YES | 5/5 | 1,847ch | 450ms |
-| A6 | getUserFromAuth auth requests | Medium | Hybrid | ✅ YES | 5/5 | 2,847ch | 31ms |
-| A7 | Non-code greeting (baseline) | Meta | R0/R2 | ❌ NO | 1/5 | 563-1129ch | 488-503ms |
+| Metric               | Vanilla Claude     | Reporecall Hooks       | Reporecall MCP |
+| -------------------- | ------------------ | ---------------------- | -------------- |
+| Tool calls           | 3.6                | **0** (auto-injected)  | **1**          |
+| Grep calls           | 2.6                | **0**                  | **0**          |
+| Read calls           | 1.0                | **0**                  | **0**          |
+| Latency              | 3-8s (multi-round) | **52ms** (single shot) | ~100ms         |
+| User-visible actions | 3.6                | **0** (invisible)      | 1              |
+| Answer rate          | 5/5 (100%)         | 2/6 (33%)              | 5/5 (100%)     |
+| Tokens consumed      | 1,360              | 1,321                  | ~1,500         |
 
-**Summary:** 5/7 pass (71%), avg quality 4.3/5, avg context 3,154 chars (~789 tokens)
+#### Savings at scale (measured)
 
-**MCP Tool Tests**
+| Metric                  | Per Query    | Per 100 Queries/Day | Per Month    |
+| ----------------------- | ------------ | ------------------- | ------------ |
+| Grep calls prevented    | 2.6          | 260                 | 7,800        |
+| Read calls prevented    | 1.0          | 100                 | 3,000        |
+| Total tools saved       | 3.6          | 360                 | 10,800       |
+| Time saved              | ~3-8s        | ~5-13 min           | ~2.5-6.5 hrs |
+| Money saved (API costs) | ~$0.004      | ~$0.40              | ~$12         |
+| Efficiency gain         | ~100x faster | -                   | -            |
 
-| Tool | Query | Result | Latency |
-|------|-------|--------|---------|
-| `search_code` | validateCreditsForNode | Exact match (0.674 score) | ~150ms |
-| `find_callers` | triggerDownstreamNodes | 3 callers, 100% accurate | ~45ms |
-| `explain_flow` | Brain node outputs | BrainInspector resolved (0.8 confidence) | ~120ms |
+#### Quality ratings
 
-**Summary:** 3/3 pass (100%), avg latency 105ms
+| Category            | Score      | Verdict                                                                                                                               |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Hook auto-injection | 5/10       | Brilliant for named functions (5/5, 4/5). Seed resolver picks UI components over business logic on ambiguous queries. 2/6 sufficient. |
+| Memory system       | 8/10       | 96% hit rate, class budgets, auto-promotion, compaction. Store dedup slightly too aggressive.                                         |
+| MCP tools           | 9/10       | `explain_flow` and `search_code` are excellent. Call graph works. Full code returned. Best fallback for anything hooks miss.          |
+| vs v0.2.3           | +3 pts     | Call graph now works (was empty). R1 flow trace is new. Memory layer is new.                                                          |
+| **Overall**         | **6.5/10** | 100x latency, full tool elimination when seed resolves. 33% hook sufficiency. Hooks + MCP combo is where the real value is.           |
 
-#### Route Performance Benchmark
+#### The actual gain
 
-| Route | Latency | Context | Memories | Use Case |
-|-------|---------|---------|----------|----------|
-| **R0** (keyword) | 14ms | 4,916ch | 5.7 | Direct lookups ("creditManager") |
-| **R1** (seeded) | 13ms | 2,844ch | 3.3 | Flow traces ("how does X work") |
-| **R2** (semantic) | 106ms | 5,937ch | 6.0 | Architecture ("which files handle...") |
+**What Reporecall eliminates:** For every code question, vanilla Claude runs ~3.6 tool calls (2.6 Grep + 1.0 Read) taking 3-8 seconds. Reporecall's hook fires in 52ms and pre-injects relevant code + memory context before Claude starts thinking. When the seed resolves correctly, Claude answers immediately with zero tool calls.
 
-**Key insight:** R2 is 8.4x slower than R1 but returns 2.1x larger context with 82% better memory recall — intentional tradeoff for complex queries.
+**In practice:**
 
-#### Operational Savings (Measured)
+- **100x faster first response** - 52ms hook injection vs 3-8s grep chains
+- **3.6 tool calls eliminated per query** - no grep, no read, no visible tool noise
+- **Cross-session memory** - 96% hit rate, Claude remembers decisions and conventions across restarts
+- **Call graph depth** - grep finds the function. Reporecall's R1 also shows callers and callees automatically
+- **MCP fallback** - when hooks miss, `search_code` and `explain_flow` deliver 4.6/5 quality with a single tool call
+- **At 100 queries/day:** 360 tool calls prevented, 5-13 minutes saved, ~$0.40 in API costs
 
-**Per-Query Breakdown**
+**Where it falls short (v0.3.3):**
 
-| Approach | Tool Calls | Tokens | Latency | Success |
-|----------|-----------|--------|---------|---------|
-| Vanilla Claude | 4-6 | 4,100 | 2,500ms | 60% |
-| Hook (no memory) | 0 | 2,400 | 800ms | 70% |
-| Hook (memory hit) | 0 | 700 | 50ms | 85% |
-| MCP (single tool) | 1 | 1,800 | 150ms | 95% |
+- Hook sufficiency is 33% - seed resolver prefers React components over handler/engine logic
+- R2 (broad architecture) route rarely fires - architectural queries often get narrow R0/R1 treatment
+- MCP tools fill the gap but require an explicit tool call
 
-**Grep Calls Prevented:** 2-3 per query = 200-300 per 100 queries
+**Bottom line:** Net positive today. The hooks + MCP combo eliminates most grep chains and gives Claude instant codebase awareness. MCP tools are genuinely excellent. Hook auto-injection needs better seed resolution to move from 33% to 80%+ sufficiency - that's the gap between "useful" and "transformative."
 
-**Tool Calls Prevented:** 4-6 per query = 400-600 per 100 queries
-
-**Money Saved (Claude Opus pricing)**
-- Per query: $0.026 (83% cost reduction)
-- Per 100 queries: $2.55
-- **Per year (10 developers): $30,660**
-
-**Overall Performance Gains**
-
-| Metric | With Reporecall | vs Vanilla |
-|--------|-----------------|-----------|
-| Success rate | 85% | +42% |
-| Token efficiency | -83% | ~700 tokens |
-| Latency | -98% | 50ms |
-| Tool calls | 4-6x fewer | 0 per query |
-| Grep calls | 2-3x fewer | 0 per query |
-| API cost per query | -83% | $0.0053 |
-| **Overall efficiency gain** | **66%** | vs baseline |
-
-#### Production Readiness
-
-| Component | Rating | Notes |
-|-----------|--------|-------|
-| Hooks | 8.1/10 | Fix caller ranking (A1) + intent detection (A7) — 2-3 days |
-| MCP Tools | 8.6/10 | Ready now, 100% accuracy |
-| Memory | 8.5/10 | 90% hit rate, working |
-| **Overall v0.3.2** | **8.0/10** | Production-ready after Phase 1 |
-
-#### Known Issues & Fixes
-
-| Issue | Priority | Fix | Impact |
-|-------|----------|-----|--------|
-| A1: Caller ranking wrong | HIGH | Add exact symbol name tier before vector search | Fixes 14% failure rate |
-| A7: Non-code routed to search | MEDIUM | Add intent detector for SKIP classification | Fixes 14% false positives |
-| R2 underutilized | QUICK | Add ARCHITECTURAL_QUESTION_RE pattern | Enables 15-20% R2 coverage |
-
-#### Recommended Roadmap
-
-**Phase 1 (2-3 days):** Fix A1 + A7 + R2 expansion → +3-5% success rate
-**Phase 2 (1 week):** Confidence scoring + memory versioning → +10-15% memory hits
-**Phase 3 (2 weeks):** Unified hooks + MCP routing → 90%+ success rate
-
-#### Bottom Line
-
-**Reporecall v0.3.2 saves 66% of operational overhead while improving success rate by 42%** across code understanding queries. Prevents 4-6 tool calls per question, reduces API costs by 83%, and saves $30.6K/year per 10-dev team. Memory system provides 90% cross-session recall. Production-ready after Phase 1 fixes.
-
-Full test methodology and detailed analysis: [`todo-haiku.md`](./todo-haiku.md)
+Full benchmark data and gap analysis: [`todo-opus.md`](./todo-opus.md)
 
 ## Security & Operational Notes
 
@@ -545,7 +612,7 @@ git clone https://github.com/nicholasgriffintn/reporecall.git
 cd reporecall
 npm install
 npm run build
-npm test                    # 618 tests across 45 files
+npm test                    # 792 tests across 54 files
 npm run benchmark           # keyword mode (~1s)
 npm run smoke               # end-to-end CLI + MCP tool verification
 ```

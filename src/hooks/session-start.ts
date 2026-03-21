@@ -39,7 +39,9 @@ function formatConventionsSummary(metadata: MetadataStore): string {
 
 const MEMORY_BEHAVIOR_INSTRUCTION =
   '## Reporecall\n\n' +
-  '> Answer from injected codebase context first. Use repository tools only if context is insufficient.\n\n'
+  '> Codebase context is injected automatically via hooks on each message.\n' +
+  '> Answer from injected context first — do not re-read the same files with tools.\n' +
+  '> For gaps, use whichever tool fits: Reporecall MCP tools, Grep, Read, or Glob.\n\n'
 
 export async function handleSessionStart(
   _search: _HybridSearch,

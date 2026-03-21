@@ -24,6 +24,14 @@ export function countTokens(text: string): number {
   return getEncoder().encode(text).length;
 }
 
+function buildFileListLine(chunks: SearchResult[], maxFiles = 8): string {
+  const files = [...new Set(chunks.map(c => c.filePath))];
+  if (files.length === 0) return "";
+  const shown = files.slice(0, maxFiles);
+  const suffix = files.length > maxFiles ? ` (+${files.length - maxFiles} more)` : "";
+  return `> Files included: ${shown.join(", ")}${suffix}\n`;
+}
+
 export interface AssembleOptions {
   scoreFloorRatio?: number;   // default 0.5
   maxChunks?: number;         // default Infinity (no cap unless config passes one)
@@ -53,11 +61,11 @@ export function assembleContext(
   const included: SearchResult[] = [];
   let totalTokens = 0;
 
-  // Header
-  const header = directiveHeader
-    ? "## Relevant codebase context\n\n> Answer from this context first. Use repository tools only if insufficient.\n\n"
-    : "## Relevant codebase context\n\n";
-  totalTokens += countTokens(header);
+  // Header — file list is added after chunk assembly (placeholder budget for now)
+  const baseHeader = "## Relevant codebase context\n\n";
+  const directiveLine = "> Answer from this context first. Only fetch files NOT listed above.\n\n";
+  const headerBudget = countTokens(baseHeader) + (directiveHeader ? countTokens(directiveLine) + 40 /* file list estimate */ : 0);
+  totalTokens += headerBudget;
 
   // Drop results scoring below scoreFloorRatio of the top result
   const scoreFloor = results.length > 0 ? (results[0]?.score ?? 0) * scoreFloorRatio : 0;
@@ -113,6 +121,14 @@ export function assembleContext(
   if (includeFacts) {
     totalTokens += factsTokens;
   }
+
+  // Build final header with file list
+  const fileListLine = buildFileListLine(included);
+  const header = directiveHeader && fileListLine
+    ? baseHeader + fileListLine + directiveLine
+    : baseHeader + fileListLine;
+  const actualHeaderTokens = countTokens(header);
+  totalTokens = totalTokens - headerBudget + actualHeaderTokens;
 
   // Build final text — emit chunks in score order with file headers interspersed
   const parts: string[] = [header];
@@ -456,13 +472,10 @@ export function assembleFlowContext(
   // Build header
   const seedInfo = `${tree.seed.name} (${tree.seed.kind}, ${seedChunk.filePath}:${seedChunk.startLine}-${seedChunk.endLine})`;
 
-  const header =
-    `## Relevant codebase context (flow trace)\n\n` +
-    `> Seed: ${seedInfo}\n\n`;
-
-  let totalTokens = countTokens(header);
+  // Header is built after chunk assembly to include file list; use budget estimate
+  const headerEstimate = 60; // conservative estimate for header tokens
+  let totalTokens = headerEstimate;
   const included: SearchResult[] = [];
-  const parts: string[] = [header];
 
   // Always include seed
   const seedResult = storedChunkToSearchResult(seedChunk);
@@ -522,6 +535,18 @@ export function assembleFlowContext(
     calleeResults.push(calleeResult);
   }
 
+  // Build final header with file list from all collected chunks
+  const allFlowChunks = [seedResult, ...callerResults, ...calleeResults];
+  const flowFileList = buildFileListLine(allFlowChunks);
+  const header =
+    `## Relevant codebase context (flow trace)\n\n` +
+    flowFileList +
+    `> Answer from this context first. The flow trace below shows the call graph from the seed.\n` +
+    `> Seed: ${seedInfo}\n\n`;
+  const actualHeaderTokens = countTokens(header);
+  totalTokens = totalTokens - headerEstimate + actualHeaderTokens;
+  const parts: string[] = [header];
+
   const appendCallers = () => {
     if (callerParts.length === 0) return;
     parts.push(`### Callers (who invokes this)\n`);
@@ -567,9 +592,14 @@ export function assembleFlowContext(
 
 // --- Deep route context assembly (R2) ---
 
-const DEEP_ROUTE_HEADER =
-  `## Relevant codebase context (low confidence)\n\n` +
-  `> Low confidence — repository tools are allowed.\n\n`;
+function buildDeepRouteHeader(chunks: SearchResult[]): string {
+  const fileList = buildFileListLine(chunks);
+  return (
+    `## Relevant codebase context (broad search)\n\n` +
+    fileList +
+    `> Answer from this context first. If coverage is incomplete, Reporecall MCP tools can fill gaps.\n\n`
+  );
+}
 
 /**
  * Assemble context for the R2 (deep) route. Wraps the regular chunk-based
@@ -585,8 +615,9 @@ export function assembleDeepRouteContext(
   tokenBudget: number,
   query?: string
 ): AssembledContext {
-  const markerTokens = countTokens(DEEP_ROUTE_HEADER);
-  const remainingBudget = Math.max(0, tokenBudget - markerTokens);
+  // Reserve a generous estimate for the header (file list varies); adjust after assembly
+  const headerEstimate = 60;
+  const remainingBudget = Math.max(0, tokenBudget - headerEstimate);
 
   // Use existing assembleContext with reduced budget and no directive header
   // (the deep route header replaces it)
@@ -597,9 +628,11 @@ export function assembleDeepRouteContext(
     compressionRank: 3,
   });
 
+  // Build final header with actual file list from assembled chunks
+  const deepHeader = buildDeepRouteHeader(baseContext.chunks);
+  const deepHeaderTokens = countTokens(deepHeader);
+
   // Replace the standard header in baseContext.text with our deep route header.
-  // parts.join("\n") in assembleContext appends a \n after the header, so strip
-  // up to three consecutive newlines to avoid a spurious blank line.
   const baseHeader = "## Relevant codebase context\n\n";
   const baseHeaderTokens = countTokens(baseHeader);
   const textWithoutHeader = baseContext.text.replace(
@@ -608,8 +641,8 @@ export function assembleDeepRouteContext(
   );
 
   return {
-    text: DEEP_ROUTE_HEADER + textWithoutHeader,
-    tokenCount: markerTokens + baseContext.tokenCount - baseHeaderTokens,
+    text: deepHeader + textWithoutHeader,
+    tokenCount: deepHeaderTokens + baseContext.tokenCount - baseHeaderTokens,
     chunks: baseContext.chunks,
     routeStyle: "deep",
   };

@@ -19,8 +19,13 @@ export type RouteDecision = "skip" | "R0" | "R1" | "R2";
 // Greetings, thanks, meta about Claude/AI, general chat.
 // Each branch is anchored to match the FULL query (after trim/lowercase).
 const NON_CODE_PATTERNS: RegExp[] = [
-  // Greetings
+  // Greetings (exact)
   /^(hello|hi|hey|yo|sup|howdy|hola|good\s+(morning|afternoon|evening|night))(\s+there)?[\s!.?]*$/,
+  // Greetings followed by conversational filler ("hello how are you", "hi there what's up")
+  /^(hello|hi|hey|yo|sup|howdy|hola|good\s+(morning|afternoon|evening|night))(\s+there)?\s+(how|what|nice|hope|glad)\b/,
+  // Standalone conversational openers
+  /^how\s+are\s+you\b/,
+  /^what('s|\s+is)\s+(up|new|good)\b/,
   // Thanks
   /^(thanks|thank\s+you|thx|ty|cheers)[\s!.?]*$/,
   // Meta about Claude / AI / memory / reporecall
@@ -68,6 +73,7 @@ const FILE_INVENTORY_RE = /\bwhich\s+files?\b|\ball\s+(?:the\s+)?files?\b/;
 const WHOLE_SYSTEM_SCOPE_RE = /\b(full|entire|complete|end-to-end|across)\b|\bevery\s+step\b|\bfrom\s+.+\s+to\s+.+\b/;
 const CROSS_CUTTING_EDIT_RE = /\b(add|instrument|trace|audit|update|change|logging?)\b/;
 const LIFECYCLE_SYSTEM_RE = /\b(shutdown|startup|drain|close|teardown|boot|bootstrap)\b/;
+const ARCHITECTURAL_QUESTION_RE = /^(what|how|explain|describe|show)\s+(is|does|are|do)?\s*(the\s+)?(architecture|design|structure|system|overview)/i;
 const REDIRECT_DEBUG_RE =
   /(?:\b(success|failure|fail(?:ure)?)\b.*\bredirect\b|\bredirect\b.*\b(success|failure|fail(?:ure)?)\b)/;
 
@@ -104,6 +110,8 @@ export function classifyIntent(query: string): QueryIntent {
   const prefersBroadContext =
     hasFileInventoryCue
     || REDIRECT_DEBUG_RE.test(lower)
+    || ARCHITECTURAL_QUESTION_RE.test(lower)
+    || (hasNavigationCue && hasWholeSystemScope)
     || (hasWorkflowNoun && hasWholeSystemScope)
     || (hasWholeSystemScope && LIFECYCLE_SYSTEM_RE.test(lower))
     || (hasWholeSystemScope && hasCrossCuttingCue)
@@ -132,6 +140,9 @@ export function deriveRoute(
   // Navigational query — route depends on seed confidence
   if (seedConfidence === undefined) return "R0";
   if (seedConfidence === null) return "R2";
-  const threshold = 0.55;
-  return seedConfidence >= threshold ? "R1" : "R2";
+  const threshold = 0.40;
+  if (seedConfidence >= threshold) return "R1";
+  // Below threshold: seed was found but too weak — fall back to R0 keyword lookup.
+  // R2 is reserved for seedConfidence === null (no seed found at all).
+  return "R0";
 }

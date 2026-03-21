@@ -1006,24 +1006,40 @@ export function createMCPServer(
             if (existing) {
               // Same name — will overwrite (existing behavior)
             } else {
-              // Check FTS for similar content
-              const similar = memoryStore.search(name, 3)
-              for (const match of similar) {
+              // Check FTS for genuinely similar content — only block if both
+              // name overlap AND strong FTS rank indicate a real duplicate.
+              // Previous logic blocked on ANY FTS match, causing false positives
+              // (e.g., "DUTO node types" blocked by "Reporecall Benchmark Results").
+              const similar = memoryStore.search(name, 5)
+              const nameLower = name.toLowerCase()
+              const blocked = similar.find((match) => {
                 const existingMem = memoryStore.get(match.id)
-                if (existingMem && existingMem.name !== name) {
-                  return {
-                    content: [
-                      {
-                        type: 'text' as const,
-                        text: JSON.stringify({
-                          stored: false,
-                          warning: `Similar memory already exists: "${existingMem.name}". Consider updating that memory instead, or use the same name to overwrite.`,
-                          existingName: existingMem.name,
-                          existingDescription: existingMem.description
-                        })
-                      }
-                    ]
-                  }
+                if (!existingMem || existingMem.name === name) return false
+                // Require strong FTS rank — BM25 inflates in small corpus (10-20 memories),
+                // so -25 is a genuinely strong match, not just a token overlap.
+                if (match.rank > -25) return false
+                // Require substantial name character overlap (≥40% of the longer name)
+                const existingLower = existingMem.name.toLowerCase()
+                const overlapLen = Math.max(10, Math.floor(Math.max(existingLower.length, nameLower.length) * 0.40))
+                const nameOverlap =
+                  existingLower.includes(nameLower.slice(0, overlapLen)) ||
+                  nameLower.includes(existingLower.slice(0, overlapLen))
+                return nameOverlap
+              })
+              if (blocked) {
+                const existingMem = memoryStore.get(blocked.id)!
+                return {
+                  content: [
+                    {
+                      type: 'text' as const,
+                      text: JSON.stringify({
+                        stored: false,
+                        warning: `Similar memory already exists: "${existingMem.name}". Consider updating that memory instead, or use the same name to overwrite.`,
+                        existingName: existingMem.name,
+                        existingDescription: existingMem.description
+                      })
+                    }
+                  ]
                 }
               }
             }

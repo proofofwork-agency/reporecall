@@ -57,6 +57,8 @@ export class MemoryRuntime {
   private stopped = false;
   private flushDoneCallbacks: Array<() => void> = [];
   private lastCompaction: { at: string; result: { deduped: number; archived: number; superseded: number } } | null = null;
+  private lastFlushCompaction = 0;
+  private static FLUSH_COMPACT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(indexer: MemoryIndexer, store: MemoryStore, options?: MemoryRuntimeOptions) {
     this.indexer = indexer;
@@ -67,7 +69,7 @@ export class MemoryRuntime {
     this.factPromotionThreshold = options?.factPromotionThreshold ?? 3;
     this.writableDir = options?.writableDir ?? indexer.getWritableDirs()[0] ?? null;
     this.projectRoot = options?.projectRoot;
-    this.workingHistoryLimit = options?.workingHistoryLimit ?? 1;
+    this.workingHistoryLimit = options?.workingHistoryLimit ?? 3;
     const compactionHours = options?.compactionHours ?? 6;
     if (compactionHours > 0) {
       this.compactionTimer = setInterval(() => {
@@ -244,10 +246,14 @@ export class MemoryRuntime {
           { indexed, removed, pending: this.pendingChanges.length },
           "Memory runtime refresh complete"
         );
-        try {
-          this.compact();
-        } catch (err) {
-          log.warn({ err }, "Memory compaction after refresh failed");
+        const now = Date.now();
+        if (now - this.lastFlushCompaction > MemoryRuntime.FLUSH_COMPACT_INTERVAL_MS) {
+          try {
+            this.compact();
+            this.lastFlushCompaction = now;
+          } catch (err) {
+            log.warn({ err }, "Memory compaction after refresh failed");
+          }
         }
       }
     } catch (err) {
@@ -291,7 +297,8 @@ export class MemoryRuntime {
       memoryNames.length > 0 ? `Memory hits: ${memoryNames.join(", ")}` : "",
     ].filter((line) => line.length > 0);
 
-    const fileStem = branch ? `working-${branch}-current` : "working-project-current";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const fileStem = branch ? `working-${branch}-${timestamp}` : `working-project-${timestamp}`;
     const filePath = writeManagedMemoryFile(this.writableDir, fileStem, {
       name: fileStem,
       description: "Auto-generated working memory for the latest prompt",

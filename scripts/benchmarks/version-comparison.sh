@@ -1,6 +1,6 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────
-# Reporecall Version Comparison: No Memory vs v0.1.0 vs v0.2.* vs dist
+# Reporecall Version Comparison: No Memory vs Previous npm vs dist
 # Real Claude API calls via `claude -p --output-format json`
 #
 # Usage:
@@ -9,9 +9,8 @@
 # Requirements:
 #   - claude CLI, python3, reporecall built + indexed
 #   - Test project at /tmp/reporecall-test (7 TypeScript files)
-#   - v0.1.0 tag must exist in git history
 #
-# Cost: ~$0.70-2.00 per run (28 API calls)
+# Cost: ~$0.50-1.50 per run (21 API calls)
 # ─────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -21,6 +20,7 @@ RESULTS="/tmp/reporecall-version-comparison.md"
 MAX_BUDGET="0.50"
 MODEL="${REPORECALL_BENCH_MODEL:-sonnet}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PKG_NAME="@proofofwork-agency/reporecall"
 
 QUERIES=(
   "how does authentication work in this project"
@@ -104,6 +104,24 @@ Answer this question about the codebase above: $query"
   echo "$total_input|$total_output|$total_cr|$total_cw|$total_cost" > "/tmp/bench_${dat_label}.dat"
 }
 
+# ── detect previous npm version ─────────────────────────────
+
+PREV_VERSION=$(npm view "$PKG_NAME" versions --json 2>/dev/null | python3 -c "
+import sys, json
+versions = json.loads(sys.stdin.read())
+if isinstance(versions, list) and len(versions) >= 2:
+    print(versions[-2])
+else:
+    print('')
+")
+
+if [ -z "$PREV_VERSION" ]; then
+  echo "ERROR: Could not determine previous npm version for $PKG_NAME"
+  exit 1
+fi
+
+echo "Detected previous npm version: $PREV_VERSION"
+
 # ── preflight ────────────────────────────────────────────────
 
 command -v claude >/dev/null 2>&1 || { echo "ERROR: claude CLI not found"; exit 1; }
@@ -114,18 +132,18 @@ command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required"; exit 1; 
 echo "Project: $PROJECT"
 echo "Queries: $QUERY_COUNT"
 echo "Model:   $MODEL"
-echo "Sections: No Memory, v0.1.0, v0.2.5, dist (28 total API calls)"
-echo "Cost:    ~\$0.70-2.00"
+echo "Sections: No Memory, v$PREV_VERSION (npm), dist ($((QUERY_COUNT * 3)) total API calls)"
+echo "Cost:    ~\$0.50-1.50"
 echo ""
 
 # ── header ───────────────────────────────────────────────────
 
 cat > "$RESULTS" << EOF
-# Version Comparison: No Memory vs v0.1.0 vs v0.2.5 vs dist
+# Version Comparison: No Memory vs v$PREV_VERSION vs dist
 
 **Method:** Real Claude API calls via \`claude -p --output-format json\`
 **Model:** $MODEL
-**Project:** $PROJECT ($QUERY_COUNT queries × 4 scenarios = $((QUERY_COUNT * 4)) API calls)
+**Project:** $PROJECT ($QUERY_COUNT queries x 3 scenarios = $((QUERY_COUNT * 3)) API calls)
 
 ---
 
@@ -149,104 +167,33 @@ mv .mcp.json.bak .mcp.json 2>/dev/null || true
 mv .memory.bak .memory 2>/dev/null || true
 mv CLAUDE.md.bak CLAUDE.md 2>/dev/null || true
 
-# ── 2. v0.1.0 ───────────────────────────────────────────────
+# ── 2. Previous npm version ─────────────────────────────────
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## 2. Reporecall v0.1.0" >> "$RESULTS"
+echo "## 2. Reporecall v$PREV_VERSION (previous npm release)" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
-# Build v0.1.0 from git tag
-V1_DIR="/tmp/reporecall-test-v1-bench"
-V1_WORKTREE="/tmp/reporecall-v1-bench-build"
+PREV_DIR="/tmp/reporecall-test-prev-bench"
 
-rm -rf "$V1_DIR"
-mkdir -p "$V1_DIR/src"
-cd "$V1_DIR" && npm init -y 2>/dev/null 1>/dev/null
+rm -rf "$PREV_DIR"
+mkdir -p "$PREV_DIR/src"
+cd "$PREV_DIR" && npm init -y 2>/dev/null 1>/dev/null
 
-cd "$REPO_ROOT"
-V1_TAG=$(git log --all --oneline | grep -i "v0.1.0\|0.1.0" | head -1 | awk '{print $1}')
-if [ -z "$V1_TAG" ]; then
-  echo "WARNING: v0.1.0 tag not found, skipping v0.1.0 section" >&2
-  echo "*v0.1.0 not available — tag not found in git history*" >> "$RESULTS"
-  echo "" >> "$RESULTS"
-  echo "0|0|0|0|0" > "/tmp/bench_v010.dat"
-else
-  git worktree add "$V1_WORKTREE" "$V1_TAG" 2>/dev/null || true
-  cd "$V1_WORKTREE" && npm install --legacy-peer-deps 2>/dev/null 1>/dev/null && npx tsup 2>/dev/null 1>/dev/null && npm pack 2>/dev/null 1>/dev/null
+npm install "${PKG_NAME}@${PREV_VERSION}" --legacy-peer-deps 2>/dev/null 1>/dev/null
+cp "$PROJECT/src/"*.ts src/ 2>/dev/null || true
+npx reporecall init --embedding-provider keyword 2>/dev/null 1>/dev/null
+npx reporecall index 2>/dev/null 1>/dev/null
+echo "v$PREV_VERSION (npm) indexed" >&2
 
-  cd "$V1_DIR"
-  TARBALL=$(ls "${V1_WORKTREE}"/proofofwork-agency-reporecall-*.tgz 2>/dev/null | head -1)
-  if [ -n "$TARBALL" ]; then
-    npm install "$TARBALL" --legacy-peer-deps 2>/dev/null 1>/dev/null
-    cp "$PROJECT/src/"*.ts src/ 2>/dev/null || true
-    npx reporecall init --embedding-provider keyword 2>/dev/null 1>/dev/null
-    npx reporecall index 2>/dev/null 1>/dev/null
-    echo "v0.1.0 indexed" >&2
+cd "$PROJECT"
+run_section "v$PREV_VERSION" "prev" "cd $PREV_DIR && npx reporecall search --budget"
 
-    cd "$PROJECT"
-    run_section "v0.1.0" "v010" "cd $V1_DIR && npx reporecall search --budget 3000"
-  else
-    echo "*v0.1.0 build failed*" >> "$RESULTS"
-    echo "" >> "$RESULTS"
-    echo "0|0|0|0|0" > "/tmp/bench_v010.dat"
-  fi
-
-  cd "$REPO_ROOT"
-  git worktree remove "$V1_WORKTREE" 2>/dev/null || true
-fi
-
-# ── 3. v0.2.5 (latest published tag) ────────────────────────
+# ── 3. dist (local build) ──────────────────────────────────
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## 3. Reporecall v0.2.5" >> "$RESULTS"
-echo "" >> "$RESULTS"
-
-V2_DIR="/tmp/reporecall-test-v2-bench"
-V2_WORKTREE="/tmp/reporecall-v2-bench-build"
-
-rm -rf "$V2_DIR"
-mkdir -p "$V2_DIR/src"
-cd "$V2_DIR" && npm init -y 2>/dev/null 1>/dev/null
-
-cd "$REPO_ROOT"
-V2_TAG=$(git tag --list 'v0.2*' | sort -V | tail -1)
-if [ -z "$V2_TAG" ]; then
-  echo "WARNING: v0.2.x tag not found, skipping v0.2.x section" >&2
-  echo "*v0.2.x not available — tag not found in git history*" >> "$RESULTS"
-  echo "" >> "$RESULTS"
-  echo "0|0|0|0|0" > "/tmp/bench_v025.dat"
-else
-  git worktree add "$V2_WORKTREE" "$V2_TAG" 2>/dev/null || true
-  cd "$V2_WORKTREE" && npm install --legacy-peer-deps 2>/dev/null 1>/dev/null && npx tsup 2>/dev/null 1>/dev/null && npm pack 2>/dev/null 1>/dev/null
-
-  cd "$V2_DIR"
-  TARBALL=$(ls "${V2_WORKTREE}"/proofofwork-agency-reporecall-*.tgz 2>/dev/null | head -1)
-  if [ -n "$TARBALL" ]; then
-    npm install "$TARBALL" --legacy-peer-deps 2>/dev/null 1>/dev/null
-    cp "$PROJECT/src/"*.ts src/ 2>/dev/null || true
-    npx reporecall init --embedding-provider keyword 2>/dev/null 1>/dev/null
-    npx reporecall index 2>/dev/null 1>/dev/null
-    echo "$V2_TAG indexed" >&2
-
-    cd "$PROJECT"
-    run_section "$V2_TAG" "v025" "cd $V2_DIR && npx reporecall search --budget"
-  else
-    echo "*$V2_TAG build failed*" >> "$RESULTS"
-    echo "" >> "$RESULTS"
-    echo "0|0|0|0|0" > "/tmp/bench_v025.dat"
-  fi
-
-  cd "$REPO_ROOT"
-  git worktree remove "$V2_WORKTREE" 2>/dev/null || true
-fi
-
-# ── 4. dist (local build) ──────────────────────────────────
-
-echo "---" >> "$RESULTS"
-echo "" >> "$RESULTS"
-echo "## 4. Reporecall dist (local build)" >> "$RESULTS"
+echo "## 3. Reporecall dist (local build)" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
 DIST_DIR="/tmp/reporecall-test-dist-bench"
@@ -276,51 +223,48 @@ fi
 
 rm -f "$REPO_ROOT/$DIST_TARBALL" 2>/dev/null || true
 
-# ── 5. COMPARISON ────────────────────────────────────────────
+# ── 4. COMPARISON ────────────────────────────────────────────
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## 5. Head-to-Head Comparison" >> "$RESULTS"
+echo "## 4. Head-to-Head Comparison" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
 IFS='|' read -r nm_inp nm_out nm_cr nm_cw nm_cost < /tmp/bench_nomem.dat
-IFS='|' read -r v1_inp v1_out v1_cr v1_cw v1_cost < /tmp/bench_v010.dat
-IFS='|' read -r v2_inp v2_out v2_cr v2_cw v2_cost < /tmp/bench_v025.dat
+IFS='|' read -r pv_inp pv_out pv_cr pv_cw pv_cost < /tmp/bench_prev.dat
 IFS='|' read -r d_inp d_out d_cr d_cw d_cost < /tmp/bench_dist.dat
 
 python3 -c "
-nm_cost = $nm_cost; v1_cost = $v1_cost; v2_cost = $v2_cost; d_cost = $d_cost
-nm_inp = $nm_inp; v1_inp = $v1_inp; v2_inp = $v2_inp; d_inp = $d_inp
-nm_out = $nm_out; v1_out = $v1_out; v2_out = $v2_out; d_out = $d_out
-nm_cr = $nm_cr; v1_cr = $v1_cr; v2_cr = $v2_cr; d_cr = $d_cr
-nm_cw = $nm_cw; v1_cw = $v1_cw; v2_cw = $v2_cw; d_cw = $d_cw
+nm_cost = $nm_cost; pv_cost = $pv_cost; d_cost = $d_cost
+nm_inp = $nm_inp; pv_inp = $pv_inp; d_inp = $d_inp
+nm_out = $nm_out; pv_out = $pv_out; d_out = $d_out
+nm_cr = $nm_cr; pv_cr = $pv_cr; d_cr = $d_cr
+nm_cw = $nm_cw; pv_cw = $pv_cw; d_cw = $d_cw
 q = $QUERY_COUNT
+prev = '$PREV_VERSION'
 
 nm_total = nm_inp + nm_cr + nm_cw
-v1_total = v1_inp + v1_cr + v1_cw
-v2_total = v2_inp + v2_cr + v2_cw
+pv_total = pv_inp + pv_cr + pv_cw
 d_total = d_inp + d_cr + d_cw
 
-print('| Metric | No Memory | v0.1.0 | v0.2.5 | dist |')
-print('|--------|-----------|--------|--------|------|')
-print(f'| Input tokens | {nm_inp:,} | {v1_inp:,} | {v2_inp:,} | {d_inp:,} |')
-print(f'| Output tokens | {nm_out:,} | {v1_out:,} | {v2_out:,} | {d_out:,} |')
-print(f'| Cache read | {nm_cr:,} | {v1_cr:,} | {v2_cr:,} | {d_cr:,} |')
-print(f'| Cache write | {nm_cw:,} | {v1_cw:,} | {v2_cw:,} | {d_cw:,} |')
-print(f'| Total tokens | {nm_total:,} | {v1_total:,} | {v2_total:,} | {d_total:,} |')
-print(f'| **Total cost** | **\${nm_cost:.4f}** | **\${v1_cost:.4f}** | **\${v2_cost:.4f}** | **\${d_cost:.4f}** |')
-print(f'| Per-query cost | \${nm_cost/q:.4f} | \${v1_cost/q:.4f} | \${v2_cost/q:.4f} | \${d_cost/q:.4f} |')
+print(f'| Metric | No Memory | v{prev} | dist |')
+sep = '-' * (len(prev) + 4)
+print(f'|--------|-----------|{sep}|------|')
+print(f'| Input tokens | {nm_inp:,} | {pv_inp:,} | {d_inp:,} |')
+print(f'| Output tokens | {nm_out:,} | {pv_out:,} | {d_out:,} |')
+print(f'| Cache read | {nm_cr:,} | {pv_cr:,} | {d_cr:,} |')
+print(f'| Cache write | {nm_cw:,} | {pv_cw:,} | {d_cw:,} |')
+print(f'| Total tokens | {nm_total:,} | {pv_total:,} | {d_total:,} |')
+print(f'| **Total cost** | **\${nm_cost:.4f}** | **\${pv_cost:.4f}** | **\${d_cost:.4f}** |')
+print(f'| Per-query cost | \${nm_cost/q:.4f} | \${pv_cost/q:.4f} | \${d_cost/q:.4f} |')
 if nm_cost > 0:
-    print(f'| Savings vs No Memory | — | {(1-v1_cost/nm_cost)*100:.1f}% | {(1-v2_cost/nm_cost)*100:.1f}% | {(1-d_cost/nm_cost)*100:.1f}% |')
-if v1_cost > 0:
-    print(f'| vs v0.1.0 | — | — | {(1-v2_cost/v1_cost)*100:.1f}% | {(1-d_cost/v1_cost)*100:.1f}% |')
-if v2_cost > 0:
-    print(f'| dist vs v0.2.5 | — | — | — | {(1-d_cost/v2_cost)*100:.1f}% |')
+    print(f'| Savings vs No Memory | --- | {(1-pv_cost/nm_cost)*100:.1f}% | {(1-d_cost/nm_cost)*100:.1f}% |')
+if pv_cost > 0:
+    print(f'| dist vs v{prev} | --- | --- | {(1-d_cost/pv_cost)*100:.1f}% |')
 print()
 print(f'**Per 1,000 sessions ({q*1000:,} queries):**')
 print(f'- No Memory: \${nm_cost*1000:.2f}')
-print(f'- v0.1.0: \${v1_cost*1000:.2f}')
-print(f'- v0.2.5: \${v2_cost*1000:.2f}')
+print(f'- v{prev}: \${pv_cost*1000:.2f}')
 print(f'- dist: \${d_cost*1000:.2f}')
 if nm_cost > 0 and d_cost > 0:
     print(f'- Savings (dist vs No Memory): \${(nm_cost-d_cost)*1000:.2f}')
@@ -330,7 +274,7 @@ echo "" >> "$RESULTS"
 
 # ── cleanup ──────────────────────────────────────────────────
 
-rm -rf "$V1_DIR" "$V2_DIR" "$DIST_DIR" /tmp/bench_nomem.dat /tmp/bench_v010.dat /tmp/bench_v025.dat /tmp/bench_dist.dat
+rm -rf "$PREV_DIR" "$DIST_DIR" /tmp/bench_nomem.dat /tmp/bench_prev.dat /tmp/bench_dist.dat
 
 echo ""
 echo "=== DONE ==="

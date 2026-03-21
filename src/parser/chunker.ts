@@ -67,6 +67,16 @@ function extractName(node: SyntaxNode): string {
     if (varName) return varName.text;
   }
 
+  // For arrow/function values in object literals: { handleLogin: () => {} }
+  // The parent is a "pair" node; extract the property key as the name.
+  if (
+    (node.type === "arrow_function" || node.type === "function") &&
+    node.parent?.type === "pair"
+  ) {
+    const key = node.parent.childForFieldName("key");
+    if (key) return key.text;
+  }
+
   // For arrow/function callbacks passed directly to a call:
   //   Deno.serve(async (req) => { ... })  →  "serve_handler"
   //   app.get("/path", (req, res) => {})  →  "get_handler"

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .memory/
+reports
 .claude/*.local.json
 .claude/skills/
 .claude/plans/

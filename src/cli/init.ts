@@ -167,11 +167,24 @@ export function initCommand(): Command {
             )) ||
             (typeof entry.command === 'string' && (
               entry.command.includes('/hooks/session-start') ||
-              entry.command.includes('/hooks/prompt-context')
+              entry.command.includes('/hooks/prompt-context') ||
+              entry.command.includes('Reporecall codebase context was injected')
             ))
           );
         });
       }
+
+      // PreToolUse soft nudge: remind Claude that codebase context was already injected.
+      // No hard blocking — Claude picks the best tool. The "Files included:" line in the
+      // injected header tells Claude exactly what it already has.
+      const preToolHook = {
+        matcher: 'Agent',
+        hooks: [{
+          type: 'command',
+          command: `echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"Reporecall codebase context was injected via hooks with a file list. Check what is already included before searching. Do not re-fetch listed files."}}'`
+        }]
+      }
+      const preToolHooks = existingHooks.PreToolUse ?? []
 
       settings.hooks = {
         ...existingHooks,
@@ -182,6 +195,10 @@ export function initCommand(): Command {
         UserPromptSubmit: [
           ...promptHooks.filter((h: unknown) => !isMemoryHook(h)),
           memoryPromptHook
+        ],
+        PreToolUse: [
+          ...(preToolHooks as unknown[]).filter((h: unknown) => !isMemoryHook(h)),
+          preToolHook
         ]
       }
 
@@ -231,7 +248,22 @@ export function initCommand(): Command {
 ${MEMORY_MARKER}
 ## Reporecall
 
-When codebase context is injected via hooks (marked with "Relevant codebase context"), answer directly from that context. Do not attempt to read files or use tools to look up code that is already provided in the injected context. If the injected context is insufficient to answer, say so rather than guessing.
+Codebase context is injected automatically via hooks on each message (marked "Relevant codebase context"). Follow this priority chain:
+
+1. **Answer from injected context first.** It contains files, symbols, and call graphs for the query — do not re-fetch files listed in the injected context header.
+2. **Fill gaps with any tool.** Reporecall MCP tools (search_code, explain_flow, find_callers, get_symbol) search a pre-built index. Grep/Read/Glob work for exact matches and raw lookups. Pick whichever fits the query.
+3. **Avoid redundant searches.** Do not re-search for symbols or files already present in the injected context.
+
+If the injected context is marked "low confidence", steps 2 and 3 are appropriate immediately.
+
+### Memory
+
+Reporecall maintains persistent project memory across sessions. Use these MCP tools:
+- **store_memory** — Save important project context, decisions, or patterns for future sessions.
+- **recall_memory** — Retrieve previously stored memories relevant to the current task.
+- **forget_memory** — Remove outdated or incorrect memories.
+
+Memories are automatically injected alongside code context when relevant to the query.
 ${MEMORY_MARKER}`
 
       let claudeMd = ''

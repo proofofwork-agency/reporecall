@@ -8,11 +8,11 @@
 # Scenarios:
 #   A. Raw Claude (no Reporecall, no memories)
 #   B. Memories only (12 records, no Reporecall)
-#   C. Reporecall v0.2.5 code context only
-#   D. Reporecall v0.2.5 + 12 memories
-#   E. Reporecall dist (0.2.6) code context only
-#   F. Reporecall dist (0.2.6) + 2 memories
-#   G. Reporecall dist (0.2.6) + 12 memories
+#   C. Reporecall <prev_version> code context only
+#   D. Reporecall <prev_version> + 12 memories
+#   E. Reporecall <current_version> code context only
+#   F. Reporecall <current_version> + 2 memories
+#   G. Reporecall <current_version> + 12 memories
 #
 # Usage:
 #   bash scripts/benchmarks/matrix-comparison.sh
@@ -33,6 +33,15 @@ MAX_BUDGET="0.50"
 MODEL="${REPORECALL_BENCH_MODEL:-sonnet}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLAUDE_MEM_DIR="$HOME/.claude/projects/-tmp-reporecall-test/memory"
+PKG_NAME="@proofofwork-agency/reporecall"
+
+# ── Auto-detect versions ────────────────────────────────────
+
+CURRENT_VERSION=$(node -p "require('$REPO_ROOT/package.json').version")
+PREV_VERSION=$(npm view "$PKG_NAME" versions --json 2>/dev/null \
+  | python3 -c "import sys,json; vs=json.load(sys.stdin); print(vs[-2] if len(vs)>=2 else vs[-1])")
+
+echo "Detected versions: previous=$PREV_VERSION, current=$CURRENT_VERSION" >&2
 
 # ── Queries by route ─────────────────────────────────────────
 # R0: non-navigational (simple lookups)
@@ -231,33 +240,26 @@ echo "╚═══════════════════════�
 echo ""
 echo "Project:    $PROJECT"
 echo "Model:      $MODEL"
+echo "Previous:   v$PREV_VERSION (from npm)"
+echo "Current:    v$CURRENT_VERSION (from package.json)"
 echo "Queries:    $QUERY_COUNT (${#R0_QUERIES[@]} R0 + ${#R1_QUERIES[@]} R1 + ${#R2_QUERIES[@]} R2)"
 echo "Scenarios:  7 × $QUERY_COUNT = $((7 * QUERY_COUNT)) API calls"
 echo ""
 
 # ── Setup versions ───────────────────────────────────────────
 
-echo "▸ Setting up v0.2.5..." >&2
-V25_DIR="/tmp/reporecall-bench-v25"
-rm -rf "$V25_DIR"
-mkdir -p "$V25_DIR/src"
-cd "$V25_DIR" && npm init -y 2>/dev/null 1>/dev/null
-
-V25_WORKTREE="/tmp/reporecall-v25-wt"
-cd "$REPO_ROOT"
-git worktree remove "$V25_WORKTREE" 2>/dev/null || true
-git worktree add "$V25_WORKTREE" v0.2.5 2>/dev/null
-cd "$V25_WORKTREE" && npm install --legacy-peer-deps 2>/dev/null 1>/dev/null && npx tsup 2>/dev/null 1>/dev/null && npm pack 2>/dev/null 1>/dev/null
-V25_TAR=$(ls "$V25_WORKTREE"/proofofwork-agency-reporecall-*.tgz 2>/dev/null | head -1)
-cd "$V25_DIR"
-npm install "$V25_TAR" --legacy-peer-deps 2>/dev/null 1>/dev/null
+echo "▸ Setting up v$PREV_VERSION (from npm)..." >&2
+PREV_DIR="/tmp/reporecall-bench-prev"
+rm -rf "$PREV_DIR"
+mkdir -p "$PREV_DIR/src"
+cd "$PREV_DIR" && npm init -y 2>/dev/null 1>/dev/null
+cd "$PREV_DIR" && npm install "${PKG_NAME}@${PREV_VERSION}" --legacy-peer-deps 2>/dev/null 1>/dev/null
 cp "$PROJECT"/src/*.ts src/ 2>/dev/null || true
 npx reporecall init --embedding-provider keyword 2>/dev/null 1>/dev/null
 npx reporecall index 2>/dev/null 1>/dev/null
-echo "  v0.2.5 ready" >&2
-cd "$REPO_ROOT" && git worktree remove "$V25_WORKTREE" 2>/dev/null || true
+echo "  v$PREV_VERSION ready" >&2
 
-echo "▸ Setting up dist (0.2.6)..." >&2
+echo "▸ Setting up v$CURRENT_VERSION (local build)..." >&2
 DIST_DIR="/tmp/reporecall-bench-dist"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/src"
@@ -269,7 +271,7 @@ npm install "$DIST_TAR" --legacy-peer-deps 2>/dev/null 1>/dev/null
 cp "$PROJECT"/src/*.ts src/ 2>/dev/null || true
 npx reporecall init --embedding-provider keyword 2>/dev/null 1>/dev/null
 npx reporecall index 2>/dev/null 1>/dev/null
-echo "  dist ready" >&2
+echo "  v$CURRENT_VERSION ready" >&2
 rm -f "$REPO_ROOT"/*.tgz 2>/dev/null || true
 
 # ── Report header ────────────────────────────────────────────
@@ -279,6 +281,7 @@ cat > "$RESULTS" << EOF
 
 **Date:** $(date +%Y-%m-%d) | **Model:** $MODEL | **Project:** auth-demo (7 TypeScript files)
 **Queries:** $QUERY_COUNT (${#R0_QUERIES[@]} R0 standard + ${#R1_QUERIES[@]} R1 flow + ${#R2_QUERIES[@]} R2 deep)
+**Versions:** v$PREV_VERSION (previous) vs v$CURRENT_VERSION (current)
 
 **Route types:**
 - **R0** (standard): Non-navigational queries — direct lookups
@@ -338,43 +341,43 @@ mv .mcp.json.bak .mcp.json 2>/dev/null || true
 mv .memory.bak .memory 2>/dev/null || true
 
 # ══════════════════════════════════════════════════════════════
-# C: Reporecall v0.2.5 code only
+# C: Reporecall previous version code only
 # ══════════════════════════════════════════════════════════════
 
 echo "" >&2
-echo "━━━ C: Reporecall v0.2.5, no memories ━━━" >&2
+echo "━━━ C: Reporecall v$PREV_VERSION, no memories ━━━" >&2
 
 clear_memories
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## C. Reporecall v0.2.5 code context (no memories)" >> "$RESULTS"
+echo "## C. Reporecall v$PREV_VERSION code context (no memories)" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
-run_scenario "C" "c" "cd $V25_DIR && npx reporecall search --budget 8000"
+run_scenario "C" "c" "cd $PREV_DIR && npx reporecall search --budget 8000"
 
 # ══════════════════════════════════════════════════════════════
-# D: Reporecall v0.2.5 + 12 memories
+# D: Reporecall previous version + 12 memories
 # ══════════════════════════════════════════════════════════════
 
 echo "" >&2
-echo "━━━ D: Reporecall v0.2.5 + 12 memories ━━━" >&2
+echo "━━━ D: Reporecall v$PREV_VERSION + 12 memories ━━━" >&2
 
 create_many_memories
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## D. Reporecall v0.2.5 + 12 memories" >> "$RESULTS"
+echo "## D. Reporecall v$PREV_VERSION + 12 memories" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
-run_scenario "D" "d" "cd $V25_DIR && npx reporecall search --budget 8000"
+run_scenario "D" "d" "cd $PREV_DIR && npx reporecall search --budget 8000"
 
 # ══════════════════════════════════════════════════════════════
-# E: Reporecall dist code only
+# E: Reporecall current version code only
 # ══════════════════════════════════════════════════════════════
 
 echo "" >&2
-echo "━━━ E: Reporecall dist (0.2.6), no memories ━━━" >&2
+echo "━━━ E: Reporecall v$CURRENT_VERSION, no memories ━━━" >&2
 
 clear_memories
 cd "$DIST_DIR" && rm -rf .memory/memory-index 2>/dev/null || true
@@ -382,17 +385,17 @@ cd "$DIST_DIR" && npx reporecall index 2>/dev/null 1>/dev/null
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## E. Reporecall dist (0.2.6) code context (no memories)" >> "$RESULTS"
+echo "## E. Reporecall v$CURRENT_VERSION code context (no memories)" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
 run_scenario "E" "e" "cd $DIST_DIR && npx reporecall search --budget 8000"
 
 # ══════════════════════════════════════════════════════════════
-# F: Reporecall dist + 2 memories
+# F: Reporecall current version + 2 memories
 # ══════════════════════════════════════════════════════════════
 
 echo "" >&2
-echo "━━━ F: Reporecall dist (0.2.6) + 2 memories ━━━" >&2
+echo "━━━ F: Reporecall v$CURRENT_VERSION + 2 memories ━━━" >&2
 
 create_few_memories
 cd "$DIST_DIR" && rm -rf .memory/memory-index 2>/dev/null || true
@@ -401,17 +404,17 @@ cd "$DIST_DIR" && npx reporecall index 2>/dev/null 1>/dev/null
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## F. Reporecall dist (0.2.6) + 2 memories" >> "$RESULTS"
+echo "## F. Reporecall v$CURRENT_VERSION + 2 memories" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
 run_scenario "F" "f" "cd $DIST_DIR && npx reporecall search --budget 8000"
 
 # ══════════════════════════════════════════════════════════════
-# G: Reporecall dist + 12 memories
+# G: Reporecall current version + 12 memories
 # ══════════════════════════════════════════════════════════════
 
 echo "" >&2
-echo "━━━ G: Reporecall dist (0.2.6) + 12 memories ━━━" >&2
+echo "━━━ G: Reporecall v$CURRENT_VERSION + 12 memories ━━━" >&2
 
 create_many_memories
 cd "$DIST_DIR" && rm -rf .memory/memory-index 2>/dev/null || true
@@ -420,7 +423,7 @@ cd "$DIST_DIR" && npx reporecall index 2>/dev/null 1>/dev/null
 
 echo "---" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "## G. Reporecall dist (0.2.6) + 12 memories" >> "$RESULTS"
+echo "## G. Reporecall v$CURRENT_VERSION + 12 memories" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
 run_scenario "G" "g" "cd $DIST_DIR && npx reporecall search --budget 8000"
@@ -442,20 +445,34 @@ IFS='|' read -r e_inp e_out e_cr e_cw e_cost < /tmp/bench_e.dat
 IFS='|' read -r f_inp f_out f_cr f_cw f_cost < /tmp/bench_f.dat
 IFS='|' read -r g_inp g_out g_cr g_cw g_cost < /tmp/bench_g.dat
 
-python3 << PYEOF >> "$RESULTS"
-a_cost=$a_cost; b_cost=$b_cost; c_cost=$c_cost; d_cost=$d_cost
-e_cost=$e_cost; f_cost=$f_cost; g_cost=$g_cost
-a_inp=$a_inp; b_inp=$b_inp; c_inp=$c_inp; d_inp=$d_inp
-e_inp=$e_inp; f_inp=$f_inp; g_inp=$g_inp
-a_out=$a_out; b_out=$b_out; c_out=$c_out; d_out=$d_out
-e_out=$e_out; f_out=$f_out; g_out=$g_out
-a_cr=$a_cr; b_cr=$b_cr; c_cr=$c_cr; d_cr=$d_cr
-e_cr=$e_cr; f_cr=$f_cr; g_cr=$g_cr
-a_cw=$a_cw; b_cw=$b_cw; c_cw=$c_cw; d_cw=$d_cw
-e_cw=$e_cw; f_cw=$f_cw; g_cw=$g_cw
-q=$QUERY_COUNT
+PREV_VER="$PREV_VERSION" CURR_VER="$CURRENT_VERSION" \
+A_COST="$a_cost" B_COST="$b_cost" C_COST="$c_cost" D_COST="$d_cost" \
+E_COST="$e_cost" F_COST="$f_cost" G_COST="$g_cost" \
+A_INP="$a_inp" B_INP="$b_inp" C_INP="$c_inp" D_INP="$d_inp" \
+E_INP="$e_inp" F_INP="$f_inp" G_INP="$g_inp" \
+A_OUT="$a_out" B_OUT="$b_out" C_OUT="$c_out" D_OUT="$d_out" \
+E_OUT="$e_out" F_OUT="$f_out" G_OUT="$g_out" \
+A_CR="$a_cr" B_CR="$b_cr" C_CR="$c_cr" D_CR="$d_cr" \
+E_CR="$e_cr" F_CR="$f_cr" G_CR="$g_cr" \
+A_CW="$a_cw" B_CW="$b_cw" C_CW="$c_cw" D_CW="$d_cw" \
+E_CW="$e_cw" F_CW="$f_cw" G_CW="$g_cw" \
+QCOUNT="$QUERY_COUNT" \
+python3 << 'PYEOF' >> "$RESULTS"
+import os
+e = os.environ
+prev_ver = e["PREV_VER"]; curr_ver = e["CURR_VER"]
+a_cost = float(e["A_COST"]); b_cost = float(e["B_COST"]); c_cost = float(e["C_COST"]); d_cost = float(e["D_COST"])
+e_cost = float(e["E_COST"]); f_cost = float(e["F_COST"]); g_cost = float(e["G_COST"])
+a_inp = int(e["A_INP"]); b_inp = int(e["B_INP"]); c_inp = int(e["C_INP"]); d_inp = int(e["D_INP"])
+e_inp = int(e["E_INP"]); f_inp = int(e["F_INP"]); g_inp = int(e["G_INP"])
+a_out = int(e["A_OUT"]); b_out = int(e["B_OUT"]); c_out = int(e["C_OUT"]); d_out = int(e["D_OUT"])
+e_out = int(e["E_OUT"]); f_out = int(e["F_OUT"]); g_out = int(e["G_OUT"])
+a_cr = int(e["A_CR"]); b_cr = int(e["B_CR"]); c_cr = int(e["C_CR"]); d_cr = int(e["D_CR"])
+e_cr = int(e["E_CR"]); f_cr = int(e["F_CR"]); g_cr = int(e["G_CR"])
+a_cw = int(e["A_CW"]); b_cw = int(e["B_CW"]); c_cw = int(e["C_CW"]); d_cw = int(e["D_CW"])
+e_cw = int(e["E_CW"]); f_cw = int(e["F_CW"]); g_cw = int(e["G_CW"])
+q = int(e["QCOUNT"])
 
-# Total input = uncached input + cache read + cache write
 a_ti = a_inp + a_cr + a_cw
 b_ti = b_inp + b_cr + b_cw
 c_ti = c_inp + c_cr + c_cw
@@ -464,13 +481,13 @@ e_ti = e_inp + e_cr + e_cw
 f_ti = f_inp + f_cr + f_cw
 g_ti = g_inp + g_cr + g_cw
 
-print("### Cost Matrix (2×2)")
+print("### Cost Matrix (2x2)")
 print()
 print("| | No Memory System | Memory (2 rec) | Memory (12 rec) |")
 print("|---|---|---|---|")
-print(f"| **No Reporecall** | A: \\${a_cost:.4f} | — | B: \\${b_cost:.4f} |")
-print(f"| **Reporecall v0.2.5** | C: \\${c_cost:.4f} | — | D: \\${d_cost:.4f} |")
-print(f"| **Reporecall 0.2.6** | E: \\${e_cost:.4f} | F: \\${f_cost:.4f} | G: \\${g_cost:.4f} |")
+print(f"| **No Reporecall** | A: ${a_cost:.4f} | — | B: ${b_cost:.4f} |")
+print(f"| **Reporecall v{prev_ver}** | C: ${c_cost:.4f} | — | D: ${d_cost:.4f} |")
+print(f"| **Reporecall v{curr_ver}** | E: ${e_cost:.4f} | F: ${f_cost:.4f} | G: ${g_cost:.4f} |")
 print()
 
 print("### Token Matrix (total input tokens)")
@@ -478,17 +495,17 @@ print()
 print("| | No Memory System | Memory (2 rec) | Memory (12 rec) |")
 print("|---|---|---|---|")
 print(f"| **No Reporecall** | A: {a_ti:,} | — | B: {b_ti:,} |")
-print(f"| **Reporecall v0.2.5** | C: {c_ti:,} | — | D: {d_ti:,} |")
-print(f"| **Reporecall 0.2.6** | E: {e_ti:,} | F: {f_ti:,} | G: {g_ti:,} |")
+print(f"| **Reporecall v{prev_ver}** | C: {c_ti:,} | — | D: {d_ti:,} |")
+print(f"| **Reporecall v{curr_ver}** | E: {e_ti:,} | F: {f_ti:,} | G: {g_ti:,} |")
 print()
 
 print("### Output Token Matrix")
 print()
 print("| | No Memory System | Memory (2 rec) | Memory (12 rec) |")
 print("|---|---|---|---|")
-print(f"| **No Reporecall** | A: {int(a_out):,} | — | B: {int(b_out):,} |")
-print(f"| **Reporecall v0.2.5** | C: {int(c_out):,} | — | D: {int(d_out):,} |")
-print(f"| **Reporecall 0.2.6** | E: {int(e_out):,} | F: {int(f_out):,} | G: {int(g_out):,} |")
+print(f"| **No Reporecall** | A: {a_out:,} | — | B: {b_out:,} |")
+print(f"| **Reporecall v{prev_ver}** | C: {c_out:,} | — | D: {d_out:,} |")
+print(f"| **Reporecall v{curr_ver}** | E: {e_out:,} | F: {f_out:,} | G: {g_out:,} |")
 print()
 
 print("### Savings Analysis")
@@ -501,38 +518,38 @@ def diff(base, val):
     return f"{(val/base - 1)*100:+.1f}%"
 
 print("**vs Raw Claude (A):**")
-print(f"- B (memories only):        cost {diff(a_cost, b_cost)}")
-print(f"- C (v0.2.5 code only):     cost {diff(a_cost, c_cost)}")
-print(f"- D (v0.2.5 + 12 mem):      cost {diff(a_cost, d_cost)}")
-print(f"- E (0.2.6 code only):      cost {diff(a_cost, e_cost)}")
-print(f"- F (0.2.6 + 2 mem):        cost {diff(a_cost, f_cost)}")
-print(f"- G (0.2.6 + 12 mem):       cost {diff(a_cost, g_cost)}")
+print(f"- B (memories only):              cost {diff(a_cost, b_cost)}")
+print(f"- C (v{prev_ver} code only):      cost {diff(a_cost, c_cost)}")
+print(f"- D (v{prev_ver} + 12 mem):       cost {diff(a_cost, d_cost)}")
+print(f"- E (v{curr_ver} code only):      cost {diff(a_cost, e_cost)}")
+print(f"- F (v{curr_ver} + 2 mem):        cost {diff(a_cost, f_cost)}")
+print(f"- G (v{curr_ver} + 12 mem):       cost {diff(a_cost, g_cost)}")
 print()
 
-print("**Compression savings (v0.2.5 → 0.2.6):**")
+print(f"**Compression savings (v{prev_ver} -> v{curr_ver}):**")
 if c_cost > 0 and e_cost > 0:
-    print(f"- Code only: {pct(c_cost, e_cost)} cost (C → E)")
+    print(f"- Code only: {pct(c_cost, e_cost)} cost (C -> E)")
 if d_cost > 0 and g_cost > 0:
-    print(f"- Code + 12 mem: {pct(d_cost, g_cost)} cost (D → G)")
+    print(f"- Code + 12 mem: {pct(d_cost, g_cost)} cost (D -> G)")
 print()
 
-print("**Memory overhead (0.2.6 dist):**")
+print(f"**Memory overhead (v{curr_ver}):**")
 if e_cost > 0:
-    print(f"- +2 memories: {diff(e_cost, f_cost)} cost (E → F)")
-    print(f"- +12 memories: {diff(e_cost, g_cost)} cost (E → G)")
+    print(f"- +2 memories: {diff(e_cost, f_cost)} cost (E -> F)")
+    print(f"- +12 memories: {diff(e_cost, g_cost)} cost (E -> G)")
 print()
 
 print(f"### Per 1,000 Sessions ({q*1000:,} queries)")
 print()
 print("| Scenario | Cost/1k sessions | vs Raw Claude |")
 print("|----------|------------------|---------------|")
-print(f"| A. Raw Claude | \\${a_cost*1000:.2f} | — |")
-print(f"| B. Memories only | \\${b_cost*1000:.2f} | {diff(a_cost, b_cost)} |")
-print(f"| C. v0.2.5 code | \\${c_cost*1000:.2f} | {diff(a_cost, c_cost)} |")
-print(f"| D. v0.2.5 + 12 mem | \\${d_cost*1000:.2f} | {diff(a_cost, d_cost)} |")
-print(f"| **E. 0.2.6 code** | **\\${e_cost*1000:.2f}** | **{diff(a_cost, e_cost)}** |")
-print(f"| F. 0.2.6 + 2 mem | \\${f_cost*1000:.2f} | {diff(a_cost, f_cost)} |")
-print(f"| **G. 0.2.6 + 12 mem** | **\\${g_cost*1000:.2f}** | **{diff(a_cost, g_cost)}** |")
+print(f"| A. Raw Claude | ${a_cost*1000:.2f} | — |")
+print(f"| B. Memories only | ${b_cost*1000:.2f} | {diff(a_cost, b_cost)} |")
+print(f"| C. v{prev_ver} code | ${c_cost*1000:.2f} | {diff(a_cost, c_cost)} |")
+print(f"| D. v{prev_ver} + 12 mem | ${d_cost*1000:.2f} | {diff(a_cost, d_cost)} |")
+print(f"| **E. v{curr_ver} code** | **${e_cost*1000:.2f}** | **{diff(a_cost, e_cost)}** |")
+print(f"| F. v{curr_ver} + 2 mem | ${f_cost*1000:.2f} | {diff(a_cost, f_cost)} |")
+print(f"| **G. v{curr_ver} + 12 mem** | **${g_cost*1000:.2f}** | **{diff(a_cost, g_cost)}** |")
 PYEOF
 
 echo "" >> "$RESULTS"
@@ -540,7 +557,7 @@ echo "" >> "$RESULTS"
 # ── Cleanup ──────────────────────────────────────────────────
 
 clear_memories
-rm -rf "$V25_DIR" "$DIST_DIR"
+rm -rf "$PREV_DIR" "$DIST_DIR"
 rm -f /tmp/bench_{a,b,c,d,e,f,g}.dat
 
 echo "" >&2

@@ -74,6 +74,7 @@ describe("assembleFlowContext", () => {
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
     expect(result.text).toContain("## Relevant codebase context (flow trace)");
+    expect(result.text).toContain("> Files included:");
     expect(result.text).toContain("> Seed:");
     expect(result.text).toContain("handleLogin");
   });
@@ -268,11 +269,16 @@ describe("assembleFlowContext", () => {
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
     // entryPoint (depth 2) should appear before middleware (depth 1) in the callers section
-    const entryIdx = result.text.indexOf("entryPoint");
-    const middlewareIdx = result.text.indexOf("middleware");
-    const seedIdx = result.text.indexOf("### Seed");
+    // Search after "### Callers" to avoid matching file paths in the "Files included:" header
+    const callersIdx = result.text.indexOf("### Callers");
+    expect(callersIdx).toBeGreaterThan(-1);
+    const afterCallers = result.text.slice(callersIdx);
+    const entryIdx = afterCallers.indexOf("entryPoint");
+    const middlewareIdx = afterCallers.indexOf("middleware");
     expect(entryIdx).toBeLessThan(middlewareIdx);
-    expect(middlewareIdx).toBeLessThan(seedIdx);
+    // Seed section should come after callers section
+    const seedIdx = result.text.indexOf("### Seed");
+    expect(seedIdx).toBeGreaterThan(callersIdx);
   });
 });
 
@@ -294,8 +300,9 @@ describe("assembleDeepRouteContext", () => {
 
     const result = assembleDeepRouteContext(chunks, 10000);
 
-    expect(result.text).toContain("## Relevant codebase context (low confidence)");
-    expect(result.text).toContain("Low confidence — repository tools are allowed.");
+    expect(result.text).toContain("## Relevant codebase context (broad search)");
+    expect(result.text).toContain("> Files included:");
+    expect(result.text).toContain("Answer from this context first. If coverage is incomplete, Reporecall MCP tools can fill gaps.");
   });
 
   it("includes the regular chunk context after the marker", () => {
@@ -322,7 +329,7 @@ describe("assembleDeepRouteContext", () => {
   it("returns empty chunks when input is empty", () => {
     const result = assembleDeepRouteContext([], 10000);
 
-    expect(result.text).toContain("## Relevant codebase context (low confidence)");
+    expect(result.text).toContain("## Relevant codebase context (broad search)");
     expect(result.chunks).toHaveLength(0);
   });
 });

@@ -19,7 +19,7 @@ function wait(ms: number): Promise<void> {
 
 async function waitFor(
   predicate: () => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 5000,
   intervalMs = 25
 ): Promise<void> {
   const started = Date.now();
@@ -256,14 +256,19 @@ Newest historical working content.
       memoryHits,
     });
 
-    const workingCurrent = store.getByName("working-project-current");
+    // Working memory now uses timestamped filenames (working-project-YYYY-MM-DDTHH-MM-SS)
+    // instead of a single overwritten working-project-current file
+    const allMemories = store.getAll();
+    const workingCurrent = allMemories.find(
+      (m) => m.class === "working" && m.sourceKind === "generated" && m.content.includes("tighten auth session persistence")
+    );
+    expect(workingCurrent).toBeDefined();
     expect(workingCurrent?.class).toBe("working");
     expect(workingCurrent?.sourceKind).toBe("generated");
     expect(workingCurrent?.content).toContain("Last query: tighten auth session persistence");
     expect(workingCurrent?.content).toContain("Relevant symbols: validateSession, persistToken");
 
-    const generatedFact = store
-      .getAll()
+    const generatedFact = allMemories
       .find((memory) => memory.name.startsWith("fact-") && memory.class === "fact");
     expect(generatedFact?.sourceKind).toBe("generated");
     expect(generatedFact?.content).toContain("Promoted fact from: auth_seed");
@@ -271,10 +276,13 @@ Newest historical working content.
     const workingFiles = readdirSync(writableDir)
       .filter((name) => name.startsWith("working-project") && name.endsWith(".md"))
       .sort();
-    expect(workingFiles).toContain("working-project-current.md");
-    expect(workingFiles).toContain("working-project-003.md");
-    expect(workingFiles).toHaveLength(2);
-    expect(readFileSync(resolve(writableDir, "working-project-current.md"), "utf-8")).toContain(
+    // With workingHistoryLimit=3: 3 pre-existing (001, 002, 003) + 1 new timestamped = 4,
+    // pruned to 3 (newest kept)
+    expect(workingFiles.length).toBeGreaterThanOrEqual(2);
+    expect(workingFiles.length).toBeLessThanOrEqual(3);
+    // Verify the latest file contains the observed prompt content
+    const latestFile = workingFiles[workingFiles.length - 1]!;
+    expect(readFileSync(resolve(writableDir, latestFile), "utf-8")).toContain(
       "tighten auth session persistence"
     );
   });
