@@ -1,6 +1,6 @@
 {
   "corpus": "reporecall",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "annotatedAt": "2026-03-21",
   "scale": {
     "0": "not relevant",
@@ -13,7 +13,7 @@
       "id": "what-does-sanitizequery-do",
       "query": "what does sanitizeQuery do?",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "sanitizeQuery": 3,
         "handlePromptContext": 1,
@@ -24,7 +24,7 @@
       "id": "find-the-hybridsearch-class",
       "query": "find the HybridSearch class",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "HybridSearch": 3,
         "search": 1,
@@ -35,7 +35,7 @@
       "id": "show-me-the-metadatastore-constructor",
       "query": "show me the MetadataStore constructor",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "MetadataStore": 3,
         "src/storage/metadata-store.ts:constructor": 2
@@ -45,7 +45,7 @@
       "id": "where-is-loadconfig-defined",
       "query": "where is loadConfig defined?",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "loadConfig": 3,
         "MemoryConfig": 2
@@ -55,7 +55,7 @@
       "id": "what-is-the-memoryconfig-interface",
       "query": "what is the MemoryConfig interface?",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "MemoryConfig": 3,
         "loadConfig": 2
@@ -65,7 +65,7 @@
       "id": "find-extractexplicittargets",
       "query": "find extractExplicitTargets",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "extractExplicitTargets": 3,
         "resolveSeeds": 2,
@@ -76,7 +76,7 @@
       "id": "show-the-assembledcontext-type",
       "query": "show the AssembledContext type",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "AssembledContext": 3,
         "assembleContext": 2,
@@ -87,7 +87,7 @@
       "id": "find-the-indexingpipeline-class",
       "query": "find the IndexingPipeline class",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "IndexingPipeline": 3,
         "indexAll": 2
@@ -97,7 +97,7 @@
       "id": "where-is-reciprocalrankfusion",
       "query": "where is reciprocalRankFusion?",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "reciprocalRankFusion": 3,
         "HybridSearch": 1
@@ -107,7 +107,7 @@
       "id": "show-the-searchresult-interface",
       "query": "show the SearchResult interface",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "SearchResult": 3,
         "SearchOptions": 1,
@@ -118,7 +118,7 @@
       "id": "find-the-ftsstore-class",
       "query": "find the FTSStore class",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "FTSStore": 3,
         "keywordSearch": 2
@@ -128,7 +128,7 @@
       "id": "show-the-storedchunk-type",
       "query": "show the StoredChunk type definition",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "StoredChunk": 3,
         "ChunkStore": 2,
@@ -139,7 +139,7 @@
       "id": "find-the-indexscheduler-class",
       "query": "find the IndexScheduler class",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "IndexScheduler": 3,
         "createDaemonServer": 1
@@ -149,7 +149,7 @@
       "id": "where-is-classifyintent",
       "query": "where is classifyIntent defined?",
       "category": "exact_lookup",
-      "expectedRoute": "R0",
+      "expectedRoute": "lookup",
       "relevance": {
         "classifyIntent": 3,
         "QueryIntent": 2,
@@ -160,7 +160,7 @@
       "id": "how-does-the-search-pipeline-work",
       "query": "how does the search pipeline work?",
       "category": "flow",
-      "expectedRoute": "R0",
+      "expectedRoute": "architecture",
       "relevance": {
         "HybridSearch": 3,
         "search": 3,
@@ -175,7 +175,7 @@
       "id": "how-does-intent-classification-route-queries",
       "query": "how does intent classification route queries?",
       "category": "flow",
-      "expectedRoute": "R0",
+      "expectedRoute": "trace",
       "relevance": {
         "classifyIntent": 3,
         "deriveRoute": 3,
@@ -188,7 +188,7 @@
       "id": "how-does-the-indexing-pipeline-process-files",
       "query": "how does the indexing pipeline process files?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "architecture",
       "relevance": {
         "IndexingPipeline": 3,
         "indexAll": 3,
@@ -202,7 +202,7 @@
       "id": "how-is-the-call-graph-built-and-used",
       "query": "how is the call graph built and used?",
       "category": "flow",
-      "expectedRoute": "R0",
+      "expectedRoute": "trace",
       "relevance": {
         "CallEdgeStore": 3,
         "extractCallEdges": 3,
@@ -216,7 +216,7 @@
       "id": "what-happens-when-a-prompt-context-hook-fires",
       "query": "what happens when a prompt-context hook fires?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "handlePromptContext": 3,
         "handlePromptContextDetailed": 3,
@@ -231,7 +231,7 @@
       "id": "how-does-seed-resolution-determine-the-best-seed",
       "query": "how does seed resolution determine the best seed?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "resolveSeeds": 3,
         "extractExplicitTargets": 3,
@@ -245,7 +245,7 @@
       "id": "how-does-context-assembly-work",
       "query": "how does context assembly build the final output?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "assembleContext": 3,
         "assembleConceptContext": 3,
@@ -258,7 +258,7 @@
       "id": "how-does-the-reranker-improve-results",
       "query": "how does the reranker improve search results?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "LocalReranker": 3,
         "rerank": 3,
@@ -270,7 +270,7 @@
       "id": "how-does-the-mcp-server-handle-tool-calls",
       "query": "how does the MCP server handle tool calls?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "createMCPServer": 3,
         "captureToolHandlers": 2
@@ -280,7 +280,7 @@
       "id": "who-calls-handlepromptcontext",
       "query": "who calls handlePromptContext?",
       "category": "flow",
-      "expectedRoute": "R0",
+      "expectedRoute": "trace",
       "relevance": {
         "handlePromptContext": 3,
         "handlePromptContextDetailed": 3,
@@ -291,7 +291,7 @@
       "id": "what-is-called-by-buildstacktree",
       "query": "what is called by buildStackTree?",
       "category": "flow",
-      "expectedRoute": "R0",
+      "expectedRoute": "trace",
       "relevance": {
         "buildStackTree": 3,
         "findCallers": 2,
@@ -303,7 +303,7 @@
       "id": "how-does-tree-sitter-parsing-work",
       "query": "how does tree-sitter parsing extract code chunks?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "initTreeSitter": 3,
         "walkForExtractables": 3,
@@ -316,7 +316,7 @@
       "id": "how-does-the-watcher-detect-file-changes",
       "query": "how does the file watcher detect and process changes?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "IndexScheduler": 3,
         "FileWatcher": 3,
@@ -329,7 +329,7 @@
       "id": "how-does-sibling-expansion-work",
       "query": "how does sibling expansion improve search results?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "expandSiblings": 3,
         "HybridSearch": 2,
@@ -341,7 +341,7 @@
       "id": "how-does-the-conventions-detector-work",
       "query": "how does the conventions detector analyze a codebase?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "ConventionsStore": 3,
         "analyzeConventions": 3,
@@ -353,7 +353,7 @@
       "id": "how-does-graph-expansion-add-related-chunks",
       "query": "how does graph expansion add related chunks to results?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "expandGraph": 3,
         "HybridSearch": 2,
@@ -367,7 +367,7 @@
       "id": "how-does-the-import-store-track-dependencies",
       "query": "how does the import store track file dependencies?",
       "category": "flow",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "ImportStore": 3,
         "getImportsForFile": 2,
@@ -379,7 +379,7 @@
       "id": "how-is-the-project-structured",
       "query": "how is the project structured?",
       "category": "architecture",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "IndexingPipeline": 2,
         "HybridSearch": 2,
@@ -392,7 +392,7 @@
       "id": "what-is-the-overall-design-of-the-storage-layer",
       "query": "what is the overall design of the storage layer?",
       "category": "architecture",
-      "expectedRoute": "R1",
+      "expectedRoute": "architecture",
       "relevance": {
         "MetadataStore": 3,
         "FTSStore": 3,
@@ -407,7 +407,7 @@
       "id": "what-is-the-daemon-architecture",
       "query": "what is the daemon HTTP server architecture?",
       "category": "architecture",
-      "expectedRoute": "R1",
+      "expectedRoute": "architecture",
       "relevance": {
         "createDaemonServer": 3,
         "handlePromptContext": 2,
@@ -420,7 +420,7 @@
       "id": "how-is-embedding-handled-across-providers",
       "query": "how is embedding handled across different providers?",
       "category": "architecture",
-      "expectedRoute": "R1",
+      "expectedRoute": "architecture",
       "relevance": {
         "EmbeddingProvider": 3,
         "LocalEmbedder": 3,
@@ -434,7 +434,7 @@
       "id": "what-is-the-cli-command-structure",
       "query": "what is the CLI command structure?",
       "category": "architecture",
-      "expectedRoute": "R0",
+      "expectedRoute": "architecture",
       "relevance": {
         "createCLI": 3,
         "initCommand": 2,
@@ -448,7 +448,7 @@
       "id": "what-is-the-token-budgeting-strategy",
       "query": "what is the token budgeting strategy for context assembly?",
       "category": "architecture",
-      "expectedRoute": "R1",
+      "expectedRoute": "lookup",
       "relevance": {
         "assembleContext": 3,
         "assembleConceptContext": 2,
@@ -461,7 +461,7 @@
       "id": "why-does-the-fts-search-return-empty-results",
       "query": "why does the FTS search return empty results?",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "FTSStore": 3,
         "keywordSearch": 3,
@@ -474,7 +474,7 @@
       "id": "why-is-the-daemon-failing-to-start",
       "query": "why is the daemon failing to start?",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "createDaemonServer": 3,
         "IndexScheduler": 2,
@@ -486,7 +486,7 @@
       "id": "trace-the-error-when-embedding-fails",
       "query": "trace the error when embedding fails",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "LocalEmbedder": 3,
         "EmbeddingProvider": 2,
@@ -498,7 +498,7 @@
       "id": "why-does-sanitizequery-strip-too-much",
       "query": "why does sanitizeQuery strip too much from the prompt?",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "sanitizeQuery": 3,
         "handlePromptContext": 2,
@@ -510,7 +510,7 @@
       "id": "debug-the-rate-limiter",
       "query": "debug the rate limiter — it blocks all requests",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "trace",
       "relevance": {
         "checkRateLimit": 3,
         "createDaemonServer": 2,
@@ -521,7 +521,7 @@
       "id": "why-does-merkle-skip-changed-files",
       "query": "why does the Merkle check skip files that actually changed?",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "MerkleTree": 3,
         "computeChanges": 3,
@@ -533,7 +533,7 @@
       "id": "why-does-resolveseeds-return-wrong-seed",
       "query": "why does resolveSeeds return the wrong seed for my query?",
       "category": "debugging",
-      "expectedRoute": "R1",
+      "expectedRoute": "bug",
       "relevance": {
         "resolveSeeds": 3,
         "extractExplicitTargets": 3,
@@ -595,7 +595,7 @@
       "id": "explain-vector-search-pipeline-end-to-end",
       "query": "Explain how the vector search pipeline processes queries end-to-end",
       "category": "architecture",
-      "expectedRoute": "R2",
+      "expectedRoute": "architecture",
       "relevance": {
         "assembleDeepRouteContext": 3,
         "buildDeepRouteContext": 3,
@@ -607,7 +607,7 @@
       "id": "describe-workflow-user-submits-prompt-to-daemon",
       "query": "Describe the complete workflow when a user submits a prompt to the daemon",
       "category": "flow",
-      "expectedRoute": "R2",
+      "expectedRoute": "architecture",
       "relevance": {
         "handlePromptContextDetailed": 3,
         "handleSessionStart": 3,
@@ -619,7 +619,7 @@
       "id": "graceful-shutdown-across-storage-layers",
       "query": "How does the system handle graceful shutdown across all storage layers?",
       "category": "debugging",
-      "expectedRoute": "R2",
+      "expectedRoute": "architecture",
       "relevance": {
         "closeAsync": 2,
         "drain": 2,

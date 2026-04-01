@@ -10,7 +10,7 @@
         {
           "id": "search-pipeline-files",
           "query": "which files implement the full search pipeline",
-          "expectedRoute": "R2",
+          "expectedRoute": "architecture",
           "relevance": {
             "src/search/hybrid.ts": 3,
             "src/search/reranker.ts": 3,
@@ -25,7 +25,7 @@
         {
           "id": "hook-flow-instrumentation",
           "query": "add logging to every step in the hook request flow",
-          "expectedRoute": "R2",
+          "expectedRoute": "change",
           "relevance": {
             "src/hooks/prompt-context.ts": 3,
             "src/daemon/server.ts": 3,
@@ -37,7 +37,7 @@
         {
           "id": "mcp-trace",
           "query": "trace the full MCP request flow from stdio command to tool registration",
-          "expectedRoute": "R2",
+          "expectedRoute": "trace",
           "relevance": {
             "src/cli/mcp.ts": 3,
             "src/daemon/mcp-server.ts": 3,
@@ -56,7 +56,7 @@
         {
           "id": "auth-flow-files",
           "query": "which files implement the authentication flow",
-          "expectedRoute": "R2",
+          "expectedRoute": "architecture",
           "relevance": {
             "src/hooks/useAuth.tsx": 3,
             "src/pages/Auth.tsx": 3,
@@ -70,7 +70,7 @@
         {
           "id": "auth-logging",
           "query": "add logging to every step in the authentication flow",
-          "expectedRoute": "R2",
+          "expectedRoute": "change",
           "relevance": {
             "src/hooks/useAuth.tsx": 3,
             "src/pages/Auth.tsx": 3,
@@ -84,7 +84,7 @@
         {
           "id": "auth-redirect-debug",
           "query": "where does authentication redirect after success or failure",
-          "expectedRoute": "R2",
+          "expectedRoute": "bug",
           "relevance": {
             "src/pages/AuthCallback.tsx": 3,
             "src/pages/Auth.tsx": 2,
