@@ -72,7 +72,7 @@ describe('resolveExplainResult', () => {
       {} as never
     )
 
-    expect(result.route).toBe('skip')
+    expect(result.queryMode).toBe('skip')
     expect(result.skipReason).toBe('empty query after sanitization')
     expect(result.tokensInjected).toBe(0)
     expect(result.chunksInjected).toBe(0)
@@ -85,7 +85,7 @@ describe('resolveExplainResult', () => {
       pipeline
     )
 
-    expect(result.route).toBe('R1')
+    expect(result.queryMode).toBe('trace')
     expect(result.seed?.name).toBe('validate')
     expect(result.seed?.confidence).toBeGreaterThanOrEqual(0.7)
     expect(result.resolvedTarget).toBeTruthy()
@@ -100,7 +100,7 @@ describe('resolveExplainResult', () => {
       pipeline
     )
 
-    expect(result.route).toBe('R2')
+    expect(result.queryMode).toBe('architecture')
     expect(result.broadMode).toBe('inventory')
     expect(result.selectedFiles?.length ?? 0).toBeGreaterThan(0)
     expect(result.selectedFiles?.some((file) => file.filePath === 'src/auth.ts')).toBe(true)

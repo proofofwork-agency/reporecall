@@ -11,6 +11,7 @@ import type {
 } from "./types.js";
 import type { CallEdge } from "../analysis/call-graph.js";
 import type { ConventionsReport } from "../analysis/conventions.js";
+import type { QueryMode } from "../search/intent.js";
 import { openSqliteWithRecovery } from "./sqlite-utils.js";
 import { ChunkStore } from "./chunk-store.js";
 import { CallEdgeStore } from "./call-edge-store.js";
@@ -18,7 +19,9 @@ import { StatsStore } from "./stats-store.js";
 import { ConventionsStore } from "./conventions-store.js";
 import { ImportStore } from "./import-store.js";
 import { TargetStore } from "./target-store.js";
+import { SemanticStore } from "./semantic-store.js";
 import type { ImportRecord } from "./import-store.js";
+import type { ChunkFeature, ChunkTag, FileFeature } from "./types.js";
 
 // Re-export focused stores and types for consumers
 export { ChunkStore, type ChunkLightweight } from "./chunk-store.js";
@@ -27,6 +30,7 @@ export { StatsStore } from "./stats-store.js";
 export { ConventionsStore } from "./conventions-store.js";
 export { ImportStore, type ImportRecord } from "./import-store.js";
 export { TargetStore } from "./target-store.js";
+export { SemanticStore } from "./semantic-store.js";
 
 /**
  * Facade that composes the focused stores (ChunkStore, CallEdgeStore,
@@ -42,6 +46,7 @@ export class MetadataStore {
   private conventions: ConventionsStore;
   private imports: ImportStore;
   private targets: TargetStore;
+  private semantic: SemanticStore;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
@@ -53,12 +58,14 @@ export class MetadataStore {
     this.conventions = new ConventionsStore(this.stats);
     this.imports = new ImportStore(this.db);
     this.targets = new TargetStore(this.db);
+    this.semantic = new SemanticStore(this.db);
 
     this.chunks.initSchema();
     this.callEdges.initSchema();
     this.stats.initSchema();
     this.imports.initSchema();
     this.targets.initSchema();
+    this.semantic.initSchema();
   }
 
   // --- Chunk delegation -------------------------------------------------------
@@ -72,6 +79,7 @@ export class MetadataStore {
       this.chunks.removeFile(path);
       this.callEdges.removeCallEdgesForFile(path);
       this.imports.removeImportsForFile(path);
+      this.semantic.removeByFile(path);
     })();
   }
 
@@ -81,6 +89,7 @@ export class MetadataStore {
 
   removeChunksForFile(filePath: string): void {
     this.chunks.removeChunksForFile(filePath);
+    this.semantic.removeByFile(filePath);
   }
 
   getChunk(id: string): StoredChunk | undefined {
@@ -146,7 +155,7 @@ export class MetadataStore {
     return this.stats.getStat(key);
   }
 
-  incrementRouteStat(route: "skip" | "R0" | "R1" | "R2"): void {
+  incrementRouteStat(route: QueryMode): void {
     this.stats.incrementRouteStat(route);
   }
 
@@ -197,6 +206,36 @@ export class MetadataStore {
 
   getTopCallTargets(limit?: number): string[] {
     return this.callEdges.getTopCallTargets(limit);
+  }
+
+  // --- Semantic feature delegation -------------------------------------------
+
+  replaceChunkFeatures(features: ChunkFeature[]): void {
+    this.semantic.replaceChunkFeatures(features);
+  }
+
+  replaceFileFeatures(features: FileFeature[]): void {
+    this.semantic.replaceFileFeatures(features);
+  }
+
+  replaceChunkTags(tags: ChunkTag[]): void {
+    this.semantic.replaceChunkTags(tags);
+  }
+
+  getChunkFeaturesByIds(chunkIds: string[]): ChunkFeature[] {
+    return this.semantic.getChunkFeaturesByIds(chunkIds);
+  }
+
+  getChunkTagsByIds(chunkIds: string[]): ChunkTag[] {
+    return this.semantic.getChunkTagsByIds(chunkIds);
+  }
+
+  getFileFeatures(filePaths: string[]): FileFeature[] {
+    return this.semantic.getFileFeatures(filePaths);
+  }
+
+  findPredicateLikeChunks(limit?: number): StoredChunk[] {
+    return this.semantic.findPredicateLikeChunks(limit);
   }
 
   // --- Targets delegation -----------------------------------------------------
@@ -269,6 +308,7 @@ export class MetadataStore {
     this.callEdges.clearAll();
     this.imports.clearAll();
     this.targets.clearAll();
+    this.semantic.clearAll();
     this.chunks.clearAll();
   }
 

@@ -174,7 +174,7 @@ export class VectorStore {
   async upsert(
     records: Array<{
       id: string;
-      vector: number[];
+      vector: ArrayLike<number>;
       filePath: string;
       name: string;
       kind: string;
@@ -183,15 +183,19 @@ export class VectorStore {
     }>
   ): Promise<void> {
     if (records.length === 0) return;
+    const normalizedRecords = records.map((record) => ({
+      ...record,
+      vector: Array.isArray(record.vector) ? record.vector : Array.from(record.vector),
+    }));
 
     try {
-      const { table, createdWithData } = await this.getOrCreateTable(records);
+      const { table, createdWithData } = await this.getOrCreateTable(normalizedRecords);
 
       if (!createdWithData) {
         // Batch delete existing records with same IDs
         const idFilter = buildOrPredicate(
           "id",
-          records.map((r) => r.id)
+          normalizedRecords.map((r) => r.id)
         );
         try {
           await table.delete(idFilter);
@@ -199,11 +203,11 @@ export class VectorStore {
           getLogger().debug({ err }, "VectorStore.upsert: failed to delete existing records");
         }
 
-        await table.add(records);
+        await table.add(normalizedRecords);
       }
 
       // Build ANN index once table is large enough (skip for empty-vector records)
-      const hasVectors = records.some((r) => r.vector.length > 0);
+      const hasVectors = normalizedRecords.some((r) => r.vector.length > 0);
       if (!this.indexBuilt && hasVectors) {
         const count = await table.countRows();
         if (count >= 256) {
@@ -219,9 +223,9 @@ export class VectorStore {
       if (this.isCorruptionError(err)) {
         await this.recoverFromCorruption();
         // Retry once after recovery
-        const { table, createdWithData } = await this.getOrCreateTable(records);
+        const { table, createdWithData } = await this.getOrCreateTable(normalizedRecords);
         if (!createdWithData) {
-          await table.add(records);
+          await table.add(normalizedRecords);
         }
       } else {
         throw err;
@@ -251,15 +255,18 @@ export class VectorStore {
   }
 
   async search(
-    queryVector: number[],
+    queryVector: ArrayLike<number>,
     limit: number = 50
   ): Promise<VectorSearchResult[]> {
     const table = await this.getTable();
     if (!table) return [];
 
     try {
+      const normalizedQueryVector = Array.isArray(queryVector)
+        ? queryVector
+        : Array.from(queryVector);
       const results = await table
-        .search(queryVector)
+        .search(normalizedQueryVector)
         .limit(limit)
         .toArray();
 

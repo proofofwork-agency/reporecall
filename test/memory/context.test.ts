@@ -31,7 +31,7 @@ describe("assembleMemoryContext", () => {
       500
     );
 
-    expect(result.text).toContain("## Memories");
+    expect(result.text).toContain("## Memory guidance");
     expect(result.text).toContain("[Rule] feedback_testing");
     expect(result.text).toContain("A test memory");
     expect(result.tokenCount).toBeGreaterThan(0);

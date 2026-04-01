@@ -123,6 +123,39 @@ describe("targets", () => {
     expect(hits[0]?.target.id).toBe("file_module:src/daemon/mcp-server.ts");
   });
 
+  it("prefers directly mentioned endpoint slugs over family-expanded neighbors", () => {
+    const chunks = [
+      makeChunk({
+        id: "serve-handler",
+        name: "serve_handler",
+        filePath: "supabase/functions/generate-image/index.ts",
+      }),
+      makeChunk({
+        id: "storyboard-controller",
+        name: "generate_image",
+        filePath: "supabase/functions/storyboard-controller/index.ts",
+        kind: "method_definition",
+      }),
+    ];
+
+    const catalog = buildTargetCatalog(chunks, ["src/", "lib/", "bin/", "supabase/"]);
+    const hits = resolveTargetsForQuery("where is generate-image implemented", {
+      resolveTargetAliases(normalizedAliases: string[]) {
+        return catalog.aliases
+          .filter((alias) => normalizedAliases.includes(alias.normalizedAlias))
+          .map((alias) => ({
+            target: catalog.targets.find((target) => target.id === alias.targetId)!,
+            alias: alias.alias,
+            normalizedAlias: alias.normalizedAlias,
+            source: alias.source,
+            weight: alias.weight,
+          }));
+      },
+    } as never);
+
+    expect(hits[0]?.target.id).toBe("endpoint:supabase/functions/generate-image/index.ts");
+  });
+
   it("builds literal candidates for string-dispatch edges", () => {
     const aliases = buildLiteralAliasCandidates(["generate-image", "storyboard_controller"]);
     expect(aliases).toContain("generate image");

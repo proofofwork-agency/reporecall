@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 
+import type { QueryMode } from "../search/intent.js";
+
 export class StatsStore {
   // Cached prepared statements — initialised in initSchema() after the schema
   // is guaranteed to exist.
@@ -74,7 +76,7 @@ export class StatsStore {
     return row?.value;
   }
 
-  incrementRouteStat(route: "skip" | "R0" | "R1" | "R2"): void {
+  incrementRouteStat(route: QueryMode): void {
     const key = `route_${route}_count`;
     this.incrementRouteStatStmt.run(key);
   }

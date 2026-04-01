@@ -46,6 +46,197 @@ export const GENERIC_BROAD_TERMS = new Set([
   "types",
 ]);
 
+export const GENERIC_QUERY_ACTION_TERMS = new Set([
+  "work",
+  "works",
+  "working",
+  "show",
+  "inspect",
+  "read",
+  "start",
+  "trace",
+  "traces",
+  "tracing",
+  "traced",
+  "full",
+  "complete",
+  "entire",
+  "overall",
+  "across",
+  "system",
+]);
+
+export type ExecutionSurface =
+  | "ui"
+  | "routing"
+  | "state"
+  | "backend"
+  | "cli"
+  | "mcp"
+  | "infra"
+  | "shared";
+
+export interface ExecutionSurfaceBias {
+  preferred: ExecutionSurface[];
+  suppressed: ExecutionSurface[];
+  defaultUserFacing: boolean;
+  explicitInfrastructure: boolean;
+  explicitBackend: boolean;
+  explicitUi: boolean;
+  explicitRouting: boolean;
+}
+
+const EXEC_SURFACE_UI_RE = /\b(page|pages|screen|screens|view|views|modal|dialog|component|components|layout|ui)\b/;
+const EXEC_SURFACE_ROUTING_RE = /\b(route|routes|router|routing|redirect|redirects|callback|callbacks|protected|guard|guards|navigation|navigate|pending|destination|handoff|return)\b/;
+const EXEC_SURFACE_STATE_RE = /\b(hook|hooks|state|store|stores|session|sessions|context|provider|providers)\b/;
+const EXEC_SURFACE_BACKEND_RE = /\b(api|endpoint|endpoints|request|requests|response|responses|server|servers|function|functions|handler|handlers|controller|controllers|webhook|bearer|header|headers|upload|uploads|bucket|storage)\b/;
+const EXEC_SURFACE_CLI_RE = /\b(cli|command|commands|terminal|shell)\b/;
+const EXEC_SURFACE_MCP_RE = /\b(mcp|stdio|transport|tool registration|tooling bridge)\b/;
+const EXEC_SURFACE_INFRA_RE = /\b(daemon|socket|http|worker|scheduler|runtime|transport|protocol|bridge|hook|hooks)\b/;
+const EXEC_SURFACE_AUTH_RE = /\b(auth|authentication|authorization|login|signin|signout|session|oauth|credential|token)\b/;
+
+function uniqueSurfaces(values: ExecutionSurface[]): ExecutionSurface[] {
+  return Array.from(new Set(values));
+}
+
+function normalizeExecutionSurfaceText(value: string): string {
+  return splitIdentifierTokens(value).join(" ").trim();
+}
+
+export function detectExecutionSurfaces(
+  filePath: string,
+  name = "",
+  content = ""
+): ExecutionSurface[] {
+  const lowerPath = filePath.toLowerCase();
+  const text = normalizeExecutionSurfaceText(`${filePath} ${name} ${content.slice(0, 400)}`);
+  const surfaces: ExecutionSurface[] = [];
+
+  if (/(?:^|\/)(src\/)?(pages|components|screens|views|app)\//.test(lowerPath) || EXEC_SURFACE_UI_RE.test(text)) {
+    surfaces.push("ui");
+  }
+  if (EXEC_SURFACE_ROUTING_RE.test(text) || /middleware/.test(lowerPath)) {
+    surfaces.push("routing");
+  }
+  if (/(?:^|\/)(hooks|store|stores|state|context|providers?)\//.test(lowerPath) || EXEC_SURFACE_STATE_RE.test(text)) {
+    surfaces.push("state");
+  }
+  if (/(?:^|\/)(api|server|controllers?|handlers?|functions?|supabase|backend)\//.test(lowerPath) || EXEC_SURFACE_BACKEND_RE.test(text)) {
+    surfaces.push("backend");
+  }
+  if (/(?:^|\/)(cli|commands?)\//.test(lowerPath) || EXEC_SURFACE_CLI_RE.test(text)) {
+    surfaces.push("cli");
+  }
+  if (/(?:^|\/)(mcp|mcp-server)\//.test(lowerPath) || EXEC_SURFACE_MCP_RE.test(text)) {
+    surfaces.push("mcp");
+  }
+  if (/(?:^|\/)(daemon|bridge|protocol|transports?)\//.test(lowerPath) || EXEC_SURFACE_INFRA_RE.test(text)) {
+    surfaces.push("infra");
+  }
+  if (/(?:^|\/)(lib|shared|core|utils?|helpers?)\//.test(lowerPath)) {
+    surfaces.push("shared");
+  }
+  if (surfaces.length === 0) surfaces.push("shared");
+
+  return uniqueSurfaces(surfaces);
+}
+
+export function inferQueryExecutionSurfaceBias(
+  query: string,
+  queryMode?: string
+): ExecutionSurfaceBias {
+  const normalized = normalizeExecutionSurfaceText(query);
+  const explicitInfrastructure = EXEC_SURFACE_MCP_RE.test(normalized)
+    || EXEC_SURFACE_CLI_RE.test(normalized)
+    || /\b(daemon|transport|protocol|tool registration|socket|bridge|stdio|streamable http)\b/.test(normalized);
+  const explicitBackend =
+    /\b(api|endpoint|endpoints|bearer|header|headers|webhook|upload|uploads|server|function|functions|controller|controllers|handler|handlers)\b/.test(normalized)
+    || /\b(token missing|missing token|bearer token|auth header|http request|server path|server flow|request authentication|request auth|provider call|upstream provider|quota check|rate limit)\b/.test(normalized);
+  const explicitUi = EXEC_SURFACE_UI_RE.test(normalized);
+  const explicitRouting = EXEC_SURFACE_ROUTING_RE.test(normalized);
+  const authLike = EXEC_SURFACE_AUTH_RE.test(normalized);
+  const defaultUserFacing =
+    authLike
+    && !explicitInfrastructure
+    && !explicitBackend
+    && (explicitUi || explicitRouting || queryMode === "architecture" || queryMode === "bug" || queryMode === "change" || queryMode === "trace");
+
+  const preferred: ExecutionSurface[] = [];
+  const suppressed: ExecutionSurface[] = [];
+
+  if (explicitInfrastructure) {
+    preferred.push("infra", "mcp", "cli", "backend");
+    if (!explicitUi && !explicitRouting) suppressed.push("ui");
+  } else if (explicitBackend) {
+    preferred.push("backend");
+    suppressed.push("cli", "mcp");
+    if (!explicitUi && !explicitRouting) suppressed.push("ui");
+  } else if (defaultUserFacing || explicitUi || explicitRouting) {
+    preferred.push("ui", "routing", "state");
+    suppressed.push("cli", "mcp", "infra");
+  }
+
+  if (queryMode === "trace" && explicitInfrastructure) {
+    preferred.push("infra", "mcp", "cli");
+  }
+  if (queryMode === "architecture" && defaultUserFacing) {
+    preferred.push("ui", "routing", "state");
+  }
+
+  return {
+    preferred: uniqueSurfaces(preferred),
+    suppressed: uniqueSurfaces(suppressed).filter((surface) => !preferred.includes(surface)),
+    defaultUserFacing,
+    explicitInfrastructure,
+    explicitBackend,
+    explicitUi,
+    explicitRouting,
+  };
+}
+
+export function scoreExecutionSurfaceAlignment(
+  candidateSurfaces: Iterable<ExecutionSurface>,
+  bias: ExecutionSurfaceBias
+): number {
+  if (!bias) return 0;
+  const surfaces = new Set(candidateSurfaces);
+  let score = 0;
+
+  const preferredMatches = bias.preferred.filter((surface) => surfaces.has(surface)).length;
+  const suppressedMatches = bias.suppressed.filter((surface) => surfaces.has(surface)).length;
+
+  if (preferredMatches > 0) score += Math.min(2.1, preferredMatches * 0.75);
+  if (suppressedMatches > 0 && preferredMatches === 0) score -= Math.min(2.4, suppressedMatches * 0.9);
+
+  if (
+    bias.defaultUserFacing
+    && (surfaces.has("cli") || surfaces.has("mcp") || surfaces.has("infra"))
+    && !surfaces.has("ui")
+    && !surfaces.has("routing")
+    && !surfaces.has("state")
+  ) {
+    score -= 1.6;
+  }
+
+  if (
+    bias.explicitInfrastructure
+    && (surfaces.has("cli") || surfaces.has("mcp") || surfaces.has("infra"))
+  ) {
+    score += 0.8;
+  }
+
+  if (
+    bias.explicitBackend
+    && surfaces.has("backend")
+    && !surfaces.has("cli")
+    && !surfaces.has("mcp")
+  ) {
+    score += 0.6;
+  }
+
+  return score;
+}
+
 type ExpansionSource = "original" | "morphological" | "semantic" | "corpus";
 
 export interface ExpandedQueryTerm {
@@ -69,6 +260,8 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
       "auth",
       "authentication",
       "authorization",
+      "authenticate",
+      "authenticated",
       "login",
       "signin",
       "signup",
@@ -78,9 +271,10 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
       "token",
       "credential",
       "identity",
+      "authenticate",
+      "authenticated",
       "callback",
       "redirect",
-      "guard",
       "protected",
     ],
     aliases: [
@@ -103,7 +297,6 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
       "callback",
       "redirect",
       "protected",
-      "guard",
       "oauth",
       "token",
       "credential",
@@ -144,18 +337,33 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
   },
   {
     family: "storage",
-    anchors: ["storage", "upload", "download", "file", "blob", "bucket", "media"],
+    anchors: ["storage", "upload", "download", "blob", "bucket", "media"],
     aliases: [
       "storage",
       "upload",
       "download",
-      "file",
-      "files",
       "blob",
       "bucket",
       "media",
       "attachment",
       "object",
+    ],
+  },
+  {
+    family: "generation",
+    anchors: ["generation", "generate", "generated", "regeneration", "render", "rendering", "image"],
+    aliases: [
+      "generation",
+      "generate",
+      "generated",
+      "regeneration",
+      "render",
+      "rendering",
+      "image",
+      "images",
+      "generator",
+      "generateImage",
+      "generate_image",
     ],
   },
   {
@@ -203,7 +411,7 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
   },
   {
     family: "routing",
-    anchors: ["route", "routing", "router", "navigation", "redirect", "callback"],
+    anchors: ["route", "routing", "router", "navigation", "redirect", "callback", "protection", "pending", "destination", "handoff"],
     aliases: [
       "route",
       "routes",
@@ -213,8 +421,12 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
       "navigate",
       "redirect",
       "callback",
+      "pending",
+      "destination",
+      "handoff",
       "guard",
       "protected",
+      "protection",
     ],
   },
   {
@@ -321,7 +533,9 @@ export function isTestFile(filePath: string): boolean {
 export function tokenizeQueryTerms(query: string): string[] {
   return query
     .toLowerCase()
+    .replace(/[’']/g, "")
     .split(CODE_DELIMITER_RE)
+    .map((term) => term.replace(/^[_./-]+|[_./-]+$/g, ""))
     .filter((term) => term.length >= 2);
 }
 
@@ -357,6 +571,13 @@ function phraseAwareAliases(query: string): Array<{ term: string; family?: strin
       { term: "signIn", family: "auth" }
     );
   }
+  if (/\bsigning\s+in\b/.test(lower)) {
+    aliases.push(
+      { term: "signin", family: "auth" },
+      { term: "sign_in", family: "auth" },
+      { term: "signIn", family: "auth" }
+    );
+  }
   if (/\bsign\s+up\b/.test(lower)) {
     aliases.push(
       { term: "signup", family: "auth" },
@@ -373,6 +594,59 @@ function phraseAwareAliases(query: string): Array<{ term: string; family?: strin
   }
   if (/\bauth(?:entication|orization)?\s+callback\b/.test(lower)) {
     aliases.push({ term: "callback", family: "auth" }, { term: "redirect", family: "routing" });
+  }
+  if (/\broute\s+protection\b/.test(lower) || /\bprotected\s+route\b/.test(lower)) {
+    aliases.push(
+      { term: "protectedRoute", family: "auth" },
+      { term: "protected_route", family: "auth" },
+      { term: "protected", family: "auth" },
+      { term: "guard", family: "routing" }
+    );
+  }
+  if (/\bpending\s+navigation\b/.test(lower)) {
+    aliases.push(
+      { term: "pendingNavigation", family: "auth" },
+      { term: "pending_navigation", family: "auth" },
+      { term: "redirect", family: "routing" }
+    );
+  }
+  if (/\blogged\s+out\b/.test(lower) || /\bwhile\s+logged\s+out\b/.test(lower)) {
+    aliases.push(
+      { term: "protected", family: "auth" },
+      { term: "guard", family: "routing" }
+    );
+  }
+  if (/\bauthenticat(?:e|ed|ing)\b/.test(lower) || /\blog(?:ged)?\s+in\b/.test(lower)) {
+    aliases.push(
+      { term: "session", family: "auth" },
+      { term: "signin", family: "auth" },
+      { term: "redirect", family: "routing" }
+    );
+  }
+  if (
+    /\b(original|queued|pending)\s+destination\b/.test(lower)
+    || /\breturn\s+to\b.*\b(destination|route|page)\b/.test(lower)
+    || /\bpreserv(?:e|es|ing)\b.*\b(destination|redirect)\b/.test(lower)
+  ) {
+    aliases.push(
+      { term: "pendingNavigation", family: "auth" },
+      { term: "pending_navigation", family: "auth" },
+      { term: "destination", family: "routing" },
+      { term: "redirect", family: "routing" }
+    );
+  }
+  if (/\bhandoff\b/.test(lower)) {
+    aliases.push(
+      { term: "redirect", family: "routing" },
+      { term: "callback", family: "routing" },
+      { term: "destination", family: "routing" }
+    );
+  }
+  if (/\bimage\s+generation\b/.test(lower)) {
+    aliases.push(
+      { term: "generate_image", family: "generation" },
+      { term: "generateImage", family: "generation" }
+    );
   }
 
   return aliases;
@@ -498,6 +772,15 @@ export function getQueryTermVariants(term: string): string[] {
   if (normalized.length >= 6 && CODE_ALIAS_SUFFIX_RE.test(normalized)) {
     variants.add(normalized.slice(0, 4));
   }
+  if (normalized.length >= 5 && normalized.endsWith("ies")) {
+    variants.add(normalized.slice(0, -3) + "y");
+  }
+  if (normalized.length >= 5 && normalized.endsWith("es")) {
+    variants.add(normalized.slice(0, -2));
+  }
+  if (normalized.length >= 4 && normalized.endsWith("s") && !normalized.endsWith("ss")) {
+    variants.add(normalized.slice(0, -1));
+  }
   return Array.from(variants);
 }
 
@@ -505,6 +788,25 @@ export function getQueryTermVariants(term: string): string[] {
  * Returns true when text contains the raw query term or one of its code-facing variants.
  */
 export function textMatchesQueryTerm(text: string, term: string): boolean {
-  const lowerText = text.toLowerCase();
-  return getQueryTermVariants(term).some((variant) => lowerText.includes(variant));
+  const normalizedText = text
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .toLowerCase()
+    .trim();
+  const compactText = normalizedText.replace(/\s+/g, "");
+
+  return getQueryTermVariants(term).some((variant) => {
+    const lowerVariant = variant.toLowerCase();
+    const boundaryPattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(lowerVariant)}(?=$|[^a-z0-9])`, "i");
+    if (boundaryPattern.test(normalizedText)) return true;
+
+    const compactVariant = lowerVariant.replace(/[^a-z0-9]+/g, "");
+    if (compactVariant.length < 8) return false;
+    return compactText.includes(compactVariant);
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

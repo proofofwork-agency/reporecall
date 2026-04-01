@@ -2,14 +2,19 @@ import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { StoredChunk, TargetKind } from "../storage/types.js";
 import {
+  detectExecutionSurfaces,
   expandQueryTerms,
+  GENERIC_BROAD_TERMS,
+  GENERIC_QUERY_ACTION_TERMS,
   getQueryTermVariants,
+  inferQueryExecutionSurfaceBias,
   isTestFile,
+  scoreExecutionSurfaceAlignment,
   STOP_WORDS,
   textMatchesQueryTerm,
   tokenizeQueryTerms,
 } from "./utils.js";
-import { resolveTargetsForQuery } from "./targets.js";
+import { normalizeTargetText, resolveTargetsForQuery } from "./targets.js";
 import { classifyIntent } from "./intent.js";
 
 export interface SeedCandidate {
@@ -42,6 +47,7 @@ const CAMEL_CASE_RE = /\b([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g;
 const FILE_PATH_RE = /[\w/.-]+\.\w{1,10}/g;
 const DOTTED_PATH_RE = /\b([A-Za-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*)\b/g;
 const ACRONYM_RE = /\b([A-Z]{3,6})\b/g;
+const SLUG_IDENTIFIER_RE = /\b([a-z0-9]+(?:[-_][a-z0-9]+)+)\b/;
 const ACRONYM_BLOCKLIST = new Set([
   "API", "URL", "CSS", "HTML", "HTTP", "JSON", "XML", "SQL",
   "REST", "SDK", "DOM", "CLI", "ENV", "EOF", "SSH", "TLS",
@@ -55,6 +61,22 @@ const FTS_STOP_WORDS = new Set([
   "work", "works", "working", "does", "how", "used", "built",
   "happens", "handle", "handles", "get", "gets", "set", "sets",
   "run", "runs", "call", "calls", "make", "makes", "use", "uses",
+]);
+const LOW_SPECIFICITY_BROAD_ALIASES = new Set([
+  "get",
+  "set",
+  "sign",
+  "save",
+  "load",
+  "update",
+  "create",
+  "delete",
+  "open",
+  "close",
+  "file",
+  "files",
+  "navigation",
+  "state",
 ]);
 
 // Tree-sitter node types that represent meaningful code constructs
@@ -149,8 +171,8 @@ export function scoreFTSCandidate(
     )
   );
   // Substring bonus: when a significant query term (4+ chars) appears as a substring
-  // of the candidate name, boost the partial match. This fixes cases like
-  // "handleCallback" → AuthCallback should beat AngleId because "Callback" overlaps.
+  // of the candidate name, boost the partial match. This helps callback-like names
+  // outrank unrelated short identifiers when the overlap is meaningful.
   const hasSubstringOverlap = !isExactMatch && !isPartialMatch && nameMatchTerms.some(
     (term) => term.term.length >= 4 && chunkNameLower.includes(term.term)
   );
@@ -239,6 +261,7 @@ export function scoreFTSCandidate(
  */
 export function extractExplicitTargets(query: string): string[] {
   const targets = new Set<string>();
+  const queryTokenCount = tokenizeQueryTerms(query).length;
 
   // Dotted paths: split into parts and add each
   for (const match of query.matchAll(DOTTED_PATH_RE)) {
@@ -255,7 +278,17 @@ export function extractExplicitTargets(query: string): string[] {
   // PascalCase identifiers
   for (const match of query.matchAll(PASCAL_CASE_RE)) {
     const group = match[1];
-    if (group) targets.add(group);
+    if (!group) continue;
+    const hasInternalCaps = /[a-z0-9][A-Z]/.test(group);
+    const index = match.index ?? -1;
+    const sentenceStart =
+      index === 0
+      || (index > 0 && /[.!?]\s*$/.test(query.slice(0, index)));
+
+    // Skip ordinary sentence-start TitleCase words from natural language
+    // prompts; they are much more likely to be prose than code symbols.
+    if (!hasInternalCaps && sentenceStart && queryTokenCount > 3) continue;
+    targets.add(group);
   }
 
   // camelCase identifiers (must contain at least one uppercase after first char)
@@ -273,6 +306,14 @@ export function extractExplicitTargets(query: string): string[] {
     if (candidate.includes("/") || /\.(ts|js|tsx|jsx|py|go|rs|java|rb|cpp|c|h|css|html|json|yaml|yml|toml|md)$/i.test(candidate)) {
       targets.add(candidate);
     }
+  }
+
+  // Kebab/snake identifiers often map to endpoints, commands, or file-backed modules
+  for (const match of query.matchAll(/\b([a-z0-9]+(?:[-_][a-z0-9]+)+)\b/g)) {
+    const candidate = match[1];
+    if (!candidate) continue;
+    if (candidate.length < 5) continue;
+    targets.add(candidate);
   }
 
   // Uppercase acronyms (3-6 chars, all-caps) — e.g. "FTS", "MCP"
@@ -310,7 +351,7 @@ function filePathMentionedInQuery(filePath: string, query: string): boolean {
  */
 function disambiguate(chunks: StoredChunk[], query: string): StoredChunk[] {
   // "X in Y" pattern: when query mentions both an inner function and its container,
-  // prefer the more specific (inner) chunk. E.g., "signOut in useAuth" → prefer signOut.
+  // prefer the more specific (inner) chunk instead of the outer wrapper.
   const queryLower = query.toLowerCase();
   const inMatch = queryLower.match(/\b(\w+)\s+in\s+(\w+)\b/);
   // Only apply "X in Y" disambiguation when at least one capture looks like a code identifier
@@ -434,10 +475,28 @@ export function resolveSeeds(
   const targetHits = typeof metadata.resolveTargetAliases === "function"
     ? resolveTargetsForQuery(query, metadata)
     : [];
-  const broadQuery = classifyIntent(query).prefersBroadContext === true;
+  const normalizedQuery = normalizeTargetText(query);
+  const strongestDirectAliasTokenCount = targetHits.reduce((max, hit) => {
+    const directMention =
+      normalizedQuery.includes(hit.normalizedAlias)
+      || normalizedQuery.includes(hit.target.normalizedName);
+    if (!directMention) return max;
+    return Math.max(max, hit.normalizedAlias.split(" ").filter(Boolean).length);
+  }, 0);
+  const intent = classifyIntent(query);
+  const broadQuery = intent.prefersBroadContext === true;
+  const queryMode = intent.queryMode;
+  const surfaceBias = inferQueryExecutionSurfaceBias(query, queryMode);
+  const directSignalTerms = expandQueryTerms(query).filter((term) =>
+    (term.source === "original" || term.source === "morphological")
+    && !term.generic
+    && !GENERIC_QUERY_ACTION_TERMS.has(term.term.toLowerCase())
+  );
   const broadAnchorTerms = broadQuery
     ? expandQueryTerms(query).filter((term) =>
-        (term.source === "original" || term.source === "morphological") && !term.generic
+        (term.source === "original" || term.source === "morphological")
+        && !term.generic
+        && !GENERIC_QUERY_ACTION_TERMS.has(term.term.toLowerCase())
       )
     : [];
   const broadAnchorAliases = new Set(
@@ -445,6 +504,27 @@ export function resolveSeeds(
       .map((term) => term.term.toLowerCase())
   );
   for (const hit of targetHits) {
+    const aliasTokenCount = hit.normalizedAlias.split(" ").filter(Boolean).length;
+    const normalizedAlias = normalizeTargetText(hit.alias);
+    if (GENERIC_QUERY_ACTION_TERMS.has(normalizedAlias) && hit.source === "derived") {
+      continue;
+    }
+    if (
+      broadQuery
+      && aliasTokenCount === 1
+      && LOW_SPECIFICITY_BROAD_ALIASES.has(normalizedAlias)
+      && (hit.source === "file_path" || hit.source === "parent_dir" || hit.source === "slug")
+    ) {
+      continue;
+    }
+    if (
+      !broadQuery
+      && strongestDirectAliasTokenCount >= 2
+      && aliasTokenCount < strongestDirectAliasTokenCount
+      && (hit.source === "file_path" || hit.source === "parent_dir" || hit.source === "slug")
+    ) {
+      continue;
+    }
     let chunk = hit.target.ownerChunkId
       ? metadata.getChunksByIds([hit.target.ownerChunkId])[0]
       : undefined;
@@ -452,15 +532,32 @@ export function resolveSeeds(
       chunk = metadata.findChunksByFilePath?.(hit.target.filePath)?.[0];
     }
     if (!chunk || isTestFile(chunk.filePath)) continue;
+    const surfaces = detectExecutionSurfaces(hit.target.filePath, chunk.name, chunk.content);
+    const surfaceAlignment = scoreExecutionSurfaceAlignment(surfaces, surfaceBias);
     if (!broadQuery && hit.target.kind === "subsystem" && hit.confidence < 0.78) continue;
+    if (
+      surfaceAlignment <= -1.4
+      && aliasTokenCount <= 1
+      && hit.source !== "query"
+      && hit.target.kind !== "endpoint"
+      && !normalizedQuery.includes(hit.target.normalizedName)
+    ) {
+      continue;
+    }
     if (broadQuery && broadAnchorTerms.length > 0) {
-      const aliasLower = hit.alias.toLowerCase();
+      if (
+        aliasTokenCount === 1
+        && LOW_SPECIFICITY_BROAD_ALIASES.has(normalizedAlias)
+        && (hit.source === "file_path" || hit.source === "parent_dir" || hit.source === "slug")
+      ) {
+        continue;
+      }
       const targetNameText = `${hit.alias} ${hit.target.canonicalName} ${chunk.name}`.toLowerCase();
       const pathText = hit.target.filePath.toLowerCase();
       const nameMatches = broadAnchorTerms.filter((term) => textMatchesQueryTerm(targetNameText, term.term));
       const pathMatches = broadAnchorTerms.filter((term) => textMatchesQueryTerm(pathText, term.term));
       const allowPathOnly = hit.target.kind === "file_module" || hit.target.kind === "endpoint";
-      if (hit.target.kind === "symbol" && !broadAnchorAliases.has(aliasLower) && hit.source !== "query") {
+      if (hit.target.kind === "symbol" && nameMatches.length === 0 && !broadAnchorAliases.has(normalizedAlias) && hit.source !== "query") {
         continue;
       }
       if (nameMatches.length === 0) {
@@ -476,7 +573,7 @@ export function resolveSeeds(
       name: chunk.name,
       filePath: chunk.filePath,
       kind: chunk.kind,
-      confidence: hit.confidence,
+      confidence: Math.max(0, Math.min(0.995, hit.confidence + surfaceAlignment * 0.08)),
       reason: "resolved_target",
       targetId: hit.target.id,
       targetKind: hit.target.kind,
@@ -492,6 +589,36 @@ export function resolveSeeds(
     // Separate file paths from identifier names
     const filePaths = targets.filter((t) => t.includes("/") || /\.\w{1,10}$/.test(t));
     const identifierNames = targets.filter((t) => !filePaths.includes(t));
+
+    // File-backed target lookup for kebab/snake/module-style identifiers
+    for (const identifier of identifierNames.filter((target) => target.includes("-") || target.includes("_"))) {
+      const targetHits = resolveTargetsForQuery(identifier, metadata)
+        .filter((hit) => hit.target.kind === "endpoint" || hit.target.kind === "file_module")
+        .filter((hit) => hit.normalizedAlias === normalizeTargetText(identifier) || hit.target.normalizedName === normalizeTargetText(identifier))
+        .slice(0, 3);
+
+      for (const hit of targetHits) {
+        let chunk = hit.target.ownerChunkId
+          ? metadata.getChunksByIds([hit.target.ownerChunkId])[0]
+          : undefined;
+        if (!chunk) {
+          chunk = metadata.findChunksByFilePath?.(hit.target.filePath)?.[0];
+        }
+        if (!chunk || isTestFile(chunk.filePath)) continue;
+        pushCandidate({
+          chunkId: chunk.id,
+          name: chunk.name,
+          filePath: chunk.filePath,
+          kind: chunk.kind,
+          confidence: Math.max(0.88, hit.confidence),
+          reason: "resolved_target",
+          targetId: hit.target.id,
+          targetKind: hit.target.kind,
+          resolvedAlias: hit.alias,
+          resolutionSource: hit.source,
+        });
+      }
+    }
 
     // Look up identifiers by name
     if (identifierNames.length > 0) {
@@ -598,7 +725,17 @@ export function resolveSeeds(
   }
 
   // Step 2: FTS fallback (if no explicit target found with sufficient confidence)
-  const hasStrongExplicit = candidates.some((c) => c.confidence >= 0.7);
+  const hasStrongExplicit = candidates.some((candidate) => {
+    if (candidate.confidence < 0.7) return false;
+    if (candidate.reason === "explicit_target" || candidate.reason === "fts_exact") return true;
+    const candidateText = `${candidate.filePath} ${candidate.name} ${candidate.resolvedAlias ?? ""}`.toLowerCase();
+    const directMatches = directSignalTerms.filter((term) => textMatchesQueryTerm(candidateText, term.term)).length;
+    const surfaceAlignment = scoreExecutionSurfaceAlignment(
+      detectExecutionSurfaces(candidate.filePath, candidate.name),
+      surfaceBias
+    );
+    return directMatches >= 2 || surfaceAlignment >= 0;
+  });
 
   if (!hasStrongExplicit) {
     const queryTermsLower = tokenizeQueryTerms(query);
@@ -626,6 +763,10 @@ export function resolveSeeds(
         if (chunk.name === "<anonymous>") continue;
 
         const confidence = scoreFTSCandidate(chunk, queryTermsLower, ftsResult.rank);
+        const surfaceAlignment = scoreExecutionSurfaceAlignment(
+          detectExecutionSurfaces(chunk.filePath, chunk.name, chunk.content),
+          surfaceBias
+        );
         const chunkNameLower = chunk.name.toLowerCase();
         const isExactMatch = expandQueryTerms(queryTermsLower).some((term) => term.term === chunkNameLower);
         const reason: SeedCandidate["reason"] = isExactMatch ? "fts_exact" : "hybrid_top";
@@ -634,7 +775,7 @@ export function resolveSeeds(
           name: chunk.name,
           filePath: chunk.filePath,
           kind: chunk.kind,
-          confidence,
+          confidence: Math.max(0, Math.min(0.95, confidence + surfaceAlignment * 0.07)),
           reason,
         };
 
@@ -654,6 +795,48 @@ export function resolveSeeds(
           pushCandidate(candidate);
         }
       }
+    }
+  }
+
+  if (broadQuery) {
+    const hasSpecificResolvedTarget = candidates.some((candidate) =>
+      candidate.reason === "resolved_target"
+      && !GENERIC_BROAD_TERMS.has(normalizeTargetText(candidate.resolvedAlias ?? ""))
+      && !GENERIC_QUERY_ACTION_TERMS.has(normalizeTargetText(candidate.resolvedAlias ?? ""))
+    );
+
+    if (hasSpecificResolvedTarget) {
+      const filtered = candidates.filter((candidate) => {
+        if (candidate.reason !== "resolved_target") return true;
+        const normalizedAlias = normalizeTargetText(candidate.resolvedAlias ?? "");
+        if (!GENERIC_BROAD_TERMS.has(normalizedAlias) && !GENERIC_QUERY_ACTION_TERMS.has(normalizedAlias)) {
+          return true;
+        }
+        const combinedText = `${candidate.filePath} ${candidate.name}`.toLowerCase();
+        return broadAnchorTerms.some((term) => textMatchesQueryTerm(combinedText, term.term));
+      });
+      candidates.length = 0;
+      candidates.push(...filtered);
+    }
+  }
+
+  const explicitSlugTargets = extractExplicitTargets(query)
+    .filter((target) => SLUG_IDENTIFIER_RE.test(target))
+    .map((target) => normalizeTargetText(target));
+  for (const normalizedSlug of explicitSlugTargets) {
+    const hasFileBackedSlug = candidates.some((candidate) =>
+      candidate.reason === "resolved_target"
+      && (candidate.targetKind === "endpoint" || candidate.targetKind === "file_module")
+      && normalizeTargetText(candidate.resolvedAlias ?? candidate.name) === normalizedSlug
+    );
+    if (!hasFileBackedSlug) continue;
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const candidate = candidates[i];
+      if (!candidate) continue;
+      if (candidate.reason !== "resolved_target") continue;
+      if (candidate.targetKind !== "symbol") continue;
+      if (normalizeTargetText(candidate.resolvedAlias ?? candidate.name) !== normalizedSlug) continue;
+      candidates.splice(i, 1);
     }
   }
 

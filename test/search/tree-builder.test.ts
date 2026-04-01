@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import Database from "better-sqlite3";
 import { ChunkStore } from "../../src/storage/chunk-store.js";
 import { CallEdgeStore } from "../../src/storage/call-edge-store.js";
+import { ImportStore } from "../../src/storage/import-store.js";
 import type { StoredChunk } from "../../src/storage/types.js";
 import type { CallEdge } from "../../src/analysis/call-graph.js";
 import { buildStackTree } from "../../src/search/tree-builder.js";
@@ -17,16 +18,19 @@ import type { MetadataStore } from "../../src/storage/metadata-store.js";
 function createTestMetadata(db: Database.Database) {
   const chunks = new ChunkStore(db);
   const callEdges = new CallEdgeStore(db);
+  const imports = new ImportStore(db);
   chunks.initSchema();
   callEdges.initSchema();
+  imports.initSchema();
 
   return {
     chunks,
     callEdges,
+    imports,
     // Only expose the methods that buildStackTree actually uses
     asFacade(): Pick<
       MetadataStore,
-      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds" | "findChunksByFilePath" | "findTargetById"
+      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds" | "findChunksByFilePath" | "findTargetById" | "getImportsForFile"
     > {
       return {
         findCallers: (targetName: string, limit?: number, targetFilePath?: string, targetId?: string) =>
@@ -39,6 +43,7 @@ function createTestMetadata(db: Database.Database) {
           chunks.findChunksByNames(names),
         getChunksByIds: (ids: string[]) => chunks.getChunksByIds(ids),
         findChunksByFilePath: (filePath: string) => chunks.findChunksByFilePath(filePath),
+        getImportsForFile: (filePath: string) => imports.getImportsForFile(filePath),
         findTargetById: (_id: string) => undefined,
       };
     },
@@ -98,6 +103,17 @@ describe("buildStackTree", () => {
 
   function seedEdges(...edges: CallEdge[]) {
     meta.callEdges.upsertCallEdges(edges);
+  }
+
+  function seedImports(records: Array<{
+    filePath: string;
+    importedName: string;
+    sourceModule: string;
+    resolvedPath?: string;
+    isDefault?: boolean;
+    isNamespace?: boolean;
+  }>) {
+    meta.imports.upsertImports(records);
   }
 
   // ---- Tests --------------------------------------------------------------
@@ -251,6 +267,54 @@ describe("buildStackTree", () => {
 
     expect(tree.upTree).toHaveLength(0);
     expect(tree.downTree.some((node) => node.chunkId === "callee-real")).toBe(true);
+  });
+
+  it("implementation-shaped endpoint seeds include query-matching imported helpers and drop unrelated low-affinity callees", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "serve_handler", filePath: "supabase/functions/upload-media/index.ts", kind: "arrow_function" });
+    const authUtils = makeChunk({ id: "auth-utils", name: "getUserFromAuth", filePath: "supabase/functions/_shared/auth-utils.ts", kind: "function_declaration" });
+    const cors = makeChunk({ id: "cors", name: "handlePreflight", filePath: "supabase/functions/_shared/cors.ts", kind: "function_declaration" });
+    const authPage = makeChunk({ id: "auth-page", name: "Auth", filePath: "src/pages/Auth.tsx", kind: "function_declaration" });
+
+    seedChunks(seedChunk, authUtils, cors, authPage);
+    seedEdges(
+      makeCallEdge({
+        sourceChunkId: "seed",
+        targetName: "Auth",
+        filePath: "supabase/functions/upload-media/index.ts",
+        targetFilePath: "src/pages/Auth.tsx",
+      }),
+      makeCallEdge({
+        sourceChunkId: "seed",
+        targetName: "handlePreflight",
+        filePath: "supabase/functions/upload-media/index.ts",
+        targetFilePath: "supabase/functions/_shared/cors.ts",
+      })
+    );
+    seedImports([
+      {
+        filePath: "supabase/functions/upload-media/index.ts",
+        importedName: "getUserFromAuth",
+        sourceModule: "../_shared/auth-utils.ts",
+        resolvedPath: "supabase/functions/_shared/auth-utils.ts",
+      },
+    ]);
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: {
+        chunkId: "seed",
+        name: "serve_handler",
+        filePath: "supabase/functions/upload-media/index.ts",
+        kind: "arrow_function",
+        targetId: "endpoint:supabase/functions/upload-media/index.ts",
+        targetKind: "endpoint",
+      },
+      direction: "both",
+      query: "how does upload-media authenticate requests",
+    });
+
+    expect(tree.downTree.some((node) => node.chunkId === "auth-utils")).toBe(true);
+    expect(tree.downTree.some((node) => node.chunkId === "auth-page")).toBe(false);
+    expect(tree.downTree.some((node) => node.chunkId === "cors")).toBe(false);
   });
 
   it("implementation-shaped class seeds include same-file methods before expanding outward", () => {
@@ -665,6 +729,42 @@ describe("buildStackTree", () => {
     expect(tree.downTree).toHaveLength(1);
     expect(tree.downTree[0].filePath).not.toMatch(/test/);
     expect(tree.downTree[0].name).toBe("helper");
+  });
+
+  it("implementation-shaped queries filter unrelated same-directory callers", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "useAuth", filePath: "src/hooks/useAuth.tsx" });
+    const authCallback = makeChunk({ id: "caller-auth-callback", name: "AuthCallback", filePath: "src/pages/AuthCallback.tsx" });
+    const unrelatedAdmin = makeChunk({ id: "caller-admin", name: "useIsAdmin", filePath: "src/hooks/useIsAdmin.tsx" });
+    const unrelatedNiche = makeChunk({ id: "caller-niche", name: "useNicheCategory", filePath: "src/hooks/useNicheCategory.ts" });
+
+    seedChunks(seedChunk, authCallback, unrelatedAdmin, unrelatedNiche);
+    seedEdges(
+      makeCallEdge({
+        sourceChunkId: "caller-auth-callback",
+        targetName: "useAuth",
+        filePath: "src/pages/AuthCallback.tsx",
+      }),
+      makeCallEdge({
+        sourceChunkId: "caller-admin",
+        targetName: "useAuth",
+        filePath: "src/hooks/useIsAdmin.tsx",
+      }),
+      makeCallEdge({
+        sourceChunkId: "caller-niche",
+        targetName: "useAuth",
+        filePath: "src/hooks/useNicheCategory.ts",
+      })
+    );
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: { chunkId: "seed", name: "useAuth", filePath: "src/hooks/useAuth.tsx", kind: "function_declaration" },
+      direction: "both",
+      query: "how does useAuth manage auth state changes",
+    });
+
+    expect(tree.upTree.some((node) => node.chunkId === "caller-admin")).toBe(false);
+    expect(tree.upTree.some((node) => node.chunkId === "caller-niche")).toBe(false);
+    expect(tree.upTree.some((node) => node.chunkId === "caller-auth-callback")).toBe(false);
   });
 
   // ---- Coverage score tests ------------------------------------------------

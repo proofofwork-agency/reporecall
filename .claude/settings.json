@@ -1,3 +1,24 @@
 {
-
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOKEN=$(cat \"$CLAUDE_PROJECT_DIR/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST   -H \"Authorization: Bearer $TOKEN\"   -H \"Content-Type: application/json\"   --data-binary @-   \"http://127.0.0.1:37222/hooks/session-start\"   2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TOKEN=$(cat \"$CLAUDE_PROJECT_DIR/.memory/daemon.token\" 2>/dev/null || echo \"\"); curl -s -X POST   -H \"Authorization: Bearer $TOKEN\"   -H \"Content-Type: application/json\"   --data-binary @-   \"http://127.0.0.1:37222/hooks/prompt-context\"   2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
 }

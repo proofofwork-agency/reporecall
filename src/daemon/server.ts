@@ -4,7 +4,8 @@ import type { HybridSearch } from "../search/hybrid.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { handleSessionStart } from "../hooks/session-start.js";
 import { handlePromptContextDetailed } from "../hooks/prompt-context.js";
-import { classifyIntent, deriveRoute } from "../search/intent.js";
+import { evaluatePreToolUse, type HookSessionSnapshot } from "../hooks/pre-tool-use.js";
+import { classifyIntent } from "../search/intent.js";
 import { getLogger } from "../core/logger.js";
 import { mkdirSync, writeFileSync } from "fs";
 import { resolve } from "path";
@@ -34,6 +35,8 @@ interface RateEntry {
 }
 
 const rateLimitMap = new Map<string, RateEntry>();
+const hookSessionState = new Map<string, HookSessionSnapshot>();
+const HOOK_SESSION_TTL_MS = 1000 * 60 * 60 * 4;
 
 // Periodic cleanup of stale entries so the Map does not grow unboundedly.
 // The return value is intentionally discarded; .unref() ensures the timer
@@ -45,6 +48,17 @@ setInterval(() => {
     if (entry.timestamps.length === 0) rateLimitMap.delete(ip);
   }
 }, RATE_LIMIT_CLEANUP_INTERVAL_MS).unref();
+
+setInterval(() => {
+  const cutoff = Date.now() - HOOK_SESSION_TTL_MS;
+  for (const [key, snapshot] of hookSessionState) {
+    if (snapshot.updatedAt < cutoff) hookSessionState.delete(key);
+  }
+}, RATE_LIMIT_CLEANUP_INTERVAL_MS).unref();
+
+export function resetHookSessionState(): void {
+  hookSessionState.clear();
+}
 
 export function resetRateLimitMap(): void {
   rateLimitMap.clear();
@@ -65,6 +79,14 @@ function checkRateLimit(ip: string, maxRequests: number = RATE_LIMIT_MAX_REQUEST
   }
   entry.timestamps.push(now);
   return true;
+}
+
+function resolveHookSessionKey(parsed: Record<string, unknown>): string | null {
+  const sessionId = typeof parsed.session_id === "string" ? parsed.session_id : null;
+  if (sessionId && sessionId.trim()) return sessionId.trim();
+  const transcriptPath = typeof parsed.transcript_path === "string" ? parsed.transcript_path : null;
+  if (transcriptPath && transcriptPath.trim()) return transcriptPath.trim();
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,9 +506,11 @@ export function createDaemonServer(
           const body = await readBody(req);
           let query = "";
           let activeFiles: string[] | undefined;
+          let sessionKey: string | null = null;
 
           try {
             const parsed = JSON.parse(body);
+            sessionKey = resolveHookSessionKey(parsed);
             query = parsed.query ?? parsed.prompt ?? parsed.message ?? "";
             if (Array.isArray(parsed.activeFiles)) {
               activeFiles = parsed.activeFiles
@@ -506,10 +530,11 @@ export function createDaemonServer(
           query = sanitizeQuery(query);
 
           if (!query) {
+            if (sessionKey) hookSessionState.delete(sessionKey);
             log.debug({ requestId, reason: "empty query after sanitization" }, "prompt-context skipped");
             metadata.incrementRouteStat("skip");
             const skipDebug: HookDebugRecord = {
-              route: "skip",
+              queryMode: "skip",
               intentType: { isCodeQuery: false, needsNavigation: false },
               skipReason: "empty query after sanitization",
               injectedTokenCount: 0,
@@ -525,7 +550,7 @@ export function createDaemonServer(
               res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
-                route: "skip",
+                queryMode: "skip",
                 chunks: 0,
                 tokens: 0,
                 elapsedMs: 0,
@@ -540,7 +565,7 @@ export function createDaemonServer(
               },
               ...(debugMode ? {
                 _debug: {
-                  route: "skip" as const,
+                  queryMode: "skip" as const,
                   tokensInjected: 0,
                   chunksInjected: 0,
                   queryClassification: { isCodeQuery: false, needsNavigation: false },
@@ -554,7 +579,7 @@ export function createDaemonServer(
 
           // Classify intent — skip retrieval entirely for non-code queries
           const intent = classifyIntent(query);
-          let route = deriveRoute(intent);
+          let queryMode = intent.queryMode;
 
           // For navigational queries, attempt seed resolution to determine R1 vs R2.
           // The seedResult is captured and threaded through to downstream handlers
@@ -562,7 +587,7 @@ export function createDaemonServer(
           let seedCandidate: string | null = null;
           let seedConfidence: number | null = null;
           let cachedSeedResult: import("../search/seed.js").SeedResult | undefined;
-          if (intent.needsNavigation && route === "R0" && liveOptions.ftsStore) {
+          if (intent.needsNavigation && liveOptions.ftsStore) {
             const { resolveSeeds } = await import("../search/seed.js");
             const seedResult = resolveSeeds(query, metadata, liveOptions.ftsStore);
             cachedSeedResult = seedResult;
@@ -570,12 +595,12 @@ export function createDaemonServer(
               seedCandidate = seedResult.bestSeed.name;
               seedConfidence = seedResult.bestSeed.confidence;
             }
-            route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
           }
 
-          if (route === "skip") {
+          if (queryMode === "skip") {
+            if (sessionKey) hookSessionState.delete(sessionKey);
             const skipDebug: HookDebugRecord = {
-              route: "skip",
+              queryMode: "skip",
               intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
               skipReason: intent.skipReason ?? "non-code query",
               injectedTokenCount: 0,
@@ -594,7 +619,7 @@ export function createDaemonServer(
               res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
-                route: "skip",
+                queryMode: "skip",
                 chunks: 0,
                 tokens: 0,
                 elapsedMs: 0,
@@ -609,7 +634,7 @@ export function createDaemonServer(
               },
               ...(debugMode ? {
                 _debug: {
-                  route: "skip",
+                  queryMode: "skip",
                   tokensInjected: 0,
                   chunksInjected: 0,
                   queryClassification: intent,
@@ -622,7 +647,7 @@ export function createDaemonServer(
           }
 
           const startTime = Date.now();
-          logHook(`[${requestId}] SEARCH route=${route} query="${rawQuery.slice(0, 100)}"`);
+          logHook(`[${requestId}] SEARCH mode=${queryMode} query="${rawQuery.slice(0, 100)}"`);
 
           const totalChunks = metadata.getStats().totalChunks;
           const promptContext = await handlePromptContextDetailed(
@@ -631,21 +656,22 @@ export function createDaemonServer(
             config,
             activeFiles,
             signal,
-            route,
+            queryMode,
             liveOptions.ftsStore ? metadata : undefined,
             liveOptions.ftsStore,
             cachedSeedResult,
             totalChunks,
             liveOptions.memorySearch
           );
-          route = promptContext.resolvedRoute;
+          queryMode = promptContext.resolvedQueryMode;
           const context = promptContext.context;
 
           if (!context) {
+            if (sessionKey) hookSessionState.delete(sessionKey);
             const skipElapsed = Date.now() - startTime;
             metadata.incrementRouteStat("skip");
             const skipDebug: HookDebugRecord = {
-              route: "skip",
+              queryMode: "skip",
               intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
               skipReason: "no context returned",
               injectedTokenCount: 0,
@@ -661,7 +687,7 @@ export function createDaemonServer(
               res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
                 requestId,
                 hookEventName: "UserPromptSubmit",
-                route: "skip",
+                queryMode: "skip",
                 chunks: 0,
                 tokens: 0,
                 elapsedMs: skipElapsed,
@@ -676,7 +702,7 @@ export function createDaemonServer(
               },
               ...(debugMode ? {
                 _debug: {
-                  route: "skip" as const,
+                  queryMode: "skip" as const,
                   tokensInjected: 0,
                   chunksInjected: 0,
                   queryClassification: intent,
@@ -688,10 +714,27 @@ export function createDaemonServer(
             return;
           }
 
+          if (sessionKey) {
+            hookSessionState.set(sessionKey, {
+              sessionKey,
+              queryMode,
+              deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
+              injectedFiles: context.chunks.map((chunk) => chunk.filePath),
+              selectedFiles: promptContext.selectedFiles?.map((file) => file.filePath)
+                ?? context.chunks.map((chunk) => chunk.filePath),
+              contextStrength: promptContext.contextStrength ?? "weak",
+              executionSurface: promptContext.executionSurface,
+              query,
+              missingEvidence: promptContext.missingEvidence,
+              recommendedNextReads: promptContext.recommendedNextReads,
+              updatedAt: Date.now(),
+            });
+          }
+
           const elapsed = Date.now() - startTime;
 
           const debugRecord: HookDebugRecord = {
-            route,
+            queryMode,
             intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
             skipReason: null,
             injectedTokenCount: context.tokenCount,
@@ -708,19 +751,28 @@ export function createDaemonServer(
             memoryDropped: promptContext.memoryDropped,
             memoryBudgetUsed: promptContext.memoryBudget?.used ?? 0,
             memoryBudgetTotal: promptContext.memoryBudget?.total ?? 0,
+            deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
+            contextStrength: promptContext.contextStrength,
+            executionSurface: promptContext.executionSurface,
+            selectedFiles: promptContext.selectedFiles?.map((file) => file.filePath),
+            missingEvidence: promptContext.missingEvidence,
+            recommendedNextReads: promptContext.recommendedNextReads,
+            dominantFamily: promptContext.dominantFamily,
+            familyConfidence: promptContext.familyConfidence,
+            deferredReason: promptContext.deferredReason,
           };
 
           const memTok = promptContext.memoryTokenCount ?? 0;
           const codeTok = context.tokenCount - memTok;
           const memPart = memTok > 0 ? ` + ${memTok} memory tokens (${promptContext.memoryCount} memories)` : "";
           logHook(
-            `[${requestId}] RESULT ${context.chunks.length} chunks (${codeTok} code tokens${memPart}) in ${elapsed}ms route=${route} memory=${promptContext.memoryRoute ?? "M0"}`
+            `[${requestId}] RESULT ${context.chunks.length} chunks (${codeTok} code tokens${memPart}) in ${elapsed}ms mode=${queryMode} memory=${promptContext.memoryRoute ?? "M0"}`
           );
 
           log.debug({
             requestId,
             query: query.slice(0, 120),
-            route,
+            queryMode,
             activeFilesCount: activeFiles?.length ?? 0,
             chunkCount: context.chunks.length,
             tokenCount: context.tokenCount,
@@ -746,7 +798,7 @@ export function createDaemonServer(
           // Stats update: all reads and writes are synchronous (better-sqlite3),
           // so no interleaving is possible within this block
           metadata.recordLatency(elapsed);
-          metadata.incrementRouteStat(route);
+          metadata.incrementRouteStat(queryMode);
           metadata.incrementStat("hooksFireCount");
           metadata.incrementStat("totalTokensInjected", context.tokenCount);
           metadata.incrementStat("chunksServed", context.chunks.length);
@@ -786,7 +838,7 @@ export function createDaemonServer(
           if (liveOptions.memoryRuntime) {
             void liveOptions.memoryRuntime.observePrompt({
               query,
-              codeRoute: route,
+              codeRoute: queryMode,
               memoryRoute: promptContext.memoryRoute,
               activeFiles,
               topFiles: context.chunks.slice(0, 5).map((chunk) => chunk.filePath),
@@ -795,15 +847,28 @@ export function createDaemonServer(
             });
           }
 
+          const hookAdditionalContext = promptContext.advisoryText
+            ? `${promptContext.advisoryText}\n\n${context.text}`
+            : context.text;
+
           if (debugMode) {
             res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
               requestId,
               hookEventName: "UserPromptSubmit",
-              route,
+              queryMode,
               memoryRoute: promptContext.memoryRoute ?? "M0",
               chunks: context.chunks.length,
               tokens: context.tokenCount,
               elapsedMs: elapsed,
+              deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
+              contextStrength: promptContext.contextStrength,
+              executionSurface: promptContext.executionSurface,
+              selectedFiles: promptContext.selectedFiles?.map((file) => file.filePath),
+              missingEvidence: promptContext.missingEvidence,
+              recommendedNextReads: promptContext.recommendedNextReads,
+              dominantFamily: promptContext.dominantFamily,
+              familyConfidence: promptContext.familyConfidence,
+              deferredReason: promptContext.deferredReason,
               queryClassification: intent,
               ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
               ...(promptContext.memoryTokenCount ? {
@@ -818,13 +883,22 @@ export function createDaemonServer(
           json(res, {
             hookSpecificOutput: {
               hookEventName: "UserPromptSubmit",
-              additionalContext: context.text,
+              additionalContext: hookAdditionalContext,
             },
             ...(debugMode ? {
               _debug: {
-                route,
+                queryMode,
                 tokensInjected: context.tokenCount,
                 chunksInjected: context.chunks.length,
+                deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
+                contextStrength: promptContext.contextStrength,
+                executionSurface: promptContext.executionSurface,
+                selectedFiles: promptContext.selectedFiles?.map((file) => file.filePath),
+                missingEvidence: promptContext.missingEvidence,
+                recommendedNextReads: promptContext.recommendedNextReads,
+                dominantFamily: promptContext.dominantFamily,
+                familyConfidence: promptContext.familyConfidence,
+                deferredReason: promptContext.deferredReason,
                 queryClassification: intent,
                 latencyMs: elapsed,
                 ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
@@ -838,6 +912,37 @@ export function createDaemonServer(
             } : {}),
           });
         }, res, 30000, "/hooks/prompt-context");
+        metrics.recordLatency(endpoint, Date.now() - requestStart);
+        return;
+      }
+
+      if (
+        req.method === "POST" &&
+        endpoint === "/hooks/pre-tool-use"
+      ) {
+        await withTimeout(async (_signal) => {
+          const body = await readBody(req);
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            parsed = {};
+          }
+
+          const sessionKey = resolveHookSessionKey(parsed);
+          const output = evaluatePreToolUse(
+            {
+              sessionId: typeof parsed.session_id === "string" ? parsed.session_id : undefined,
+              transcriptPath: typeof parsed.transcript_path === "string" ? parsed.transcript_path : undefined,
+              toolName: typeof parsed.tool_name === "string" ? parsed.tool_name : undefined,
+              toolInput: typeof parsed.tool_input === "object" && parsed.tool_input !== null
+                ? parsed.tool_input as Record<string, unknown>
+                : undefined,
+            },
+            sessionKey ? hookSessionState.get(sessionKey) : undefined
+          );
+          json(res, output);
+        }, res, 15000, "/hooks/pre-tool-use");
         metrics.recordLatency(endpoint, Date.now() - requestStart);
         return;
       }

@@ -527,7 +527,7 @@ describe("daemon HTTP server — debug mode", () => {
     const parsed = JSON.parse(debugHeader as string);
     expect(parsed).toHaveProperty("requestId");
     expect(parsed).toHaveProperty("hookEventName", "UserPromptSubmit");
-    expect(parsed).toHaveProperty("route", "R0");
+    expect(parsed).toHaveProperty("queryMode", "trace");
     expect(parsed.chunks).toBe(1);
     expect(parsed.tokens).toBe(10);
     expect(parsed).toHaveProperty("queryClassification");
@@ -551,14 +551,14 @@ describe("daemon HTTP server — debug mode", () => {
       query: "hello",
     }, token);
     expect(status).toBe(200);
-    expect(body._debug.route).toBe("skip");
+    expect(body._debug.queryMode).toBe("skip");
 
     const debugHeader = headers["x-memory-debug"];
     expect(debugHeader).toBeDefined();
     const parsed = JSON.parse(debugHeader as string);
     expect(parsed).toMatchObject({
       hookEventName: "UserPromptSubmit",
-      route: "skip",
+      queryMode: "skip",
       chunks: 0,
       tokens: 0,
       skipReason: "non-code query",

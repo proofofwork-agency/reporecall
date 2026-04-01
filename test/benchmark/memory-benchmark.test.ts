@@ -521,7 +521,7 @@ describe("memory layer benchmark", { timeout: 120_000 }, () => {
         400
       );
 
-      expect(factContext.text).toContain("## Memories");
+      expect(factContext.text).toContain("## Memory guidance");
       expect(factContext.text).toContain("[Fact]");
       expect(factContext.text).not.toContain("QA runs March 29-31");
 

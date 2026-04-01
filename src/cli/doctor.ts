@@ -4,6 +4,7 @@ import { existsSync, statSync, readFileSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { isProcessAlive } from '../core/platform.js'
+import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
 
 export function doctorCommand(): Command {
   return new Command('doctor')
@@ -21,6 +22,18 @@ export function doctorCommand(): Command {
       console.log(`Reporecall Doctor\n`)
       console.log(`Project: ${projectRoot}`)
       console.log(`Data dir: ${config.dataDir}\n`)
+
+      // Check 0: native SQLite binding health
+      try {
+        assertSqliteRuntimeHealthy({
+          cwd: projectRoot,
+          log: (message) => process.stderr.write(`${message}\n`),
+        })
+        console.log('✓ better-sqlite3 runtime is healthy')
+      } catch (err) {
+        console.log(`✗ ${err instanceof Error ? err.message : String(err)}`)
+        issues++
+      }
 
       // Check 1: Data directory exists
       if (!existsSync(config.dataDir)) {
@@ -182,6 +195,14 @@ export function doctorCommand(): Command {
         warnings++
       } else {
         console.log('✓ Search weights are balanced')
+      }
+
+      // Check 10: package-manager consistency hint
+      const packageLock = resolve(projectRoot, 'package-lock.json')
+      const pnpmLock = resolve(projectRoot, 'pnpm-lock.yaml')
+      if (existsSync(packageLock) && existsSync(pnpmLock)) {
+        console.log('⚠ Both package-lock.json and pnpm-lock.yaml are present. Mixed installs can break native modules like better-sqlite3.')
+        warnings++
       }
 
       // Summary

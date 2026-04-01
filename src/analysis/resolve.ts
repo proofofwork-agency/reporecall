@@ -65,7 +65,7 @@ export function resolveCallTarget(
     }
   }
 
-  // 4. Resolve literal-dispatch aliases such as invoke("generate-image")
+  // 4. Resolve literal-dispatch aliases such as invoke("task-name")
   if (edge.literalTargets && edge.literalTargets.length > 0) {
     const aliasHits = metadata.resolveTargetAliases(buildLiteralAliasCandidates(edge.literalTargets), 8);
     const firstFileBacked = aliasHits.find((hit) => hit.target.kind !== "symbol") ?? aliasHits[0];

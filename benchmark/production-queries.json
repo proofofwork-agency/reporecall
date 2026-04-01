@@ -1,0 +1,403 @@
+{
+  "version": "0.3.3-production-gate",
+  "generatedAt": "2026-03-24T00:00:00.000Z",
+  "suites": [
+    {
+      "id": "duto-production",
+      "projectRoot": "../duto",
+      "queries": [
+        {
+          "id": "bug-node-compatibility-random",
+          "query": "some of the the nodes can connect to nodes they are not supposed to connect to how is this possible?",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/lib/flow/nodeConnectionSchema.ts": 3,
+            "src/pages/FlowEditor.tsx": 3,
+            "src/components/flow/QuickConnectMenu.tsx": 1
+          },
+          "mustInclude": [
+            "src/lib/flow/nodeConnectionSchema.ts"
+          ],
+          "mustNotInclude": [
+            "documentation/NODES.md",
+            "src/components/flow/nodes/nodeRegistry.tsx"
+          ]
+        },
+        {
+          "id": "arch-auth-flow",
+          "query": "how does the auth flow work?",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/pages/Auth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "supabase/functions/_shared/auth-utils.ts": 2
+          },
+          "mustInclude": [
+            "src/pages/Auth.tsx",
+            "src/pages/AuthCallback.tsx",
+            "src/hooks/useAuth.tsx"
+          ]
+        },
+        {
+          "id": "trace-generate-image",
+          "query": "how does generate-image work",
+          "expectedMode": "trace",
+          "relevance": {
+            "supabase/functions/generate-image/index.ts": 3,
+            "supabase/functions/storyboard-controller/index.ts": 2,
+            "supabase/functions/openrouter-chat/index.ts": 1
+          },
+          "mustInclude": [
+            "supabase/functions/generate-image/index.ts"
+          ]
+        },
+        {
+          "id": "arch-auth-files",
+          "query": "which files implement the authentication flow",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/pages/Auth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "supabase/functions/_shared/auth-utils.ts": 2,
+            "src/components/AuthModal.tsx": 1
+          },
+          "mustInclude": [
+            "src/pages/Auth.tsx",
+            "src/pages/AuthCallback.tsx",
+            "src/hooks/useAuth.tsx"
+          ]
+        },
+        {
+          "id": "trace-upload-auth",
+          "query": "how does upload-media authenticate requests",
+          "expectedMode": "trace",
+          "relevance": {
+            "supabase/functions/upload-media/index.ts": 3,
+            "supabase/functions/_shared/auth-utils.ts": 2,
+            "supabase/functions/_shared/request-utils.ts": 1
+          },
+          "mustInclude": [
+            "supabase/functions/upload-media/index.ts"
+          ]
+        },
+        {
+          "id": "change-auth-logging",
+          "query": "add logging to every step in the authentication flow",
+          "expectedMode": "change",
+          "relevance": {
+            "src/pages/Auth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 2,
+            "src/components/ProtectedRoute.tsx": 2,
+            "supabase/functions/_shared/auth-utils.ts": 1,
+            "supabase/functions/_shared/security-logger.ts": 1
+          },
+          "mustInclude": [
+            "src/pages/Auth.tsx"
+          ]
+        },
+        {
+          "id": "lookup-auth-callback",
+          "query": "where is AuthCallback implemented",
+          "expectedMode": "lookup",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "lookup-use-auth",
+          "query": "find useAuth",
+          "expectedMode": "lookup",
+          "relevance": {
+            "src/hooks/useAuth.tsx": 3
+          },
+          "mustInclude": [
+            "src/hooks/useAuth.tsx"
+          ]
+        },
+        {
+          "id": "bug-auth-redirect-short",
+          "query": "why does auth redirect fail",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 2,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/pages/Auth.tsx": 1
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ],
+          "mustNotInclude": [
+            "src/controllers/CreditController.ts",
+            "src/controllers/BillingController.ts"
+          ]
+        },
+        {
+          "id": "bug-route-protection-pending",
+          "query": "which files implement route protection and pending navigation",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/components/ProtectedRoute.tsx": 3,
+            "src/pages/AuthCallback.tsx": 2,
+            "src/lib/navigation.ts": 2,
+            "src/hooks/useAuth.tsx": 1
+          },
+          "mustInclude": [
+            "src/components/ProtectedRoute.tsx"
+          ]
+        },
+        {
+          "id": "bug-login-bounce-long",
+          "query": "I’m seeing users get bounced around during login. Sometimes after signing in they don’t land where they were trying to go. It feels like pending navigation or redirect state is getting lost somewhere. Which files should I inspect first and why?",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/lib/navigation.ts": 2
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "bug-protected-handoff-long",
+          "query": "A user opens a protected page while logged out. After they authenticate, they should return to the original destination, but that hop seems flaky. Show me the code most likely controlling that handoff.",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/components/ProtectedRoute.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 2,
+            "src/lib/navigation.ts": 2
+          },
+          "mustInclude": [
+            "src/components/ProtectedRoute.tsx",
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "bug-pending-destination-long",
+          "query": "People can log in successfully, but the app sometimes forgets where they wanted to go before auth. I suspect the pending navigation state is stored in one place and consumed in another. What files are most relevant?",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 3,
+            "src/lib/navigation.ts": 2,
+            "src/hooks/useAuth.tsx": 2
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "trace-signin-callback-path-long",
+          "query": "I want to trace the full sign-in callback path. Start from where the auth provider updates session state, then include the callback page and anything that preserves redirect intent.",
+          "expectedMode": "trace",
+          "relevance": {
+            "src/hooks/useAuth.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/pages/Auth.tsx": 1
+          },
+          "mustInclude": [
+            "src/hooks/useAuth.tsx",
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "bug-upload-bearer-auth-long",
+          "query": "When upload-media runs, I need to understand exactly where bearer auth is checked and how the request gets rejected if the token is missing. Which code path matters?",
+          "expectedMode": "bug",
+          "relevance": {
+            "supabase/functions/upload-media/index.ts": 3,
+            "supabase/functions/_shared/auth-utils.ts": 2,
+            "supabase/functions/_shared/request-utils.ts": 1
+          },
+          "mustInclude": [
+            "supabase/functions/upload-media/index.ts"
+          ],
+          "mustNotInclude": [
+            "src/controllers/CreditController.ts",
+            "src/controllers/BillingController.ts"
+          ]
+        },
+        {
+          "id": "arch-generation-e2e-long",
+          "query": "The image generation request works, but I need the end-to-end server path from request authentication through credit checks to the actual provider call. What files should I read first?",
+          "expectedMode": "architecture",
+          "relevance": {
+            "supabase/functions/generate-image/index.ts": 3,
+            "supabase/functions/storyboard-controller/index.ts": 2,
+            "supabase/functions/_shared/auth-utils.ts": 2,
+            "src/services/StripeService.ts": 1
+          },
+          "mustInclude": [
+            "supabase/functions/generate-image/index.ts"
+          ]
+        },
+        {
+          "id": "bug-flow-compatibility-long",
+          "query": "A connection bug in the flow editor lets incompatible nodes link together. I do not care about the visual node registry; I want the runtime checks and the caller path that enforces compatibility.",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/lib/flow/nodeConnectionSchema.ts": 3,
+            "src/pages/FlowEditor.tsx": 3,
+            "src/components/flow/QuickConnectMenu.tsx": 1
+          },
+          "mustInclude": [
+            "src/lib/flow/nodeConnectionSchema.ts",
+            "src/pages/FlowEditor.tsx"
+          ],
+          "mustNotInclude": [
+            "src/components/flow/nodes/nodeRegistry.tsx",
+            "documentation/NODES.md"
+          ]
+        },
+        {
+          "id": "arch-protected-routes-preserve-destination",
+          "query": "Show me the code that guards protected routes and preserves any pending destination across login, including where that destination is later consumed.",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/components/ProtectedRoute.tsx": 3,
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 2,
+            "src/lib/navigation.ts": 2
+          },
+          "mustInclude": [
+            "src/components/ProtectedRoute.tsx",
+            "src/pages/AuthCallback.tsx"
+          ]
+        },
+        {
+          "id": "change-auth-redirect-logging",
+          "query": "I need to add logging across the auth redirect path without touching unrelated UI. Which files are the real edit surfaces?",
+          "expectedMode": "change",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/hooks/useAuth.tsx": 2,
+            "src/pages/Auth.tsx": 2,
+            "src/components/ProtectedRoute.tsx": 2,
+            "supabase/functions/_shared/security-logger.ts": 1
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ],
+          "mustNotInclude": [
+            "src/components/AuthModal.tsx"
+          ]
+        },
+        {
+          "id": "bug-auth-callback-wrong-page",
+          "query": "Sometimes after auth callback the user lands on the wrong page instead of the queued destination. Trace the most likely runtime path for that bug.",
+          "expectedMode": "bug",
+          "relevance": {
+            "src/pages/AuthCallback.tsx": 3,
+            "src/components/ProtectedRoute.tsx": 2,
+            "src/hooks/useAuth.tsx": 2,
+            "src/lib/navigation.ts": 2
+          },
+          "mustInclude": [
+            "src/pages/AuthCallback.tsx"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reporecall-core",
+      "projectRoot": ".",
+      "queries": [
+        {
+          "id": "lookup-handle-prompt-context",
+          "query": "where is handlePromptContextDetailed implemented",
+          "expectedMode": "lookup",
+          "relevance": {
+            "src/hooks/prompt-context.ts": 3
+          },
+          "mustInclude": [
+            "src/hooks/prompt-context.ts"
+          ]
+        },
+        {
+          "id": "arch-search-pipeline",
+          "query": "which files implement the full search pipeline",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/search/hybrid.ts": 3,
+            "src/search/reranker.ts": 2,
+            "src/search/ranker.ts": 2,
+            "src/search/targets.ts": 2,
+            "src/search/seed.ts": 1,
+            "src/search/intent.ts": 1
+          },
+          "mustInclude": [
+            "src/search/hybrid.ts"
+          ]
+        },
+        {
+          "id": "trace-mcp-request-flow",
+          "query": "trace the full MCP request flow from stdio command to tool registration",
+          "expectedMode": "trace",
+          "relevance": {
+            "src/cli/mcp.ts": 3,
+            "src/daemon/mcp-server.ts": 3,
+            "src/cli/serve.ts": 1
+          },
+          "mustInclude": [
+            "src/cli/mcp.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reporecall-ops",
+      "projectRoot": ".",
+      "queries": [
+        {
+          "id": "lookup-memory-context-assembly",
+          "query": "Where is memory context assembled before prompt injection?",
+          "expectedMode": "lookup",
+          "relevance": {
+            "src/memory/context.ts": 3
+          },
+          "mustInclude": [
+            "src/memory/context.ts"
+          ]
+        },
+        {
+          "id": "arch-reranking-before-assembly",
+          "query": "Which file owns the reranking logic for search results before context assembly?",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/search/reranker.ts": 3,
+            "src/search/context-assembler.ts": 2,
+            "src/search/targets.ts": 1
+          },
+          "mustInclude": [
+            "src/search/reranker.ts"
+          ]
+        },
+        {
+          "id": "arch-mcp-cli-entrypoint",
+          "query": "I need the CLI entrypoint that starts MCP mode. Which file should I inspect?",
+          "expectedMode": "architecture",
+          "relevance": {
+            "src/cli/mcp.ts": 3,
+            "src/cli/serve.ts": 2,
+            "src/daemon/mcp-server.ts": 2
+          },
+          "mustInclude": [
+            "src/cli/mcp.ts"
+          ]
+        }
+      ]
+    }
+  ]
+}

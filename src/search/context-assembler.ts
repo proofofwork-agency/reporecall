@@ -33,7 +33,7 @@ function buildFileListLine(chunks: SearchResult[], maxFiles = 8): string {
 }
 
 export interface AssembleOptions {
-  scoreFloorRatio?: number;   // default 0.5
+  scoreFloorRatio?: number;   // default 0.7
   maxChunks?: number;         // default Infinity (no cap unless config passes one)
   directiveHeader?: boolean;  // default true
   query?: string;
@@ -54,7 +54,7 @@ export function assembleContext(
       ? { scoreFloorRatio: optionsOrFloorRatio }
       : optionsOrFloorRatio ?? {};
 
-  const scoreFloorRatio = opts.scoreFloorRatio ?? 0.5;
+  const scoreFloorRatio = opts.scoreFloorRatio ?? 0.7;
   const maxChunks = opts.maxChunks ?? Infinity;
   const directiveHeader = opts.directiveHeader ?? true;
 
@@ -168,6 +168,7 @@ export function assembleContext(
     tokenCount: totalTokens,
     chunks: included,
     routeStyle: "standard",
+    deliveryMode: "code_context",
   };
 }
 
@@ -309,6 +310,187 @@ function storedChunkToSearchResult(chunk: StoredChunk, score: number = 1.0): Sea
 
 // --- Flow context assembly (R1) ---
 
+function tokenizeFlowAssemblyQuery(query?: string): string[] {
+  if (!query) return [];
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3);
+}
+
+function countFlowQueryMatches(terms: string[], ...texts: Array<string | undefined>): number {
+  if (terms.length === 0) return 0;
+  const haystack = texts
+    .filter((text): text is string => !!text)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[_-]/g, " ");
+  let count = 0;
+  for (const term of terms) {
+    const prefix = term.length >= 6 ? term.slice(0, 4) : term;
+    if (haystack.includes(term) || (prefix.length >= 4 && haystack.includes(prefix))) count++;
+  }
+  return count;
+}
+
+function commonFlowPathPrefixLength(left: string, right: string): number {
+  const leftParts = left.toLowerCase().split("/").filter(Boolean);
+  const rightParts = right.toLowerCase().split("/").filter(Boolean);
+  let count = 0;
+  while (count < leftParts.length && count < rightParts.length && leftParts[count] === rightParts[count]) {
+    count++;
+  }
+  return count;
+}
+
+function inferFlowFamilies(queryTerms: string[]) {
+  return {
+    auth: queryTerms.some((term) => /^auth|token|session|login|signin|credential|callback|redirect|protect/.test(term)),
+    generation: queryTerms.some((term) => /^image|generate|generation|render|shot|regen/.test(term)),
+    billing: queryTerms.some((term) => /^bill|checkout|portal|subscription|invoice|payment|credit|customer/.test(term)),
+    upload: queryTerms.some((term) => /^upload|storage|media|signed|bucket|file/.test(term)),
+  };
+}
+
+function scoreFlowChunkAffinity(
+  chunk: StoredChunk,
+  seedChunk: StoredChunk,
+  queryTerms: string[],
+  families: ReturnType<typeof inferFlowFamilies>,
+  direction: "caller" | "callee",
+  implementationFirst: boolean,
+  callerFocused: boolean,
+  nodeDepth: number = 99
+): number {
+  let score = 0;
+  const sameFile = chunk.filePath === seedChunk.filePath;
+  const prefix = commonFlowPathPrefixLength(seedChunk.filePath, chunk.filePath);
+  const queryMatches = countFlowQueryMatches(
+    queryTerms,
+    chunk.filePath,
+    chunk.name,
+    chunk.parentName,
+    chunk.docstring
+  );
+  const fileText = `${chunk.filePath} ${chunk.name} ${chunk.parentName ?? ""}`.toLowerCase();
+  const sharedFile = /(?:^|\/)_shared\//.test(chunk.filePath);
+  const seedInHooks = /(?:^|\/)hooks\//.test(seedChunk.filePath);
+  const seedInEndpoint = /supabase\/functions\//.test(seedChunk.filePath);
+  const candidateInUi = /(?:^|\/)(pages|components|routes)\//.test(chunk.filePath);
+  const candidateInClient = /^src\//.test(chunk.filePath);
+
+  if (sameFile) score += 140;
+  score += prefix * 18;
+  score += queryMatches * 35;
+
+  if (implementationFirst) {
+    if (direction === "callee") score += 8;
+    if (direction === "caller") score -= 8;
+  }
+  if (callerFocused) {
+    if (direction === "caller") score += 40;
+    if (direction === "callee") score -= 10;
+  }
+  if (implementationFirst && direction === "caller" && !callerFocused) {
+    if (seedInHooks && candidateInUi && queryMatches < 2) score -= 70;
+    if (seedInEndpoint && candidateInClient && queryMatches < 2) score -= 75;
+  }
+  // Penalize generic workers and shared middleware when the query isn't about them
+  if (/\/workers\//.test(chunk.filePath) && !queryTerms.some((t) => /\bworker\b/.test(t))) {
+    score -= 150;
+  }
+  if (/\/(?:cors|rate[-_]?limit)[^/]*\./.test(chunk.filePath) && !queryTerms.some((t) => /\b(cors|rate|limit|middleware)\b/.test(t)) && queryMatches < 1) {
+    score -= 100;
+  }
+  // For hook seeds: suppress callers with zero query-term overlap (they are just importers, not related)
+  if (seedInHooks && direction === "caller" && queryMatches === 0) {
+    score -= 100;
+  }
+
+  if (families.auth) {
+    if (/(auth|callback|protected|session|login|signin|redirect|token)/.test(fileText)) score += 30;
+    if (/(storage|analytics|project|dashboard|admin)/.test(fileText)) score -= 35;
+    if (/(?:cors|rate[-_]?limit|logger)/.test(fileText)) score -= 25;
+  }
+  if (families.generation) {
+    if (/(generate|generation|render|image|shot|regener)/.test(fileText)) score += 30;
+    if (/(upload|storage|media|bucket)/.test(fileText)) score -= 25;
+  }
+  if (families.billing) {
+    if (/(billing|checkout|portal|subscription|invoice|payment|customer|credit)/.test(fileText)) score += 28;
+    if (/(analytics|dashboard|project)/.test(fileText)) score -= 20;
+  }
+  if (families.upload) {
+    if (/(upload|storage|media|signed|bucket|file)/.test(fileText)) score += 24;
+    if (families.auth && /auth/.test(fileText)) score += 18;
+  }
+
+  if (sharedFile && queryMatches === 0 && !families.auth && !families.billing && !families.generation && !families.upload) {
+    score -= 22;
+  }
+  // Skip harsh penalty for direct neighbors (depth 1) — they're in the call graph and always relevant
+  if (queryTerms.length > 0 && !sameFile && prefix < 2 && queryMatches === 0 && nodeDepth > 1) score -= 60;
+  if (/schema|migration|fixture|example|test|spec/i.test(chunk.filePath)) score -= 120;
+
+  return score;
+}
+
+interface FlowEntry {
+  node: StackTree["upTree"][number];
+  chunk: StoredChunk;
+  result: SearchResult;
+  score: number;
+  sameFile: boolean;
+  filePath: string;
+  depth: number;
+}
+
+function selectFlowEntries(
+  entries: FlowEntry[],
+  tokenBudget: number,
+  totalTokens: number,
+  summaryReserve: number,
+  implementationFirst: boolean,
+  callerFocused: boolean,
+  direction: "caller" | "callee"
+): { parts: string[]; results: SearchResult[]; totalTokens: number } {
+  const parts: string[] = [];
+  const results: SearchResult[] = [];
+  const seenFiles = new Set<string>();
+  let currentTokens = totalTokens;
+  let crossFileCount = 0;
+  const maxCrossFile = implementationFirst
+    ? (callerFocused ? (direction === "caller" ? 2 : 1) : (direction === "callee" ? 2 : 1))
+    : 3;
+  const maxEntries = implementationFirst ? 3 : 4;
+
+  for (const entry of entries) {
+    if (!entry.sameFile) {
+      if (crossFileCount >= maxCrossFile) continue;
+      // Depth-1 nodes (direct callers/callees) get a lower threshold — they're in the call graph.
+      // Depth > 1 still needs a high bar to avoid noise from distant nodes.
+      const scoreThreshold = implementationFirst ? (entry.depth === 1 ? 10 : 45) : 0;
+      if (entry.score < scoreThreshold) continue;
+    }
+
+    const chunkLines = entry.chunk.endLine - entry.chunk.startLine + 1;
+    const useCompressed = parts.length >= 1 || chunkLines > 80 || (!entry.sameFile && results.length >= 1);
+    const text = useCompressed ? formatChunkCompressed(entry.result) : formatChunk(entry.result);
+    const tokens = countTokens(text);
+    if (currentTokens + tokens > tokenBudget - summaryReserve) continue;
+
+    currentTokens += tokens;
+    parts.push(text);
+    results.push(entry.result);
+    seenFiles.add(entry.filePath);
+    if (!entry.sameFile) crossFileCount++;
+    if (results.length >= maxEntries) break;
+  }
+
+  return { parts, results, totalTokens: currentTokens };
+}
+
 function describeChunk(chunk: SearchResult | StoredChunk | undefined): string | null {
   if (!chunk) return null;
   return `\`${chunk.name}\` (${chunk.filePath}:${chunk.startLine}-${chunk.endLine})`;
@@ -332,9 +514,9 @@ function buildConceptFacts(
       `Consumers: ${describeChunk(m.get("graphCommand")) ?? "`graphCommand`"} exposes the CLI view, and ${describeChunk(m.get("buildStackTree")) ?? "`buildStackTree`"} builds higher-level caller/callee navigation from stored edges.`,
     ],
     search_pipeline: (m) => [
-      `Routing: ${describeChunk(m.get("classifyIntent")) ?? "`classifyIntent`"} classifies the query, ${describeChunk(m.get("deriveRoute")) ?? "`deriveRoute`"} selects skip/R0/R1/R2, and ${describeChunk(m.get("handlePromptContextDetailed")) ?? "`handlePromptContextDetailed`"} dispatches the chosen route.`,
-      `R0 retrieval: ${describeChunk(m.get("searchWithContext")) ?? "`searchWithContext`"} builds the prompt bundle, while ${describeChunk(m.get("search")) ?? "`search`"} runs retrieve, fuse, expand, and hydrate/rerank.`,
-      `Navigational path: ${describeChunk(m.get("resolveSeeds")) ?? "`resolveSeeds`"} chooses seeds for R1 flow traces, and weak or ambiguous navigational results degrade to the low-confidence deep route.`,
+      `Routing: ${describeChunk(m.get("classifyIntent")) ?? "`classifyIntent`"} classifies the query into lookup, trace, bug, architecture, or change, and ${describeChunk(m.get("handlePromptContextDetailed")) ?? "`handlePromptContextDetailed`"} dispatches the chosen mode.`,
+      `Lookup and bug retrieval: ${describeChunk(m.get("searchWithContext")) ?? "`searchWithContext`"} builds the prompt bundle, while ${describeChunk(m.get("search")) ?? "`search`"} runs retrieve, fuse, expand, and hydrate/rerank.`,
+      `Trace path: ${describeChunk(m.get("resolveSeeds")) ?? "`resolveSeeds`"} chooses seeds for implementation traces, and weak broad architecture candidates degrade to summary-only guidance instead of noisy code bundles.`,
     ],
     storage: (m) => [
       `Facade: ${describeChunk(m.get("MetadataStore")) ?? "`MetadataStore`"} delegates to sub-stores for chunks, call edges, stats, conventions, and imports.`,
@@ -415,6 +597,7 @@ export function assembleConceptContext(
     tokenCount: totalTokens,
     chunks: included,
     routeStyle: "concept",
+    deliveryMode: "code_context",
   };
 }
 
@@ -442,6 +625,8 @@ export function assembleFlowContext(
     !!query && /\b(how\s+does|how\s+do|how\s+is|why\s+does|why\s+is|what\s+happens|work|works|implemented|implementation|fail|fails|failing|failure|error|broken)\b/i.test(query);
   const callerFocused =
     !!query && /\b(who|what)\s+calls\b|\bcalled\s+by\b|\bwhere\s+is\b.*\bused\b|\busage\b/i.test(query);
+  const queryTerms = tokenizeFlowAssemblyQuery(query);
+  const families = inferFlowFamilies(queryTerms);
 
   // Collect all node IDs for bulk hydration
   const allNodeIds = [
@@ -466,7 +651,7 @@ export function assembleFlowContext(
       },
       "flow context assembly skipped because the seed chunk could not be hydrated"
     );
-    return { text: "", tokenCount: 0, chunks: [], routeStyle: "flow" };
+    return { text: "", tokenCount: 0, chunks: [], routeStyle: "flow", deliveryMode: "code_context" };
   }
 
   // Build header
@@ -479,7 +664,7 @@ export function assembleFlowContext(
 
   // Always include seed
   const seedResult = storedChunkToSearchResult(seedChunk);
-  const seedSection = `### Seed\n` + formatChunk(seedResult);
+  const seedSection = `> Flow seed\n\n` + formatChunk(seedResult);
   const seedTokens = countTokens(seedSection);
 
   // Seed always gets included even if it fills the budget
@@ -490,50 +675,64 @@ export function assembleFlowContext(
   included.push(seedResult);
 
   // Build callers section (sorted by depth descending: entry point first)
-  const callersSorted = [...tree.upTree].sort((a, b) => b.depth - a.depth);
-  const callerParts: string[] = [];
-  const callerResults: SearchResult[] = [];
-
-  for (const callerNode of callersSorted) {
-    const callerChunk = chunkMap.get(callerNode.chunkId);
-    if (!callerChunk) continue;
-
-    const callerResult = storedChunkToSearchResult(callerChunk, 0.8);
-    // First caller gets full content (if reasonably sized), rest get compressed
-    const callerLines = callerChunk.endLine - callerChunk.startLine + 1;
-    const useCompressed = callerParts.length >= 1 || callerLines > 80;
-    const callerText = useCompressed ? formatChunkCompressed(callerResult) : formatChunk(callerResult);
-    const callerTokens = countTokens(callerText);
-
-    if (totalTokens + callerTokens > tokenBudget - SUMMARY_RESERVE) break;
-
-    totalTokens += callerTokens;
-    callerParts.push(callerText);
-    callerResults.push(callerResult);
-  }
+  const callersSorted = [...tree.upTree]
+    .map((node) => {
+      const chunk = chunkMap.get(node.chunkId);
+      if (!chunk) return null;
+      return {
+        node,
+        chunk,
+        result: storedChunkToSearchResult(chunk, 0.8),
+        score: scoreFlowChunkAffinity(chunk, seedChunk, queryTerms, families, "caller", implementationFirst, callerFocused, node.depth) + node.depth * 4,
+        sameFile: chunk.filePath === seedChunk.filePath,
+        filePath: chunk.filePath,
+        depth: node.depth,
+      } satisfies FlowEntry;
+    })
+    .filter((entry): entry is FlowEntry => !!entry)
+    .sort((a, b) => b.score - a.score || b.node.depth - a.node.depth);
+  const selectedCallers = selectFlowEntries(
+    callersSorted,
+    tokenBudget,
+    totalTokens,
+    SUMMARY_RESERVE,
+    implementationFirst,
+    callerFocused,
+    "caller"
+  );
+  totalTokens = selectedCallers.totalTokens;
+  const callerParts = selectedCallers.parts;
+  const callerResults = selectedCallers.results;
 
   // Build callees section (sorted by depth ascending: nearest first)
-  const calleesSorted = [...tree.downTree].sort((a, b) => a.depth - b.depth);
-  const calleeParts: string[] = [];
-  const calleeResults: SearchResult[] = [];
-
-  for (const calleeNode of calleesSorted) {
-    const calleeChunk = chunkMap.get(calleeNode.chunkId);
-    if (!calleeChunk) continue;
-
-    const calleeResult = storedChunkToSearchResult(calleeChunk, 0.7);
-    // First callee gets full content (if reasonably sized), rest get compressed
-    const calleeLines = calleeChunk.endLine - calleeChunk.startLine + 1;
-    const useCompressed = calleeParts.length >= 1 || calleeLines > 80;
-    const calleeText = useCompressed ? formatChunkCompressed(calleeResult) : formatChunk(calleeResult);
-    const calleeTokens = countTokens(calleeText);
-
-    if (totalTokens + calleeTokens > tokenBudget - SUMMARY_RESERVE) break;
-
-    totalTokens += calleeTokens;
-    calleeParts.push(calleeText);
-    calleeResults.push(calleeResult);
-  }
+  const calleesSorted = [...tree.downTree]
+    .map((node) => {
+      const chunk = chunkMap.get(node.chunkId);
+      if (!chunk) return null;
+      return {
+        node,
+        chunk,
+        result: storedChunkToSearchResult(chunk, 0.7),
+        score: scoreFlowChunkAffinity(chunk, seedChunk, queryTerms, families, "callee", implementationFirst, callerFocused, node.depth) - node.depth * 3,
+        sameFile: chunk.filePath === seedChunk.filePath,
+        filePath: chunk.filePath,
+        depth: node.depth,
+      } satisfies FlowEntry;
+    })
+    .filter((entry): entry is FlowEntry => !!entry)
+    .sort((a, b) => b.score - a.score || a.node.depth - b.node.depth);
+  const selectedCallees = selectFlowEntries(
+    calleesSorted,
+    tokenBudget,
+    totalTokens,
+    SUMMARY_RESERVE,
+    implementationFirst,
+    callerFocused,
+    "callee"
+  );
+  totalTokens = selectedCallees.totalTokens;
+  const calleeParts = selectedCallees.parts;
+  const calleeResults = selectedCallees.results;
 
   // Build final header with file list from all collected chunks
   const allFlowChunks = [seedResult, ...callerResults, ...calleeResults];
@@ -549,13 +748,13 @@ export function assembleFlowContext(
 
   const appendCallers = () => {
     if (callerParts.length === 0) return;
-    parts.push(`### Callers (who invokes this)\n`);
+    parts.push(`> Callers (who invokes this)\n`);
     parts.push(...callerParts);
     included.push(...callerResults);
   };
   const appendCallees = () => {
     if (calleeParts.length === 0) return;
-    parts.push(`### Callees (what this invokes)\n`);
+    parts.push(`> Callees (what this invokes)\n`);
     parts.push(...calleeParts);
     included.push(...calleeResults);
   };
@@ -587,6 +786,7 @@ export function assembleFlowContext(
     tokenCount: totalTokens,
     chunks: included,
     routeStyle: "flow",
+    deliveryMode: "code_context",
   };
 }
 
@@ -622,9 +822,10 @@ export function assembleDeepRouteContext(
   // Use existing assembleContext with reduced budget and no directive header
   // (the deep route header replaces it)
   const baseContext = assembleContext(chunks, remainingBudget, {
-    scoreFloorRatio: 0,
+    scoreFloorRatio: 0.35,
     directiveHeader: false,
     query,
+    maxChunks: 5,
     compressionRank: 3,
   });
 
@@ -645,5 +846,6 @@ export function assembleDeepRouteContext(
     tokenCount: deepHeaderTokens + baseContext.tokenCount - baseHeaderTokens,
     chunks: baseContext.chunks,
     routeStyle: "deep",
+    deliveryMode: baseContext.deliveryMode ?? "code_context",
   };
 }

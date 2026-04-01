@@ -4,7 +4,7 @@ import { loadConfig } from "../../src/core/config.js";
 import { IndexingPipeline } from "../../src/indexer/pipeline.js";
 import { HybridSearch } from "../../src/search/hybrid.js";
 import { sanitizeQuery } from "../../src/daemon/server.js";
-import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
+import { classifyIntent } from "../../src/search/intent.js";
 import { resolveSeeds } from "../../src/search/seed.js";
 import { handlePromptContextDetailed } from "../../src/hooks/prompt-context.js";
 import { computeAllMetrics, mean } from "./metrics.js";
@@ -179,12 +179,7 @@ export async function runExternalBenchmark(
       const sanitized = sanitizeQuery(annotation.query);
       const queryText = sanitized || annotation.query;
       const intent = classifyIntent(queryText);
-      let route = deriveRoute(intent);
-
-      if (intent.needsNavigation && route === "R0") {
-        const seedResult = resolveSeeds(queryText, metadata, fts);
-        route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
-      }
+      const queryMode = intent.queryMode;
 
       const promptContext = await handlePromptContextDetailed(
         queryText,
@@ -192,7 +187,7 @@ export async function runExternalBenchmark(
         config,
         undefined,
         undefined,
-        route,
+        queryMode,
         metadata,
         fts
       );
@@ -215,8 +210,8 @@ export async function runExternalBenchmark(
         id: annotation.id,
         query: annotation.query,
         expectedRoute: annotation.expectedRoute,
-        actualRoute: promptContext.resolvedRoute,
-        routeMatch: promptContext.resolvedRoute === annotation.expectedRoute,
+        actualRoute: promptContext.resolvedQueryMode,
+        routeMatch: promptContext.resolvedQueryMode === annotation.expectedRoute,
         ndcg10: metrics.ndcg10,
         mrr: metrics.mrr,
         averagePrecision: metrics.map,

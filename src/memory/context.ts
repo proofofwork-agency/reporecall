@@ -55,18 +55,8 @@ export interface MemoryAssemblyOptions {
 /**
  * Assemble memory search results into a token-budgeted context block.
  *
- * Output format:
- * ```
- * ## Memories
- *
- * ### [Guidance] feedback_no_coauthor
- * Do not add Co-Authored-By Claude tag to commits
- *
- * Content here...
- *
- * ### [User context] user_role
- * ...
- * ```
+ * Output format keeps memory visibly separate from code chunks and avoids
+ * file-like headings so the hook payload cannot mistake memories for files.
  */
 export function assembleMemoryContext(
   memories: MemorySearchResult[],
@@ -102,7 +92,7 @@ export function assembleMemoryContext(
     };
   }
 
-  const header = "## Memories\n\n";
+  const header = "## Memory guidance\n\n";
   let totalTokens = countTokens(header);
 
   const included: MemorySearchResult[] = [];
@@ -206,18 +196,21 @@ function formatMemory(memory: MemorySearchResult, label: string): string {
   const summary = resolveMemorySummary(memory);
   const memoryClass = resolveMemoryClass(memory);
   if (memoryClass !== "working") {
-    return `### [${label}] ${memory.name} — ${summary || memory.description}\n`;
+    return `- [${label}] ${memory.name} — ${summary || memory.description}\n`;
   }
 
   const body = compactWorkingBody(memory.content);
   return body
-    ? `### [${label}] ${memory.name}\n${summary || memory.description}\n\n${body}\n`
-    : `### [${label}] ${memory.name} — ${summary || memory.description}\n`;
+    ? `- [${label}] ${memory.name} — ${summary || memory.description}\n  Notes:\n${body
+        .split("\n")
+        .map((line) => `  - ${line}`)
+        .join("\n")}\n`
+    : `- [${label}] ${memory.name} — ${summary || memory.description}\n`;
 }
 
 function formatMemoryCompressed(memory: MemorySearchResult, label: string): string {
   const summary = resolveMemorySummary(memory);
-  return `### [${label}] ${memory.name} — ${summary || memory.description}\n`;
+  return `- [${label}] ${memory.name} — ${summary || memory.description}\n`;
 }
 
 function normalizeClassBudgets(

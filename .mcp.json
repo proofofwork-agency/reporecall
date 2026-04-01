@@ -1,9 +1,13 @@
 {
   "mcpServers": {
     "reporecall": {
-      "command": "npx",
-      "args": ["reporecall", "mcp", "--project", "."],
-      "env": {}
+      "command": "/Users/danillofelanso/.nvm/versions/node/v22.5.1/bin/node",
+      "args": [
+        "/Users/danillofelanso/projects/proofofworks/idea/dist/memory.js",
+        "mcp",
+        "--project",
+        "/Users/danillofelanso/projects/proofofworks/idea"
+      ]
     }
   }
 }

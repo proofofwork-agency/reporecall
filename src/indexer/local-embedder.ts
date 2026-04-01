@@ -44,7 +44,7 @@ export class LocalEmbedder implements EmbeddingProvider {
     }
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
+  async embed(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
     const pipe = await this.getPipeline();
     const output = await pipe(texts, { pooling: "mean", normalize: true });
@@ -54,9 +54,9 @@ export class LocalEmbedder implements EmbeddingProvider {
         `Embedding dimension mismatch: expected ${texts.length * this.dims} values, got ${data.length}`
       );
     }
-    const results: number[][] = [];
+    const results: Float32Array[] = [];
     for (let i = 0; i < texts.length; i++) {
-      results.push(Array.from(data.slice(i * this.dims, (i + 1) * this.dims)));
+      results.push(data.slice(i * this.dims, (i + 1) * this.dims));
     }
     return results;
   }

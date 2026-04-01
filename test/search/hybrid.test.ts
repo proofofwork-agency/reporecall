@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve } from "path";
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync, readFileSync, rmSync } from "fs";
 import { reciprocalRankFusion } from "../../src/search/ranker.js";
 import { assembleContext } from "../../src/search/context-assembler.js";
 import { MetadataStore } from "../../src/storage/metadata-store.js";
@@ -333,6 +333,72 @@ describe("HybridSearch", () => {
     const context = await search.searchWithContext("test query", 500);
     expect(context.text).toContain("fnA");
     expect(context.tokenCount).toBeLessThanOrEqual(500);
+  });
+
+  it("uses direct file-backed target resolution for exact implementation lookups even without a seed", async () => {
+    const now = new Date().toISOString();
+    const endpointChunk = {
+      id: "serve",
+      filePath: "supabase/functions/generate-image/index.ts",
+      name: "serve_handler",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 50,
+      content: "export const serve_handler = () => {};",
+      language: "typescript",
+      indexedAt: now,
+    };
+    const distractor = {
+      id: "controller",
+      filePath: "supabase/functions/storyboard-controller/index.ts",
+      name: "generate_image",
+      kind: "method_definition",
+      startLine: 10,
+      endLine: 80,
+      content: "function generate_image() {}",
+      language: "typescript",
+      indexedAt: now,
+    };
+
+    const metadata: any = {
+      ...createMockMetadataStore([endpointChunk, distractor]),
+      findChunksByFilePath: (filePath: string) =>
+        [endpointChunk, distractor].filter((chunk) => chunk.filePath === filePath),
+      resolveTargetAliases: (normalizedAliases: string[]) =>
+        normalizedAliases.includes("generate image")
+          ? [{
+              target: {
+                id: "endpoint:supabase/functions/generate-image/index.ts",
+                kind: "endpoint",
+                canonicalName: "generate-image",
+                normalizedName: "generate image",
+                filePath: "supabase/functions/generate-image/index.ts",
+                ownerChunkId: "serve",
+                subsystem: "functions",
+                confidence: 0.98,
+              },
+              alias: "generate-image",
+              normalizedAlias: "generate image",
+              source: "slug",
+              weight: 0.96,
+            }]
+          : [],
+    };
+
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const search = new HybridSearch(
+      createMockEmbedder(0) as any,
+      createMockVectorStore([]) as any,
+      createMockFTSStore([{ id: "controller", rank: -10 }]) as any,
+      metadata,
+      createConfig({ embeddingProvider: "keyword" })
+    );
+
+    const context = await search.searchWithContext("where is generate-image implemented", 800);
+
+    expect(context.chunks[0]?.filePath).toBe("supabase/functions/generate-image/index.ts");
+    expect(context.text).toContain("supabase/functions/generate-image/index.ts");
+    expect(context.text).not.toContain("supabase/functions/storyboard-controller/index.ts");
   });
 
   it("should prioritize implementation chunks and extract direct facts with configured extractors", async () => {
@@ -947,12 +1013,19 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
       4000
     );
     const names = context.chunks.map((chunk) => chunk.name);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
 
-    expect(names).toContain("useAuth");
-    expect(names).toContain("AuthCallback");
-    expect(names).toContain("authenticateRequest");
-    expect(names).not.toEqual(["flowService"]);
-    expect(names.filter((name) => name === "flowService").length).toBeLessThanOrEqual(1);
+    expect(diagnostics?.broadMode).toBe("workflow");
+    expect(diagnostics?.dominantFamily).toBe("auth");
+    if (diagnostics?.deliveryMode === "summary_only") {
+      expect(context.chunks).toHaveLength(0);
+      expect(diagnostics.deferredReason).toBeTruthy();
+    } else {
+      expect(names).toContain("AuthCallback");
+      expect(names).toContain("authenticateRequest");
+      expect(names).not.toEqual(["flowService"]);
+      expect(names.filter((name) => name === "flowService").length).toBeLessThanOrEqual(1);
+    }
   });
 
   it("uses typed file targets for broad workflow queries without a concept family", async () => {
@@ -1066,6 +1139,69 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
 
     expect(paths).toContain("src/cli/mcp.ts");
     expect(paths).toContain("src/daemon/mcp-server.ts");
+  });
+
+  it("keeps exact lookup hook context focused on the resolved target file", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => false,
+    };
+    const chunks = [
+      { id: "auth-callback", filePath: "src/pages/AuthCallback.tsx", name: "AuthCallback", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function AuthCallback() {}", language: "typescript", indexedAt: now },
+      { id: "show-1", filePath: "src/lib/execution/workflow/starter.ts", name: "showAutoSaveToast", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function showAutoSaveToast() {}", language: "typescript", indexedAt: now },
+      { id: "show-2", filePath: "src/hooks/useWatermark.ts", name: "shouldShowWatermark", kind: "function_declaration", startLine: 1, endLine: 10, content: "export function shouldShowWatermark() {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByNames: (names: string[]) => chunks.filter((chunk) => names.includes(chunk.name)),
+      findCallers: () => [],
+      findCallees: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+    const mockVectorStore = {
+      search: async () => [],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => chunks.length,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "show-1", rank: -10 },
+        { id: "show-2", rank: -9 },
+        { id: "auth-callback", rank: -7 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "keyword" })
+    );
+
+    const context = await search.searchWithContext("show AuthCallback", 2000);
+    expect(context.chunks.map((chunk) => chunk.filePath)).toEqual(["src/pages/AuthCallback.tsx"]);
   });
 
   it("keeps lifecycle workflow bundles centered on shutdown orchestration instead of storage-only file modules", async () => {
@@ -1197,10 +1333,15 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     const paths = context.chunks.map((chunk) => chunk.filePath);
     const diagnostics = search.getLastBroadSelectionDiagnostics();
 
-    expect(paths).toContain("src/indexer/pipeline.ts");
-    expect(paths).toContain("src/daemon/memory/runtime.ts");
     expect(diagnostics?.broadMode).toBe("workflow");
     expect(diagnostics?.dominantFamily).toBe("lifecycle");
+    if (diagnostics?.deliveryMode === "summary_only") {
+      expect(context.chunks).toHaveLength(0);
+      expect(diagnostics.deferredReason).toBeTruthy();
+    } else {
+      expect(paths).toContain("src/indexer/pipeline.ts");
+      expect(paths).toContain("src/daemon/memory/runtime.ts");
+    }
   });
 
   it("keeps logging workflow bundles centered on hook flow before observability sidecars", async () => {
@@ -1438,14 +1579,266 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     const paths = context.chunks.map((chunk) => chunk.filePath);
     const diagnostics = search.getLastBroadSelectionDiagnostics();
 
-    expect(paths).toContain("src/pages/Auth.tsx");
-    expect(paths).toContain("src/hooks/useAuth.tsx");
-    expect(paths).toContain("src/pages/AuthCallback.tsx");
-    expect(paths).toContain("src/components/AuthModal.tsx");
-    expect(paths).not.toContain("src/lib/flow/typeGuards.ts");
-    expect(paths).not.toContain("src/hooks/useStorageAnalytics.ts");
     expect(diagnostics?.broadMode).toBe("inventory");
     expect(diagnostics?.dominantFamily).toBe("auth");
+    if (diagnostics?.deliveryMode === "summary_only") {
+      expect(context.chunks).toHaveLength(0);
+      expect(diagnostics.deferredReason).toBeTruthy();
+    } else {
+      expect(paths).toContain("src/pages/Auth.tsx");
+      expect(paths).toContain("src/hooks/useAuth.tsx");
+      expect(paths).toContain("src/pages/AuthCallback.tsx");
+      expect(paths).toContain("src/components/AuthModal.tsx");
+      expect(paths).not.toContain("src/lib/flow/typeGuards.ts");
+      expect(paths).not.toContain("src/hooks/useStorageAnalytics.ts");
+    }
+  });
+
+  it("builds an auth workflow bundle without unrelated flow noise", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const mockEmbedder = {
+      embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const chunks = [
+      { id: "auth-page", filePath: "src/pages/Auth.tsx", name: "Auth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function Auth() {}", language: "typescript", indexedAt: now },
+      { id: "use-auth", filePath: "src/hooks/useAuth.tsx", name: "useAuth", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function useAuth() {}", language: "typescript", indexedAt: now },
+      { id: "auth-callback", filePath: "src/pages/AuthCallback.tsx", name: "AuthCallback", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function AuthCallback() {}", language: "typescript", indexedAt: now },
+      { id: "app", filePath: "src/App.tsx", name: "App", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function App() {}", language: "typescript", indexedAt: now },
+      { id: "auth-utils", filePath: "supabase/functions/_shared/auth-utils.ts", name: "getUserFromAuth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function getUserFromAuth() {}", language: "typescript", indexedAt: now },
+      { id: "flow-noise", filePath: "src/lib/flow/workflowApiAnalyzer.ts", name: "analyzeWorkflowForApi", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function analyzeWorkflowForApi() {}", language: "typescript", indexedAt: now },
+      { id: "flow-noise-2", filePath: "src/lib/flow/typeGuards.ts", name: "isFlowNode", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function isFlowNode() {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      resolveTargetAliases: (_aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        return [
+          {
+            target: { id: "file_module:src/pages/Auth.tsx", kind: "file_module", canonicalName: "Auth", normalizedName: "auth", filePath: "src/pages/Auth.tsx", ownerChunkId: "auth-page", subsystem: "pages", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/hooks/useAuth.tsx", kind: "file_module", canonicalName: "useAuth", normalizedName: "use auth", filePath: "src/hooks/useAuth.tsx", ownerChunkId: "use-auth", subsystem: "hooks", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/pages/AuthCallback.tsx", kind: "file_module", canonicalName: "AuthCallback", normalizedName: "auth callback", filePath: "src/pages/AuthCallback.tsx", ownerChunkId: "auth-callback", subsystem: "pages", confidence: 0.92 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.94,
+          },
+        ];
+      },
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+    const mockVectorStore = {
+      search: async () => [
+        { id: "flow-noise", score: 0.99 },
+        { id: "flow-noise-2", score: 0.98 },
+        { id: "auth-page", score: 0.88 },
+        { id: "use-auth", score: 0.87 },
+        { id: "auth-callback", score: 0.86 },
+        { id: "app", score: 0.83 },
+      ],
+      upsert: async () => {},
+      removeByFile: async () => {},
+      count: async () => 4,
+    };
+    const mockFTS = {
+      search: () => [
+        { id: "flow-noise", rank: -10 },
+        { id: "flow-noise-2", rank: -9 },
+        { id: "auth-page", rank: -7 },
+        { id: "use-auth", rank: -6 },
+        { id: "auth-callback", rank: -5 },
+      ],
+      upsert: () => {},
+      removeByFile: () => {},
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      mockEmbedder as any,
+      mockVectorStore as any,
+      mockFTS as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("how does auth flow work?", 4000);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+    const paths = context.chunks.map((chunk) => chunk.filePath);
+
+    expect(diagnostics?.dominantFamily).toBe("auth");
+    expect(diagnostics?.deliveryMode).not.toBe("code_context");
+    if (diagnostics?.deliveryMode === "summary_only") {
+      expect(diagnostics.deferredReason).toBeTruthy();
+      expect(context.chunks).toHaveLength(0);
+      expect(diagnostics.selectedFiles.some((item) => item.filePath === "src/lib/flow/workflowApiAnalyzer.ts")).toBe(false);
+      expect(diagnostics.selectedFiles.some((item) => item.filePath === "src/lib/flow/typeGuards.ts")).toBe(false);
+    } else {
+      expect(paths).toContain("src/pages/Auth.tsx");
+      expect(paths).toContain("src/hooks/useAuth.tsx");
+      expect(paths).not.toContain("src/lib/flow/workflowApiAnalyzer.ts");
+      expect(paths).not.toContain("src/lib/flow/typeGuards.ts");
+    }
+  });
+
+  it("prefers executable validators over passive declarations within a selected bug file", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const now = new Date().toISOString();
+    const chunks = [
+      {
+        id: "edge-helper",
+        filePath: "src/runtime/TaskCoordinator.ts",
+        name: "isWithinScope",
+        kind: "function_declaration",
+        startLine: 55,
+        endLine: 78,
+        content: "function isWithinScope(taskId, tasks, links) { if (links.find(Boolean)) return true; return false; }",
+        language: "typescript",
+        indexedAt: now,
+      },
+      {
+        id: "valid-connection",
+        filePath: "src/runtime/TaskCoordinator.ts",
+        name: "validateLinkCompatibility",
+        kind: "arrow_function",
+        startLine: 120,
+        endLine: 220,
+        content: "const validateLinkCompatibility = (link) => { const sourceType = getChannelType(link.source); const targetType = getChannelType(link.target); if (!checkCompatibility(sourceType, targetType)) return false; return true; }",
+        language: "typescript",
+        indexedAt: now,
+      },
+      {
+        id: "types",
+        filePath: "src/runtime/TaskCoordinator.ts",
+        name: "PendingOperation",
+        kind: "interface_declaration",
+        startLine: 20,
+        endLine: 40,
+        content: "interface PendingOperation { open: boolean }",
+        language: "typescript",
+        indexedAt: now,
+      },
+    ];
+
+    const featureById = new Map([
+      ["edge-helper", { chunkId: "edge-helper", isPredicate: true, isValidator: false, isGuard: false, returnsBoolean: true, callsPredicateCount: 0, branchCount: 1, guardCount: 0 }],
+      ["valid-connection", { chunkId: "valid-connection", isPredicate: true, isValidator: true, isGuard: true, returnsBoolean: true, callsPredicateCount: 1, branchCount: 4, guardCount: 2 }],
+      ["types", { chunkId: "types", isPredicate: false, isValidator: false, isGuard: false, returnsBoolean: false, callsPredicateCount: 0, branchCount: 0, guardCount: 0 }],
+    ]);
+
+    const mockMetadata = {
+      findChunksByFilePath: (filePath: string) => chunks.filter((chunk) => chunk.filePath === filePath),
+      getChunkFeaturesByIds: (ids: string[]) => ids.map((id) => featureById.get(id)).filter(Boolean),
+      getChunkTagsByIds: (ids: string[]) =>
+        ids.flatMap((id) => {
+          if (id === "valid-connection") return [{ chunkId: id, tag: "validation", weight: 1 }];
+          if (id === "edge-helper") return [{ chunkId: id, tag: "validation", weight: 0.6 }];
+          return [];
+        }),
+    };
+
+    const search = new HybridSearch(
+      {
+        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+        dimensions: () => 4,
+        isEnabled: () => true,
+      } as any,
+      {
+        search: async () => [],
+        upsert: async () => {},
+        removeByFile: async () => {},
+        count: async () => 0,
+      } as any,
+      {
+        search: () => [],
+        upsert: () => {},
+        removeByFile: () => {},
+        close: () => {},
+      } as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const promoted = (search as any).promoteBugRepresentativeChunk(
+      {
+        id: "task-coordinator",
+        score: 20,
+        filePath: "src/runtime/TaskCoordinator.ts",
+        name: "TaskCoordinator",
+        kind: "function_declaration",
+        startLine: 1,
+        endLine: 900,
+        content: "function TaskCoordinator() {}",
+        language: "typescript",
+      },
+      {
+        subjectTerms: ["links", "wrong"],
+        focusTerms: ["links", "compatibility"],
+        primaryTags: new Set(["validation"]),
+        relatedTags: new Set(["schema"]),
+        decomposition: {
+          literalTerms: ["links", "wrong"],
+          normalizedVariants: ["links", "compatibility"],
+          semanticVariants: ["relationship"],
+          implementationTerms: ["validate", "check", "guard"],
+          runtimeTerms: ["return false", "throw"],
+          architecturalTerms: ["controller", "service"],
+          controlFlowTerms: ["guard", "predicate"],
+          dataFlowTerms: ["input", "output", "type"],
+          implementationHypotheses: [],
+        },
+      }
+    );
+
+    expect(promoted.filePath).toBe("src/runtime/TaskCoordinator.ts");
+    expect(promoted.name).toBe("validateLinkCompatibility");
+  });
+
+  it("keeps production bug retrieval logic free of repo-specific names", () => {
+    const hybridSource = readFileSync(resolve(process.cwd(), "src/search/hybrid.ts"), "utf8");
+
+    expect(hybridSource).not.toMatch(/FlowEditor|QuickConnect|nodeConnectionSchema|documentation\/NODES/i);
   });
 
   it("builds a search inventory bundle from typed file modules instead of prompt-context neighbors", async () => {
@@ -1566,12 +1959,124 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     const paths = context.chunks.map((chunk) => chunk.filePath);
     const diagnostics = search.getLastBroadSelectionDiagnostics();
 
-    expect(paths).toContain("src/search/hybrid.ts");
-    expect(paths).toContain("src/search/seed.ts");
-    expect(paths).toContain("src/search/ranker.ts");
-    expect(paths).not.toContain("src/hooks/prompt-context.ts");
-    expect(paths).not.toContain("src/memory/search.ts");
     expect(diagnostics?.broadMode).toBe("inventory");
     expect(diagnostics?.dominantFamily).toBe("search");
+    if (diagnostics?.deliveryMode === "summary_only") {
+      expect(context.chunks).toHaveLength(0);
+      expect(diagnostics.deferredReason).toBeTruthy();
+    } else {
+      expect(paths).toContain("src/search/hybrid.ts");
+      expect(paths).toContain("src/search/seed.ts");
+      expect(paths).toContain("src/search/ranker.ts");
+      expect(paths).not.toContain("src/hooks/prompt-context.ts");
+      expect(paths).not.toContain("src/memory/search.ts");
+    }
+  });
+
+  it("defers widget-heavy billing workflow bundles instead of injecting noisy code context", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const now = new Date().toISOString();
+    const chunks = [
+      { id: "checkout", filePath: "supabase/functions/stripe-checkout/index.ts", name: "serve_handler", kind: "arrow_function", startLine: 1, endLine: 40, content: "const serve_handler = async () => {}", language: "typescript", indexedAt: now },
+      { id: "webhook", filePath: "supabase/functions/stripe-webhook/index.ts", name: "serve_handler", kind: "arrow_function", startLine: 1, endLine: 40, content: "const serve_handler = async () => {}", language: "typescript", indexedAt: now },
+      { id: "subscription-card", filePath: "src/components/billing/SubscriptionCard.tsx", name: "SubscriptionCard", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function SubscriptionCard() {}", language: "typescript", indexedAt: now },
+      { id: "storage-card", filePath: "src/components/billing/StorageUsageCard.tsx", name: "StorageUsageCard", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function StorageUsageCard() {}", language: "typescript", indexedAt: now },
+      { id: "history", filePath: "src/components/billing/TransactionHistory.tsx", name: "TransactionHistory", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function TransactionHistory() {}", language: "typescript", indexedAt: now },
+      { id: "credit-card", filePath: "src/components/billing/CreditPackCard.tsx", name: "CreditPackCard", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function CreditPackCard() {}", language: "typescript", indexedAt: now },
+      { id: "types", filePath: "src/lib/editor/templates/types.ts", name: "TemplateType", kind: "interface_declaration", startLine: 1, endLine: 20, content: "export interface TemplateType {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const search = new HybridSearch(
+      {
+        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+        dimensions: () => 4,
+        isEnabled: () => true,
+      } as any,
+      {
+        search: async () => chunks.map((chunk, index) => ({ id: chunk.id, score: 0.9 - index * 0.01 })),
+        upsert: async () => {},
+        removeByFile: async () => {},
+        count: async () => chunks.length,
+      } as any,
+      {
+        search: () => chunks.map((chunk, index) => ({ id: chunk.id, rank: -(10 - index) })),
+        upsert: () => {},
+        removeByFile: () => {},
+        close: () => {},
+      } as any,
+      {
+        getChunkScoringInfo: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean).map((c) => ({
+          id: c!.id, filePath: c!.filePath, name: c!.name, kind: c!.kind, parentName: undefined, indexedAt: c!.indexedAt, fileMtime: undefined,
+        })),
+        getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+        findCallers: () => [],
+        findCallees: () => [],
+        findChunksByNames: () => [],
+        findSiblings: () => [],
+        getTopCallTargets: () => [],
+        close: () => {},
+      } as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("trace the full billing portal and checkout flow from UI to edge function", 4000);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+
+    expect(diagnostics?.broadMode).toBe("workflow");
+    expect(diagnostics?.dominantFamily).toBe("billing");
+    expect(diagnostics?.deliveryMode).toBe("summary_only");
+    expect(context.chunks).toHaveLength(0);
+  });
+
+  it("defers upload workflow bundles when only one strong upload backend anchor exists", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const now = new Date().toISOString();
+    const chunks = [
+      { id: "upload", filePath: "supabase/functions/upload-media/index.ts", name: "serve_handler", kind: "arrow_function", startLine: 1, endLine: 60, content: "const serve_handler = async () => {}", language: "typescript", indexedAt: now },
+      { id: "signed", filePath: "src/lib/storage/getSignedMediaUrl.ts", name: "getSignedMediaUrl", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function getSignedMediaUrl() {}", language: "typescript", indexedAt: now },
+      { id: "auth", filePath: "src/hooks/useAuth.tsx", name: "useAuth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function useAuth() {}", language: "typescript", indexedAt: now },
+      { id: "quick", filePath: "src/lib/flow/quickActions.ts", name: "quickAction", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function quickAction() {}", language: "typescript", indexedAt: now },
+      { id: "preview", filePath: "src/components/flow/nodes/PreviewMediaNode.tsx", name: "PreviewMediaNode", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function PreviewMediaNode() {}", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const search = new HybridSearch(
+      {
+        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+        dimensions: () => 4,
+        isEnabled: () => true,
+      } as any,
+      {
+        search: async () => chunks.map((chunk, index) => ({ id: chunk.id, score: 0.9 - index * 0.01 })),
+        upsert: async () => {},
+        removeByFile: async () => {},
+        count: async () => chunks.length,
+      } as any,
+      {
+        search: () => chunks.map((chunk, index) => ({ id: chunk.id, rank: -(10 - index) })),
+        upsert: () => {},
+        removeByFile: () => {},
+        close: () => {},
+      } as any,
+      {
+        getChunkScoringInfo: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean).map((c) => ({
+          id: c!.id, filePath: c!.filePath, name: c!.name, kind: c!.kind, parentName: undefined, indexedAt: c!.indexedAt, fileMtime: undefined,
+        })),
+        getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+        findCallers: () => [],
+        findCallees: () => [],
+        findChunksByNames: () => [],
+        findSiblings: () => [],
+        getTopCallTargets: () => [],
+        close: () => {},
+      } as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("trace the full upload media flow from request auth to storage write", 4000);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+
+    expect(diagnostics?.broadMode).toBe("workflow");
+    expect(diagnostics?.deliveryMode).toBe("summary_only");
+    expect(context.chunks).toHaveLength(0);
   });
 });

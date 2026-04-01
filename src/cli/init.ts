@@ -116,8 +116,9 @@ export function initCommand(): Command {
       // This avoids baking the token into settings.json at init time, which
       // would fail if the daemon hasn't started yet (token file doesn't exist).
       const buildCurlHook = (
-        endpoint: string
-      ): { hooks: { type: string; command: string }[] } => {
+        endpoint: string,
+        matcher?: string
+      ): { matcher?: string; hooks: { type: string; command: string }[] } => {
         // The command reads the token from disk each time it fires.
         // If the token file is absent (daemon not started), $TOKEN is empty
         // and the header becomes "Authorization: Bearer " — the daemon
@@ -140,6 +141,7 @@ export function initCommand(): Command {
         ].join(' ')
 
         return {
+          ...(matcher ? { matcher } : {}),
           hooks: [{ type: 'command', command }]
         }
       }
@@ -163,30 +165,24 @@ export function initCommand(): Command {
           return (
             (typeof entry.url === 'string' && (
               entry.url.includes('/hooks/session-start') ||
-              entry.url.includes('/hooks/prompt-context')
+              entry.url.includes('/hooks/prompt-context') ||
+              entry.url.includes('/hooks/pre-tool-use')
             )) ||
             (typeof entry.command === 'string' && (
               entry.command.includes('/hooks/session-start') ||
               entry.command.includes('/hooks/prompt-context') ||
-              entry.command.includes('Reporecall codebase context was injected')
+              entry.command.includes('/hooks/pre-tool-use') ||
+              entry.command.includes('Reporecall codebase context was injected') ||
+              entry.command.includes('Reporecall context is injected via hooks')
             ))
           );
         });
       }
 
-      // PreToolUse soft nudge: remind Claude that codebase context was already injected.
-      // No hard blocking — Claude picks the best tool. The "Files included:" line in the
-      // injected header tells Claude exactly what it already has.
-      const preToolHook = {
-        matcher: 'Agent',
-        hooks: [{
-          type: 'command',
-          command: `echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"Reporecall codebase context was injected via hooks with a file list. Check what is already included before searching. Do not re-fetch listed files."}}'`
-        }]
-      }
       const preToolHooks = existingHooks.PreToolUse ?? []
 
-      settings.hooks = {
+      const filteredPreToolHooks = (preToolHooks as unknown[]).filter((h: unknown) => !isMemoryHook(h))
+      const nextHooks: Record<string, unknown> = {
         ...existingHooks,
         SessionStart: [
           ...sessionHooks.filter((h: unknown) => !isMemoryHook(h)),
@@ -196,11 +192,13 @@ export function initCommand(): Command {
           ...promptHooks.filter((h: unknown) => !isMemoryHook(h)),
           memoryPromptHook
         ],
-        PreToolUse: [
-          ...(preToolHooks as unknown[]).filter((h: unknown) => !isMemoryHook(h)),
-          preToolHook
-        ]
       }
+      if (filteredPreToolHooks.length > 0) {
+        nextHooks.PreToolUse = filteredPreToolHooks
+      } else {
+        delete nextHooks.PreToolUse
+      }
+      settings.hooks = nextHooks
 
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
       console.log(`  Created Claude Code hooks in ${settingsPath}`)
@@ -225,7 +223,10 @@ export function initCommand(): Command {
       // `node <entry>` works. Fall back to process.argv[1] for global installs.
       const pkgJsonPath = resolve(projectRoot, 'node_modules', '@proofofwork-agency', 'reporecall', 'package.json')
       let cliEntry: string
-      if (existsSync(pkgJsonPath)) {
+      const currentEntry = process.argv[1] ? resolve(process.argv[1]) : ''
+      if (currentEntry && existsSync(currentEntry) && /\.(?:c|m)?js$/.test(currentEntry)) {
+        cliEntry = currentEntry
+      } else if (existsSync(pkgJsonPath)) {
         const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'))
         const binRelative = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.reporecall ?? 'dist/memory.js'
         cliEntry = resolve(dirname(pkgJsonPath), binRelative)

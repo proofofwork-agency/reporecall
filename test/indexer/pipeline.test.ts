@@ -84,6 +84,102 @@ describe("metadata store", () => {
   });
 });
 
+describe("pipeline streaming windows", () => {
+  const TEST_PROJECT = resolve(import.meta.dirname, "..", ".test-pipeline-streaming");
+  const TEST_DATA = resolve(TEST_PROJECT, ".memory");
+
+  function makeConfig(): MemoryConfig {
+    return {
+      projectRoot: TEST_PROJECT,
+      dataDir: TEST_DATA,
+      embeddingProvider: "local",
+      embeddingModel: "test",
+      embeddingDimensions: 4,
+      ollamaUrl: "",
+      extensions: [".ts"],
+      ignorePatterns: [".memory"],
+      maxFileSize: 100 * 1024,
+      batchSize: 8,
+      fileBatchSize: 2,
+      embedBatchSize: 2,
+      adaptiveBatching: true,
+      heapSoftLimitMb: 512,
+      maxChunkTextBytesPerWindow: 32 * 1024,
+      contextBudget: 8000,
+      maxContextChunks: 0,
+      sessionBudget: 2000,
+      searchWeights: { vector: 0.5, keyword: 0.3, recency: 0.2 },
+      rrfK: 60,
+      graphExpansion: false,
+      graphDiscountFactor: 0.6,
+      siblingExpansion: false,
+      siblingDiscountFactor: 0.4,
+      reranking: false,
+      rerankingModel: "",
+      rerankTopK: 25,
+      codeBoostFactor: 1.5,
+      testPenaltyFactor: 0.3,
+      anonymousPenaltyFactor: 0.5,
+      debounceMs: 2000,
+      port: 37225,
+      implementationPaths: ["src/", "lib/", "bin/"],
+      factExtractors: [],
+      conceptBundles: [],
+      memory: false,
+      memoryBudget: 0,
+      memoryDirs: [],
+      memoryWatch: false,
+      memoryCodeFloorRatio: 1,
+      memoryHotBudget: 0,
+      memoryWorkingBudget: 0,
+      memoryEpisodeBudget: 0,
+      memoryArchiveDays: 30,
+      memoryCompactionHours: 6,
+      memoryWritableDir: resolve(TEST_PROJECT, ".memory/memories"),
+      memoryAutoCreate: false,
+      memoryFactPromotionThreshold: 3,
+      memoryWorkingHistoryLimit: 1,
+    };
+  }
+
+  beforeEach(() => {
+    mkdirSync(TEST_PROJECT, { recursive: true });
+    for (let i = 0; i < 5; i += 1) {
+      writeFileSync(
+        resolve(TEST_PROJECT, `file-${i}.ts`),
+        `export function fn${i}() { return ${i}; }\n`
+      );
+    }
+  });
+
+  afterEach(() => {
+    rmSync(TEST_PROJECT, { recursive: true, force: true });
+  });
+
+  it("embeds in bounded windows instead of one repo-sized batch", async () => {
+    const embedCalls: number[] = [];
+    const embedder = {
+      embed: async (texts: string[]) => {
+        embedCalls.push(texts.length);
+        return texts.map(() => [0.1, 0.2, 0.3, 0.4]);
+      },
+      dimensions: () => 4,
+      isEnabled: () => true,
+    };
+    const pipeline = new IndexingPipeline(makeConfig(), { embedder });
+
+    try {
+      const result = await pipeline.indexAll();
+      expect(result.filesProcessed).toBe(5);
+      expect(result.chunksCreated).toBeGreaterThan(0);
+      expect(embedCalls.length).toBeGreaterThan(1);
+      expect(Math.max(...embedCalls)).toBeLessThanOrEqual(2);
+    } finally {
+      pipeline.close();
+    }
+  }, 30000);
+});
+
 describe("FTS store", () => {
   let fts: FTSStore;
 

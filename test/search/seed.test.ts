@@ -180,6 +180,62 @@ describe("resolveSeeds", () => {
       expect(result.bestSeed?.targetKind).toBe("endpoint");
     });
 
+    it("suppresses lower-specificity alias hits when a directly mentioned multi-token target exists", () => {
+      const endpointChunk = makeChunk({
+        id: "serve-handler",
+        name: "serve_handler",
+        filePath: "supabase/functions/generate-image/index.ts",
+        kind: "function_declaration",
+      });
+      const genericEndpoint = makeChunk({
+        id: "wavespeed-handler",
+        name: "serve_handler",
+        filePath: "supabase/functions/generate-wavespeed-pricing/index.ts",
+        kind: "function_declaration",
+      });
+      const metadata = createFakeMetadata([endpointChunk, genericEndpoint]);
+      metadata.resolveTargetAliases = () => [
+        {
+          target: {
+            id: "endpoint:supabase/functions/generate-image/index.ts",
+            kind: "endpoint",
+            canonicalName: "generate-image",
+            normalizedName: "generate image",
+            filePath: "supabase/functions/generate-image/index.ts",
+            ownerChunkId: "serve-handler",
+            subsystem: "functions",
+            confidence: 0.98,
+          },
+          alias: "generate-image",
+          normalizedAlias: "generate image",
+          source: "slug",
+          weight: 0.95,
+        },
+        {
+          target: {
+            id: "endpoint:supabase/functions/generate-wavespeed-pricing/index.ts",
+            kind: "endpoint",
+            canonicalName: "generate-wavespeed-pricing",
+            normalizedName: "generate wavespeed pricing",
+            filePath: "supabase/functions/generate-wavespeed-pricing/index.ts",
+            ownerChunkId: "wavespeed-handler",
+            subsystem: "functions",
+            confidence: 0.98,
+          },
+          alias: "generate",
+          normalizedAlias: "generate",
+          source: "parent_dir",
+          weight: 0.94,
+        },
+      ];
+      const fts = createFakeFTS([]);
+
+      const result = resolveSeeds("how does generate-image work?", metadata as any, fts as any);
+
+      expect(result.seeds.some((seed) => seed.filePath === "supabase/functions/generate-wavespeed-pricing/index.ts")).toBe(false);
+      expect(result.bestSeed?.filePath).toBe("supabase/functions/generate-image/index.ts");
+    });
+
     it("keeps subsystem nouns routable without outranking direct symbols", () => {
       const pipelineChunk = makeChunk({
         id: "index-pipeline",
@@ -213,6 +269,62 @@ describe("resolveSeeds", () => {
       expect(result.bestSeed?.filePath).toBe("src/indexer/pipeline.ts");
       expect(["subsystem", "symbol"]).toContain(result.bestSeed?.targetKind);
       expect(result.bestSeed?.reason).toBe("resolved_target");
+    });
+
+    it("drops generic broad aliases like flow when a more specific family target exists", () => {
+      const flowChunk = makeChunk({
+        id: "workflow-api",
+        name: "analyzeWorkflowForApi",
+        filePath: "src/lib/flow/workflowApiAnalyzer.ts",
+        kind: "function_declaration",
+      });
+      const authChunk = makeChunk({
+        id: "auth-page",
+        name: "Auth",
+        filePath: "src/pages/Auth.tsx",
+        kind: "function_declaration",
+      });
+      const metadata = createFakeMetadata([flowChunk, authChunk]);
+      metadata.resolveTargetAliases = () => [
+        {
+          target: {
+            id: "file_module:src/lib/flow/workflowApiAnalyzer.ts",
+            kind: "file_module",
+            canonicalName: "workflowApiAnalyzer",
+            normalizedName: "workflow api analyzer",
+            filePath: "src/lib/flow/workflowApiAnalyzer.ts",
+            ownerChunkId: "workflow-api",
+            subsystem: "flow",
+            confidence: 0.92,
+          },
+          alias: "flow",
+          normalizedAlias: "flow",
+          source: "slug",
+          weight: 0.95,
+        },
+        {
+          target: {
+            id: "file_module:src/pages/Auth.tsx",
+            kind: "file_module",
+            canonicalName: "Auth",
+            normalizedName: "auth",
+            filePath: "src/pages/Auth.tsx",
+            ownerChunkId: "auth-page",
+            subsystem: "auth",
+            confidence: 0.92,
+          },
+          alias: "auth",
+          normalizedAlias: "auth",
+          source: "file_path",
+          weight: 0.95,
+        },
+      ];
+      const fts = createFakeFTS([]);
+
+      const result = resolveSeeds("how does auth flow work?", metadata as any, fts as any);
+
+      expect(result.bestSeed?.filePath).toBe("src/pages/Auth.tsx");
+      expect(result.seeds.some((seed) => seed.filePath === "src/lib/flow/workflowApiAnalyzer.ts")).toBe(false);
     });
 
     it("prefers direct symbol matches over derived subsystem expansions on multi-term queries", () => {

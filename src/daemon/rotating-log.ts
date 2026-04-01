@@ -18,6 +18,7 @@ export class RotatingLog {
 
   async append(message: string): Promise<void> {
     const op = this.writeQueue.then(async () => {
+      mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
       if (this.currentSize === null) {
         try {
           const s = await stat(this.filePath);
@@ -36,7 +37,11 @@ export class RotatingLog {
       const isNewFile = this.currentSize === 0;
       await appendFile(this.filePath, message, { mode: 0o600 });
       if (isNewFile) {
-        await chmod(this.filePath, 0o600);
+        try {
+          await chmod(this.filePath, 0o600);
+        } catch {
+          // The file may have been removed during test teardown; the write itself already succeeded or failed above.
+        }
       }
       this.currentSize! += bytes;
     });
@@ -60,7 +65,11 @@ export class RotatingLog {
     // Rename current file to .1
     try {
       await rename(this.filePath, `${this.filePath}.1`);
-      await chmod(`${this.filePath}.1`, 0o600);
+      try {
+        await chmod(`${this.filePath}.1`, 0o600);
+      } catch {
+        // Best-effort only.
+      }
     } catch { /* may not exist */ }
 
     this.currentSize = 0;

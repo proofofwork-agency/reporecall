@@ -16,6 +16,11 @@ export interface MemoryConfig {
   ignorePatterns: string[];
   maxFileSize: number;
   batchSize: number;
+  fileBatchSize?: number;
+  embedBatchSize?: number;
+  adaptiveBatching?: boolean;
+  heapSoftLimitMb?: number;
+  maxChunkTextBytesPerWindow?: number;
   contextBudget: number;
   maxContextChunks: number;
   sessionBudget: number;
@@ -88,6 +93,11 @@ const UserConfigSchema = z.object({
   ignorePatterns: z.array(z.string()).optional(),
   maxFileSize: z.number().positive().optional(),
   batchSize: z.number().positive().optional(),
+  fileBatchSize: z.number().positive().optional(),
+  embedBatchSize: z.number().positive().optional(),
+  adaptiveBatching: z.boolean().optional(),
+  heapSoftLimitMb: z.number().positive().optional(),
+  maxChunkTextBytesPerWindow: z.number().positive().optional(),
   contextBudget: z.number().min(0).optional(),
   maxContextChunks: z.number().min(0).optional(),
   sessionBudget: z.number().positive().optional(),
@@ -164,6 +174,11 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
+  fileBatchSize: 24,
+  embedBatchSize: 16,
+  adaptiveBatching: true,
+  heapSoftLimitMb: 2048,
+  maxChunkTextBytesPerWindow: 2 * 1024 * 1024,
   contextBudget: 0,
   maxContextChunks: 0,
   sessionBudget: 2000,
@@ -181,7 +196,21 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   anonymousPenaltyFactor: 0.5,
   debounceMs: 2000,
   port: 37222,
-  implementationPaths: ["src/", "lib/", "bin/"],
+  implementationPaths: [
+    "src/",
+    "lib/",
+    "bin/",
+    "app/",
+    "server/",
+    "api/",
+    "services/",
+    "functions/",
+    "workers/",
+    "cmd/",
+    "cli/",
+    "packages/",
+    "supabase/functions/",
+  ],
   memory: true,
   memoryBudget: 500,
   memoryDirs: [],
@@ -213,7 +242,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     {
       kind: "search_pipeline",
       pattern: "\\bsearch\\s+pipeline\\b|\\bretrieval\\s+pipeline\\b|\\bintent\\s+classification\\s+route\\b|\\bhybrid\\s+search\\b|\\bsearch\\s+routing\\b|\\bquery\\s+routing\\b|\\broute\\s+selection\\b",
-      symbols: ["searchWithContext", "search", "buildDeepRouteContext", "assembleDeepRouteContext", "handlePromptContextDetailed", "resolveSeeds", "classifyIntent", "deriveRoute"],
+      symbols: ["searchWithContext", "search", "buildDeepRouteContext", "assembleDeepRouteContext", "handlePromptContextDetailed", "resolveSeeds", "classifyIntent"],
       maxChunks: 8,
     },
     {
@@ -299,6 +328,9 @@ export function loadConfig(projectRoot: string): MemoryConfig {
       return [...merged, ...additions];
     })(),
   };
+
+  if (merged.fileBatchSize == null) merged.fileBatchSize = merged.batchSize;
+  if (merged.embedBatchSize == null) merged.embedBatchSize = merged.batchSize;
 
   merged.memoryDirs = (merged.memoryDirs ?? []).map((dir) =>
     isAbsolute(dir) ? dir : resolve(projectRoot, dir)

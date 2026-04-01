@@ -7,9 +7,9 @@ import type {
   TargetAliasSource,
   TargetKind,
 } from "../storage/types.js";
-import { STOP_WORDS, expandQueryTerms, getQueryTermVariants, isTestFile, tokenizeQueryTerms } from "./utils.js";
+import { GENERIC_QUERY_ACTION_TERMS, STOP_WORDS, expandQueryTerms, getQueryTermVariants, isTestFile, tokenizeQueryTerms } from "./utils.js";
 
-export const INDEX_FORMAT_VERSION = "0.3.0-targets";
+export const INDEX_FORMAT_VERSION = "0.3.6-rebuild-execution-roots";
 
 const CODE_DELIMITER_RE = /[^a-z0-9]+/g;
 const PATH_LIKE_TARGET_RE = /\b[\w./-]+\b/g;
@@ -290,7 +290,7 @@ export function buildTargetCatalog(
   };
 }
 
-function extractPhraseCandidates(query: string): string[] {
+function extractLiteralPhraseCandidates(query: string): string[] {
   const lower = query.toLowerCase();
   const phrases = new Set<string>();
 
@@ -315,10 +315,20 @@ function extractPhraseCandidates(query: string): string[] {
     if (tri.split(" ").length === 3) phrases.add(tri);
   }
 
+  return Array.from(phrases).filter((phrase) => phrase.length >= 2);
+}
+
+function extractPhraseCandidates(query: string): string[] {
+  const phrases = new Set(extractLiteralPhraseCandidates(query));
   for (const term of expandQueryTerms(query)) {
+    const normalized = normalizeTargetText(term.term);
+    if (!normalized) continue;
+    const tokens = normalized.split(" ").filter(Boolean);
+    if (tokens.length === 1 && (STOP_WORDS.has(tokens[0] ?? "") || GENERIC_QUERY_ACTION_TERMS.has(tokens[0] ?? ""))) {
+      continue;
+    }
     phrases.add(term.term);
   }
-
   return Array.from(phrases).filter((phrase) => phrase.length >= 2);
 }
 
@@ -326,7 +336,8 @@ function scoreResolvedHit(
   query: string,
   phrase: string,
   hit: ResolvedTargetAliasHit,
-  queryTerms: ReturnType<typeof expandQueryTerms>
+  queryTerms: ReturnType<typeof expandQueryTerms>,
+  options?: { matchedFromQuery?: boolean; explicitTargetLike?: boolean }
 ): number {
   const normalizedPhrase = normalizeTargetText(phrase);
   const normalizedQuery = normalizeTargetText(query);
@@ -340,6 +351,7 @@ function scoreResolvedHit(
   if (normalizedPhrase === hit.target.normalizedName || normalizedPhrase === hit.normalizedAlias) {
     score += 0.22;
   }
+  const phraseLooksLikeSlug = SLUG_RE.test(phrase);
   if (queryDirectlyMentionsAlias) {
     score += 0.08;
   }
@@ -354,6 +366,15 @@ function scoreResolvedHit(
   }
   if (/\bhow\s+does\b/.test(query) && hit.target.kind === "endpoint") {
     score += 0.1;
+  }
+  if (phraseLooksLikeSlug && (hit.target.kind === "endpoint" || hit.target.kind === "file_module")) {
+    score += hit.source === "parent_dir" || hit.source === "slug" || hit.source === "file_path" ? 0.26 : 0.18;
+  }
+  if (phraseLooksLikeSlug && hit.target.kind === "symbol" && hit.source === "symbol") {
+    score *= 0.72;
+  }
+  if (options?.matchedFromQuery && (hit.target.kind === "endpoint" || hit.target.kind === "file_module")) {
+    score += 0.08;
   }
   if (hit.target.kind === "subsystem") {
     score += 0.02;
@@ -372,6 +393,9 @@ function scoreResolvedHit(
   if (hit.target.kind === "subsystem" && !queryDirectlyMentionsAlias && !queryDirectlyMentionsTarget) {
     score *= 0.58;
   }
+  if (options?.explicitTargetLike && !options.matchedFromQuery && !queryDirectlyMentionsAlias && !queryDirectlyMentionsTarget) {
+    score *= hit.target.kind === "subsystem" ? 0.75 : 0.42;
+  }
   return Math.min(0.995, score + (hit.target.confidence * 0.06));
 }
 
@@ -382,8 +406,25 @@ export function resolveTargetsForQuery(
     "resolveTargetAliases"
   >
 ): ResolvedTargetCandidate[] {
+  const targetKindRank = (kind: TargetKind): number => {
+    switch (kind) {
+      case "endpoint":
+        return 4;
+      case "file_module":
+        return 3;
+      case "symbol":
+        return 2;
+      case "subsystem":
+        return 1;
+      default:
+        return 0;
+    }
+  };
   const queryTerms = expandQueryTerms(query);
+  const literalPhrases = extractLiteralPhraseCandidates(query);
   const phrases = extractPhraseCandidates(query);
+  const rawNormalizedPhrases = new Set(literalPhrases.map((phrase) => normalizeTargetText(phrase)).filter(Boolean));
+  const explicitTargetLike = SLUG_RE.test(query) || /[\w./-]+\.\w{1,10}/.test(query) || /\b[A-Z][a-z][a-zA-Z0-9]*\b/.test(query) || /\b[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*\b/.test(query);
   const normalizedAliases = Array.from(new Set(phrases.map((phrase) => normalizeTargetText(phrase)).filter(Boolean)));
   const hits = [
     ...lookup.resolveTargetAliases(normalizedAliases, 40, ["endpoint", "file_module"]),
@@ -393,7 +434,10 @@ export function resolveTargetsForQuery(
 
   for (const hit of hits) {
     const phrase = phrases.find((candidate) => normalizeTargetText(candidate) === hit.normalizedAlias) ?? hit.alias;
-    const confidence = scoreResolvedHit(query.toLowerCase(), phrase.toLowerCase(), hit, queryTerms);
+    const confidence = scoreResolvedHit(query.toLowerCase(), phrase.toLowerCase(), hit, queryTerms, {
+      matchedFromQuery: rawNormalizedPhrases.has(hit.normalizedAlias),
+      explicitTargetLike,
+    });
     const current = byTarget.get(hit.target.id);
     if (!current || confidence > current.confidence) {
       byTarget.set(hit.target.id, {
@@ -408,7 +452,11 @@ export function resolveTargetsForQuery(
   }
 
   return Array.from(byTarget.values())
-    .sort((a, b) => b.confidence - a.confidence || b.alias.length - a.alias.length)
+    .sort((a, b) =>
+      b.confidence - a.confidence
+      || targetKindRank(b.target.kind) - targetKindRank(a.target.kind)
+      || b.alias.length - a.alias.length
+    )
     .slice(0, 12);
 }
 

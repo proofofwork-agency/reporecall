@@ -1,0 +1,483 @@
+{
+  "version": "0.3.3",
+  "generatedAt": "2026-03-23T00:00:00.000Z",
+  "projectRoot": "../duto",
+  "queries": [
+    {
+      "id": "r0-generate-image-implemented",
+      "query": "where is generate-image implemented",
+      "expectedRoute": "R0",
+      "category": "generation",
+      "relevance": {
+        "supabase/functions/generate-image/index.ts": 3
+      },
+      "mustInclude": [
+        "supabase/functions/generate-image/index.ts"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/"
+      ]
+    },
+    {
+      "id": "r0-upload-media-implemented",
+      "query": "where is upload-media implemented",
+      "expectedRoute": "R0",
+      "category": "media",
+      "relevance": {
+        "supabase/functions/upload-media/index.ts": 3
+      },
+      "mustInclude": [
+        "supabase/functions/upload-media/index.ts"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/"
+      ]
+    },
+    {
+      "id": "r0-auth-callback",
+      "query": "show AuthCallback",
+      "expectedRoute": "R0",
+      "category": "auth",
+      "relevance": {
+        "src/pages/AuthCallback.tsx": 3
+      },
+      "relevantSymbols": [
+        "AuthCallback"
+      ],
+      "mustInclude": [
+        "src/pages/AuthCallback.tsx"
+      ]
+    },
+    {
+      "id": "r0-use-auth",
+      "query": "find useAuth",
+      "expectedRoute": "R0",
+      "category": "auth",
+      "relevance": {
+        "src/hooks/useAuth.tsx": 3
+      },
+      "relevantSymbols": [
+        "useAuth"
+      ],
+      "mustInclude": [
+        "src/hooks/useAuth.tsx"
+      ]
+    },
+    {
+      "id": "r0-protected-route",
+      "query": "show ProtectedRoute",
+      "expectedRoute": "R0",
+      "category": "routing",
+      "relevance": {
+        "src/components/ProtectedRoute.tsx": 3
+      },
+      "relevantSymbols": [
+        "ProtectedRoute"
+      ],
+      "mustInclude": [
+        "src/components/ProtectedRoute.tsx"
+      ]
+    },
+    {
+      "id": "r0-stripe-checkout-implemented",
+      "query": "where is stripe-checkout implemented",
+      "expectedRoute": "R0",
+      "category": "billing",
+      "relevance": {
+        "supabase/functions/stripe-checkout/index.ts": 3
+      },
+      "mustInclude": [
+        "supabase/functions/stripe-checkout/index.ts"
+      ]
+    },
+    {
+      "id": "r0-billing-controller-file",
+      "query": "show BillingController",
+      "expectedRoute": "R0",
+      "category": "billing",
+      "relevance": {
+        "src/controllers/BillingController.ts": 3
+      },
+      "relevantSymbols": [
+        "BillingController"
+      ],
+      "mustInclude": [
+        "src/controllers/BillingController.ts"
+      ]
+    },
+    {
+      "id": "r0-auth-modal",
+      "query": "show AuthModal",
+      "expectedRoute": "R0",
+      "category": "auth",
+      "relevance": {
+        "src/components/AuthModal.tsx": 3
+      },
+      "mustInclude": [
+        "src/components/AuthModal.tsx"
+      ]
+    },
+    {
+      "id": "r0-subscription-update-implemented",
+      "query": "where is subscription-update implemented",
+      "expectedRoute": "R0",
+      "category": "billing",
+      "relevance": {
+        "supabase/functions/subscription-update/index.ts": 3
+      },
+      "mustInclude": [
+        "supabase/functions/subscription-update/index.ts"
+      ]
+    },
+    {
+      "id": "r0-storyboard-controller-implemented",
+      "query": "where is storyboard-controller implemented",
+      "expectedRoute": "R0",
+      "category": "generation",
+      "relevance": {
+        "supabase/functions/storyboard-controller/index.ts": 3
+      },
+      "mustInclude": [
+        "supabase/functions/storyboard-controller/index.ts"
+      ]
+    },
+    {
+      "id": "r1-generate-image-work",
+      "query": "how does generate-image work",
+      "expectedRoute": "R1",
+      "category": "generation",
+      "relevance": {
+        "supabase/functions/generate-image/index.ts": 3,
+        "supabase/functions/storyboard-controller/index.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/generate-image/index.ts"
+      ]
+    },
+    {
+      "id": "r1-upload-authenticate",
+      "query": "how does upload-media authenticate requests",
+      "expectedRoute": "R1",
+      "category": "media",
+      "relevance": {
+        "supabase/functions/upload-media/index.ts": 3,
+        "supabase/functions/_shared/auth-utils.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/upload-media/index.ts",
+        "supabase/functions/_shared/auth-utils.ts"
+      ]
+    },
+    {
+      "id": "r1-auth-callback-login",
+      "query": "how does AuthCallback complete login",
+      "expectedRoute": "R1",
+      "category": "auth",
+      "relevance": {
+        "src/pages/AuthCallback.tsx": 3,
+        "src/hooks/useAuth.tsx": 2,
+        "src/App.tsx": 1
+      },
+      "mustInclude": [
+        "src/pages/AuthCallback.tsx"
+      ]
+    },
+    {
+      "id": "r1-protected-route-redirect",
+      "query": "how does ProtectedRoute decide whether to redirect",
+      "expectedRoute": "R1",
+      "category": "routing",
+      "relevance": {
+        "src/components/ProtectedRoute.tsx": 3,
+        "src/hooks/useAuth.tsx": 2,
+        "src/App.tsx": 1
+      },
+      "mustInclude": [
+        "src/components/ProtectedRoute.tsx"
+      ]
+    },
+    {
+      "id": "r1-use-auth-state",
+      "query": "how does useAuth manage auth state changes",
+      "expectedRoute": "R1",
+      "category": "auth",
+      "relevance": {
+        "src/hooks/useAuth.tsx": 3,
+        "src/App.tsx": 1
+      },
+      "mustInclude": [
+        "src/hooks/useAuth.tsx"
+      ]
+    },
+    {
+      "id": "r1-stripe-checkout-session",
+      "query": "how does stripe-checkout create a subscription session",
+      "expectedRoute": "R1",
+      "category": "billing",
+      "relevance": {
+        "supabase/functions/stripe-checkout/index.ts": 3,
+        "src/services/StripeService.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/stripe-checkout/index.ts"
+      ]
+    },
+    {
+      "id": "r1-subscription-update-plan-changes",
+      "query": "how does subscription-update handle plan changes",
+      "expectedRoute": "R1",
+      "category": "billing",
+      "relevance": {
+        "supabase/functions/subscription-update/index.ts": 3,
+        "src/services/StripeService.ts": 2,
+        "src/components/billing/UpgradeOptions.tsx": 1
+      },
+      "mustInclude": [
+        "supabase/functions/subscription-update/index.ts"
+      ]
+    },
+    {
+      "id": "r1-storyboard-controller-shot-images",
+      "query": "how does the storyboard-controller generate shot images",
+      "expectedRoute": "R1",
+      "category": "generation",
+      "relevance": {
+        "supabase/functions/storyboard-controller/index.ts": 3,
+        "supabase/functions/generate-image/index.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/storyboard-controller/index.ts"
+      ]
+    },
+    {
+      "id": "r1-billing-controller-subscription-info",
+      "query": "how does billing-controller fetch subscription info",
+      "expectedRoute": "R1",
+      "category": "billing",
+      "relevance": {
+        "supabase/functions/billing-controller/index.ts": 3,
+        "src/controllers/BillingController.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/billing-controller/index.ts"
+      ]
+    },
+    {
+      "id": "r1-storyboard-generation-controller",
+      "query": "how does storyboard generation call the storyboard-controller edge function",
+      "expectedRoute": "R1",
+      "category": "generation",
+      "relevance": {
+        "src/store/storyboard/useStoryboardGenerationStore.ts": 3,
+        "src/hooks/useStoryboardGeneration.ts": 2,
+        "supabase/functions/storyboard-controller/index.ts": 2
+      },
+      "mustInclude": [
+        "src/store/storyboard/useStoryboardGenerationStore.ts"
+      ]
+    },
+    {
+      "id": "r2-auth-flow-files",
+      "query": "which files implement the authentication flow",
+      "expectedRoute": "R2",
+      "category": "auth",
+      "relevance": {
+        "src/pages/Auth.tsx": 3,
+        "src/pages/AuthCallback.tsx": 3,
+        "src/hooks/useAuth.tsx": 3,
+        "src/components/AuthModal.tsx": 2,
+        "src/components/ProtectedRoute.tsx": 2,
+        "src/App.tsx": 2,
+        "supabase/functions/_shared/auth-utils.ts": 1
+      },
+      "mustInclude": [
+        "src/pages/Auth.tsx",
+        "src/pages/AuthCallback.tsx",
+        "src/hooks/useAuth.tsx",
+        "src/components/AuthModal.tsx"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/",
+        "src/components/flow/"
+      ]
+    },
+    {
+      "id": "r2-auth-flow-logging",
+      "query": "add logging to every step in the authentication flow",
+      "expectedRoute": "R2",
+      "category": "auth",
+      "relevance": {
+        "src/pages/Auth.tsx": 3,
+        "src/pages/AuthCallback.tsx": 3,
+        "src/hooks/useAuth.tsx": 3,
+        "src/components/AuthModal.tsx": 2,
+        "src/components/ProtectedRoute.tsx": 2,
+        "src/App.tsx": 2,
+        "supabase/functions/_shared/auth-utils.ts": 1
+      },
+      "mustInclude": [
+        "src/pages/Auth.tsx",
+        "src/pages/AuthCallback.tsx",
+        "src/hooks/useAuth.tsx"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/",
+        "src/components/flow/"
+      ]
+    },
+    {
+      "id": "r2-auth-redirects",
+      "query": "where does authentication redirect after success or failure",
+      "expectedRoute": "R2",
+      "category": "auth",
+      "relevance": {
+        "src/pages/Auth.tsx": 3,
+        "src/pages/AuthCallback.tsx": 3,
+        "src/components/AuthModal.tsx": 2,
+        "src/App.tsx": 2,
+        "src/components/ProtectedRoute.tsx": 2,
+        "src/hooks/useAuth.tsx": 1
+      },
+      "mustInclude": [
+        "src/pages/Auth.tsx",
+        "src/pages/AuthCallback.tsx",
+        "src/App.tsx"
+      ]
+    },
+    {
+      "id": "r2-image-generation-flow",
+      "query": "trace the full image generation flow from UI to edge function",
+      "expectedRoute": "R2",
+      "category": "generation",
+      "relevance": {
+        "src/store/storyboard/useStoryboardGenerationStore.ts": 3,
+        "src/hooks/useStoryboardGeneration.ts": 2,
+        "supabase/functions/storyboard-controller/index.ts": 3,
+        "supabase/functions/generate-image/index.ts": 3
+      },
+      "mustInclude": [
+        "src/store/storyboard/useStoryboardGenerationStore.ts",
+        "supabase/functions/storyboard-controller/index.ts",
+        "supabase/functions/generate-image/index.ts"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/"
+      ]
+    },
+    {
+      "id": "r2-billing-checkout-files",
+      "query": "which files implement billing and subscription checkout",
+      "expectedRoute": "R2",
+      "category": "billing",
+      "relevance": {
+        "src/pages/Billing.tsx": 2,
+        "src/services/StripeService.ts": 3,
+        "src/components/billing/UpgradeOptions.tsx": 2,
+        "src/controllers/BillingController.ts": 2,
+        "supabase/functions/stripe-checkout/index.ts": 3,
+        "supabase/functions/subscription-update/index.ts": 2,
+        "supabase/functions/stripe-portal/index.ts": 2,
+        "supabase/functions/billing-controller/index.ts": 2
+      },
+      "mustInclude": [
+        "src/services/StripeService.ts",
+        "supabase/functions/stripe-checkout/index.ts",
+        "supabase/functions/billing-controller/index.ts"
+      ]
+    },
+    {
+      "id": "r2-upload-media-flow",
+      "query": "trace the full upload media flow from request auth to storage write",
+      "expectedRoute": "R2",
+      "category": "media",
+      "relevance": {
+        "supabase/functions/upload-media/index.ts": 3,
+        "supabase/functions/_shared/auth-utils.ts": 2
+      },
+      "mustInclude": [
+        "supabase/functions/upload-media/index.ts"
+      ],
+      "mustNotInclude": [
+        "__tests__/",
+        "e2e/"
+      ]
+    },
+    {
+      "id": "r2-route-protection-pending-nav",
+      "query": "which files implement route protection and pending navigation",
+      "expectedRoute": "R2",
+      "category": "routing",
+      "relevance": {
+        "src/components/ProtectedRoute.tsx": 3,
+        "src/pages/AuthCallback.tsx": 3,
+        "src/pages/Auth.tsx": 2,
+        "src/components/landing/ChatHeroSection.tsx": 2,
+        "src/pages/FlowEditor.tsx": 2,
+        "src/App.tsx": 1
+      },
+      "mustInclude": [
+        "src/components/ProtectedRoute.tsx",
+        "src/pages/AuthCallback.tsx",
+        "src/pages/FlowEditor.tsx"
+      ]
+    },
+    {
+      "id": "r2-auth-callback-loops",
+      "query": "what files should I inspect to debug auth callback loops",
+      "expectedRoute": "R2",
+      "category": "auth",
+      "relevance": {
+        "src/pages/AuthCallback.tsx": 3,
+        "src/hooks/useAuth.tsx": 2,
+        "src/App.tsx": 2,
+        "src/pages/Auth.tsx": 2,
+        "src/components/ProtectedRoute.tsx": 2
+      },
+      "mustInclude": [
+        "src/pages/AuthCallback.tsx",
+        "src/hooks/useAuth.tsx",
+        "src/App.tsx"
+      ]
+    },
+    {
+      "id": "r2-billing-portal-checkout-flow",
+      "query": "trace the full billing portal and checkout flow from UI to edge function",
+      "expectedRoute": "R2",
+      "category": "billing",
+      "relevance": {
+        "src/pages/Billing.tsx": 2,
+        "src/services/StripeService.ts": 3,
+        "src/components/billing/UpgradeOptions.tsx": 2,
+        "supabase/functions/stripe-portal/index.ts": 3,
+        "supabase/functions/stripe-checkout/index.ts": 3,
+        "supabase/functions/subscription-update/index.ts": 2
+      },
+      "mustInclude": [
+        "src/services/StripeService.ts",
+        "supabase/functions/stripe-portal/index.ts",
+        "supabase/functions/stripe-checkout/index.ts"
+      ]
+    },
+    {
+      "id": "r2-storyboard-image-regeneration",
+      "query": "which files implement storyboard image generation and regeneration",
+      "expectedRoute": "R2",
+      "category": "generation",
+      "relevance": {
+        "src/store/storyboard/useStoryboardGenerationStore.ts": 3,
+        "src/hooks/useStoryboardGeneration.ts": 2,
+        "supabase/functions/storyboard-controller/index.ts": 3,
+        "supabase/functions/generate-image/index.ts": 2
+      },
+      "mustInclude": [
+        "src/store/storyboard/useStoryboardGenerationStore.ts",
+        "supabase/functions/storyboard-controller/index.ts"
+      ]
+    }
+  ]
+}

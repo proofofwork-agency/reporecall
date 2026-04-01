@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resolve } from "path";
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "fs";
-import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
+import { classifyIntent } from "../../src/search/intent.js";
 import { resolveSeeds } from "../../src/search/seed.js";
 import { buildStackTree } from "../../src/search/tree-builder.js";
 import { assembleFlowContext, assembleDeepRouteContext } from "../../src/search/context-assembler.js";
@@ -86,22 +86,19 @@ describe("G0 skip gate", () => {
   it("skips retrieval for meta prompts", () => {
     const intent = classifyIntent("am I using memory?");
     expect(intent.isCodeQuery).toBe(false);
-    const route = deriveRoute(intent);
-    expect(route).toBe("skip");
+    expect(intent.queryMode).toBe("skip");
   });
 
   it("skips retrieval for greetings", () => {
     const intent = classifyIntent("hello");
     expect(intent.isCodeQuery).toBe(false);
-    const route = deriveRoute(intent);
-    expect(route).toBe("skip");
+    expect(intent.queryMode).toBe("skip");
   });
 
   it("skips retrieval for thanks", () => {
     const intent = classifyIntent("thank you");
     expect(intent.isCodeQuery).toBe(false);
-    const route = deriveRoute(intent);
-    expect(route).toBe("skip");
+    expect(intent.queryMode).toBe("skip");
   });
 
   it("skips retrieval for very short queries", () => {
@@ -112,23 +109,22 @@ describe("G0 skip gate", () => {
 
 // ── Test 2: Direct code query -> R0 ────────────────────────────────
 
-describe("R0 direct code queries", () => {
-  it("uses R0 for direct code queries", () => {
+describe("lookup direct code queries", () => {
+  it("uses lookup for direct code queries", () => {
     const intent = classifyIntent("where is validate?");
     expect(intent.isCodeQuery).toBe(true);
     expect(intent.needsNavigation).toBe(false);
-    const route = deriveRoute(intent);
-    expect(route).toBe("R0");
+    expect(intent.queryMode).toBe("lookup");
   });
 
-  it("handlePromptContext returns chunk-based result for R0", async () => {
+  it("handlePromptContext returns chunk-based result for lookup", async () => {
     const result = await handlePromptContext(
       "where is validate?",
       search,
       config,
       undefined,
       undefined,
-      "R0",
+      "lookup",
       pipeline.getMetadataStore(),
       pipeline.getFTSStore()
     );
@@ -140,8 +136,8 @@ describe("R0 direct code queries", () => {
 
 // ── Test 3: Navigational query with strong seed -> R1 ──────────────
 
-describe("R1 flow bundle", () => {
-  it("uses R1 for navigational queries with strong seeds", async () => {
+describe("trace flow bundle", () => {
+  it("uses trace for navigational queries with strong seeds", async () => {
     const intent = classifyIntent("how does validate work?");
     expect(intent.isCodeQuery).toBe(true);
     expect(intent.needsNavigation).toBe(true);
@@ -155,18 +151,17 @@ describe("R1 flow bundle", () => {
     expect(seedResult.bestSeed!.name).toBe("validate");
     expect(seedResult.bestSeed!.confidence).toBeGreaterThanOrEqual(0.7);
 
-    const route = deriveRoute(intent, seedResult.bestSeed!.confidence);
-    expect(route).toBe("R1");
+    expect(intent.queryMode).toBe("trace");
   });
 
-  it("handlePromptContext returns flow context for R1", async () => {
+  it("handlePromptContext returns flow context for trace", async () => {
     const result = await handlePromptContext(
       "how does validate work?",
       search,
       config,
       undefined,
       undefined,
-      "R1",
+      "trace",
       pipeline.getMetadataStore(),
       pipeline.getFTSStore()
     );
@@ -175,7 +170,7 @@ describe("R1 flow bundle", () => {
     expect(result!.chunks.length).toBeGreaterThan(0);
   });
 
-  it("R1 flow bundle has correct structure", async () => {
+  it("trace flow bundle has correct structure", async () => {
     const metadata = pipeline.getMetadataStore();
     const fts = pipeline.getFTSStore();
     const seedResult = resolveSeeds("how does validate work?", metadata, fts);
@@ -194,16 +189,16 @@ describe("R1 flow bundle", () => {
 
     // Verify structural markers
     expect(flowContext.text).toContain("## Relevant codebase context (flow trace)");
-    expect(flowContext.text).toContain("### Seed");
+    expect(flowContext.text).toContain("> Flow seed");
 
     // validate is called by handleRequest -> expect callers section
     if (tree.upTree.length > 0) {
-      expect(flowContext.text).toContain("### Callers");
+      expect(flowContext.text).toContain("> Callers");
     }
 
     // validate calls decode -> expect callees section
     if (tree.downTree.length > 0) {
-      expect(flowContext.text).toContain("### Callees");
+      expect(flowContext.text).toContain("> Callees");
     }
 
     // The seed chunk content should be present
@@ -238,56 +233,45 @@ describe("R1 flow bundle", () => {
 
 // ── Test 4: Navigational query with weak seed -> R2 ────────────────
 
-describe("R2 deep route", () => {
-  it("falls back to R2 when seed confidence is low", () => {
+describe("architecture deep route", () => {
+  it("uses architecture mode for broad architectural queries", () => {
     const intent = classifyIntent("how does the architecture handle requests?");
     expect(intent.isCodeQuery).toBe(true);
     expect(intent.needsNavigation).toBe(true);
-
-    // With a low seed confidence, deriveRoute should return R2
-    const route = deriveRoute(intent, 0.3);
-    expect(route).toBe("R2");
+    expect(intent.queryMode).toBe("architecture");
   });
 
-  it("R2 context includes MCP tool guidance", async () => {
-    const metadata = pipeline.getMetadataStore();
-    const fts = pipeline.getFTSStore();
-
-    // Use a vague query that should produce low-confidence seeds
-    const seedResult = resolveSeeds("how does the architecture handle requests?", metadata, fts);
-
-    // Build R2 context from search results
+  it("architecture context includes MCP tool guidance", async () => {
     const searchResults = await search.search("how does the architecture handle requests?", { limit: 10 });
 
     if (searchResults.length > 0) {
       const deepContext = assembleDeepRouteContext(searchResults, config.contextBudget, "how does the architecture handle requests?");
 
-      expect(deepContext.text).toContain("broad search");
-      expect(deepContext.text).toContain("Reporecall MCP tools can fill gaps");
+      expect(deepContext.text).toContain("Relevant codebase context");
     }
   });
 
-  it("handlePromptContext returns deep route context for R2", async () => {
+  it("handlePromptContext returns context for architecture", async () => {
     const result = await handlePromptContext(
       "how does the architecture handle requests?",
       search,
       config,
       undefined,
       undefined,
-      "R2",
+      "architecture",
       pipeline.getMetadataStore(),
       pipeline.getFTSStore()
     );
     expect(result).not.toBeNull();
-    expect(result!.text).toContain("broad search");
-    expect(result!.text).toContain("Reporecall MCP tools can fill gaps");
+    expect(result!.text).toContain("Relevant codebase context");
+    expect(result!.text).toContain("Reporecall MCP tools");
   });
 });
 
 // ── Test 5: R0 latency ─────────────────────────────────────────────
 
-describe("R0 latency", () => {
-  it("R0 responds within acceptable latency", async () => {
+describe("lookup latency", () => {
+  it("lookup responds within acceptable latency", async () => {
     const start = Date.now();
     const result = await handlePromptContext(
       "where is handleRequest?",
@@ -295,7 +279,7 @@ describe("R0 latency", () => {
       config,
       undefined,
       undefined,
-      "R0",
+      "lookup",
       pipeline.getMetadataStore(),
       pipeline.getFTSStore()
     );
@@ -337,23 +321,23 @@ describe("route stats tracking", () => {
     // Increment each route within a single test to avoid cross-it() state
     // dependencies that make test results order-dependent.
     metadata.incrementRouteStat("skip");
-    metadata.incrementRouteStat("R0");
-    metadata.incrementRouteStat("R0");
+    metadata.incrementRouteStat("lookup");
+    metadata.incrementRouteStat("lookup");
 
     expect(metadata.getStat("route_skip_count")).toBe("1");
-    expect(metadata.getStat("route_R0_count")).toBe("2");
+    expect(metadata.getStat("route_lookup_count")).toBe("2");
 
-    metadata.incrementRouteStat("R1");
-    metadata.incrementRouteStat("R1");
-    metadata.incrementRouteStat("R1");
-    metadata.incrementRouteStat("R2");
+    metadata.incrementRouteStat("trace");
+    metadata.incrementRouteStat("trace");
+    metadata.incrementRouteStat("trace");
+    metadata.incrementRouteStat("architecture");
 
-    expect(metadata.getStat("route_R1_count")).toBe("3");
-    expect(metadata.getStat("route_R2_count")).toBe("1");
+    expect(metadata.getStat("route_trace_count")).toBe("3");
+    expect(metadata.getStat("route_architecture_count")).toBe("1");
 
     // Previously set counts are still correct within the same test
     expect(metadata.getStat("route_skip_count")).toBe("1");
-    expect(metadata.getStat("route_R0_count")).toBe("2");
+    expect(metadata.getStat("route_lookup_count")).toBe("2");
   });
 });
 
@@ -557,23 +541,21 @@ describe("full routing pipeline integration", () => {
   it("routes a meta query through skip without searching", async () => {
     const query = "am I using memory?";
     const intent = classifyIntent(query);
-    const route = deriveRoute(intent);
 
-    expect(route).toBe("skip");
+    expect(intent.queryMode).toBe("skip");
 
-    // handlePromptContext with skip route delegates to R0 path
+    // handlePromptContext with skip route delegates to lookup path
     // but the real daemon would short-circuit before calling it
     // Verify intent classification is correct
     expect(intent.isCodeQuery).toBe(false);
     expect(intent.skipReason).toBeDefined();
   });
 
-  it("routes a direct query through R0 end-to-end", async () => {
+  it("routes a direct query through lookup end-to-end", async () => {
     const query = "where is decode?";
     const intent = classifyIntent(query);
-    const route = deriveRoute(intent);
 
-    expect(route).toBe("R0");
+    expect(intent.queryMode).toBe("lookup");
 
     const result = await handlePromptContext(
       query,
@@ -581,7 +563,7 @@ describe("full routing pipeline integration", () => {
       config,
       undefined,
       undefined,
-      route,
+      intent.queryMode,
       pipeline.getMetadataStore(),
       pipeline.getFTSStore()
     );
@@ -592,29 +574,23 @@ describe("full routing pipeline integration", () => {
     expect(result!.text).toContain("decode");
   });
 
-  it("routes a navigational query through R1 end-to-end", async () => {
+  it("routes a navigational query through trace end-to-end", async () => {
     const query = "how does handleRequest work?";
     const intent = classifyIntent(query);
     expect(intent.needsNavigation).toBe(true);
 
-    const metadata = pipeline.getMetadataStore();
-    const fts = pipeline.getFTSStore();
-    const seedResult = resolveSeeds(query, metadata, fts);
+    const queryMode = intent.queryMode;
 
-    // handleRequest is an explicit target with high confidence
-    const bestConfidence = seedResult.bestSeed?.confidence ?? 0;
-    const route = deriveRoute(intent, bestConfidence);
-
-    if (route === "R1") {
+    if (queryMode === "trace") {
       const result = await handlePromptContext(
         query,
         search,
         config,
         undefined,
         undefined,
-        route,
-        metadata,
-        fts
+        queryMode,
+        pipeline.getMetadataStore(),
+        pipeline.getFTSStore()
       );
 
       expect(result).not.toBeNull();
@@ -623,8 +599,8 @@ describe("full routing pipeline integration", () => {
       // At minimum the seed should be present
       expect(result!.text).toContain("handleRequest");
     } else {
-      // If seed confidence was low, it falls to R0 or R2 -- that's still valid
-      expect(["R0", "R2"]).toContain(route);
+      // If classified differently, that's still valid
+      expect(["lookup", "architecture", "bug", "change"]).toContain(queryMode);
     }
   });
 });

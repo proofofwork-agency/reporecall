@@ -10,7 +10,7 @@ import { loadConfig } from "../../src/core/config.js";
 import { IndexingPipeline } from "../../src/indexer/pipeline.js";
 import { HybridSearch } from "../../src/search/hybrid.js";
 import { sanitizeQuery } from "../../src/daemon/server.js";
-import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
+import { classifyIntent } from "../../src/search/intent.js";
 import { resolveSeeds } from "../../src/search/seed.js";
 import { handlePromptContextDetailed } from "../../src/hooks/prompt-context.js";
 import { computeAllMetrics } from "./metrics.js";
@@ -189,22 +189,21 @@ export async function runLiveBenchmark(
     const sanitized = sanitizeQuery(aq.query);
     const queryText = sanitized || aq.query;
     const intent = classifyIntent(queryText);
-    let route = deriveRoute(intent);
+    const queryMode = intent.queryMode;
 
-    if (intent.needsNavigation && route === "R0") {
+    if (intent.needsNavigation) {
       const seedResult = resolveSeeds(queryText, metadata, fts);
       if (seedResult.bestSeed) {
         seedName = seedResult.bestSeed.name;
         seedConfidence = seedResult.bestSeed.confidence;
       }
-      route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
     }
 
-    if (route !== "skip") {
+    if (queryMode !== "skip") {
       const promptContext = await handlePromptContextDetailed(
-        queryText, search, config, undefined, undefined, route, metadata, fts
+        queryText, search, config, undefined, undefined, queryMode, metadata, fts
       );
-      actualRoute = promptContext.resolvedRoute;
+      actualRoute = promptContext.resolvedQueryMode;
       if (promptContext.context) {
         retrievedNames = promptContext.context.chunks.map((r) => r.name);
         retrievedGrades = promptContext.context.chunks.map((r) =>

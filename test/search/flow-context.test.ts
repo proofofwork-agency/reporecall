@@ -91,7 +91,7 @@ describe("assembleFlowContext", () => {
 
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
-    expect(result.text).toContain("### Seed");
+    expect(result.text).toContain("> Flow seed");
     expect(result.text).toContain("handleLogin");
     expect(result.chunks.length).toBeGreaterThanOrEqual(1);
   });
@@ -120,7 +120,7 @@ describe("assembleFlowContext", () => {
 
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
-    expect(result.text).toContain("### Callers");
+    expect(result.text).toContain("> Callers");
     expect(result.text).toContain("routeHandler");
   });
 
@@ -148,7 +148,7 @@ describe("assembleFlowContext", () => {
 
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
-    expect(result.text).toContain("### Callees");
+    expect(result.text).toContain("> Callees");
     expect(result.text).toContain("validateCredentials");
   });
 
@@ -191,7 +191,7 @@ describe("assembleFlowContext", () => {
     // Budget just enough for header + seed (~100 tokens), but not callers/callees
     const result = assembleFlowContext(tree, metadata as any, 150);
 
-    expect(result.text).toContain("### Seed");
+    expect(result.text).toContain("> Flow seed");
     expect(result.text).toContain("handleLogin");
     expect(result.tokenCount).toBeLessThanOrEqual(150);
   });
@@ -269,16 +269,152 @@ describe("assembleFlowContext", () => {
     const result = assembleFlowContext(tree, metadata as any, 10000);
 
     // entryPoint (depth 2) should appear before middleware (depth 1) in the callers section
-    // Search after "### Callers" to avoid matching file paths in the "Files included:" header
-    const callersIdx = result.text.indexOf("### Callers");
+    // Search after the callers marker to avoid matching file paths in the header
+    const callersIdx = result.text.indexOf("> Callers");
     expect(callersIdx).toBeGreaterThan(-1);
     const afterCallers = result.text.slice(callersIdx);
     const entryIdx = afterCallers.indexOf("entryPoint");
     const middlewareIdx = afterCallers.indexOf("middleware");
     expect(entryIdx).toBeLessThan(middlewareIdx);
     // Seed section should come after callers section
-    const seedIdx = result.text.indexOf("### Seed");
+    const seedIdx = result.text.indexOf("> Flow seed");
     expect(seedIdx).toBeGreaterThan(callersIdx);
+  });
+
+  it("implementation-shaped queries prioritize same-file and query-aligned helpers over unrelated neighbors", () => {
+    const tree = makeTree({
+      downTree: [
+        makeTreeNode({
+          chunkId: "same-file-helper",
+          name: "handleAuthStateChange",
+          filePath: "src/hooks/useAuth.tsx",
+          direction: "down",
+          depth: 1,
+        }),
+        makeTreeNode({
+          chunkId: "query-aligned-helper",
+          name: "syncAuthSession",
+          filePath: "src/auth/session.ts",
+          direction: "down",
+          depth: 1,
+        }),
+        makeTreeNode({
+          chunkId: "noise-helper",
+          name: "useStorageAnalytics",
+          filePath: "src/hooks/useStorageAnalytics.ts",
+          direction: "down",
+          depth: 1,
+        }),
+      ],
+      nodeCount: 4,
+      seed: makeSeedNode({
+        name: "useAuth",
+        filePath: "src/hooks/useAuth.tsx",
+      }),
+    });
+    const metadata = makeMetadata({
+      "seed-1": makeChunk("seed-1", "useAuth", "function useAuth() { handleAuthStateChange(); syncAuthSession(); }", {
+        filePath: "src/hooks/useAuth.tsx",
+      }),
+      "same-file-helper": makeChunk("same-file-helper", "handleAuthStateChange", "function handleAuthStateChange() {}", {
+        filePath: "src/hooks/useAuth.tsx",
+      }),
+      "query-aligned-helper": makeChunk("query-aligned-helper", "syncAuthSession", "function syncAuthSession() {}", {
+        filePath: "src/auth/session.ts",
+      }),
+      "noise-helper": makeChunk("noise-helper", "useStorageAnalytics", "function useStorageAnalytics() {}", {
+        filePath: "src/hooks/useStorageAnalytics.ts",
+      }),
+    });
+
+    const result = assembleFlowContext(tree, metadata as any, 10000, "how does useAuth manage auth state changes");
+
+    expect(result.text).toContain("handleAuthStateChange");
+    expect(result.text).toContain("syncAuthSession");
+    expect(result.text).not.toContain("useStorageAnalytics");
+  });
+
+  it("caller-focused queries still retain caller branches", () => {
+    const tree = makeTree({
+      upTree: [
+        makeTreeNode({
+          chunkId: "entry-caller",
+          name: "routeHandler",
+          filePath: "src/routes.ts",
+          direction: "up",
+          depth: 2,
+        }),
+        makeTreeNode({
+          chunkId: "same-file-caller",
+          name: "retryAuth",
+          filePath: "src/auth/handler.ts",
+          direction: "up",
+          depth: 1,
+        }),
+      ],
+      nodeCount: 3,
+    });
+    const metadata = makeMetadata({
+      "seed-1": makeChunk("seed-1", "handleLogin", "function handleLogin() {}", {
+        filePath: "src/auth/handler.ts",
+      }),
+      "entry-caller": makeChunk("entry-caller", "routeHandler", "function routeHandler() { handleLogin(); }", {
+        filePath: "src/routes.ts",
+      }),
+      "same-file-caller": makeChunk("same-file-caller", "retryAuth", "function retryAuth() { handleLogin(); }", {
+        filePath: "src/auth/handler.ts",
+      }),
+    });
+
+    const result = assembleFlowContext(tree, metadata as any, 10000, "where is handleLogin used");
+
+    expect(result.text).toContain("> Callers");
+    expect(result.text).toContain("routeHandler");
+    expect(result.text).toContain("retryAuth");
+  });
+
+  it("implementation-shaped hook queries suppress unrelated UI callers", () => {
+    const tree = makeTree({
+      seed: makeSeedNode({
+        name: "useAuth",
+        filePath: "src/hooks/useAuth.tsx",
+      }),
+      upTree: [
+        makeTreeNode({
+          chunkId: "ui-caller",
+          name: "AuthCallback",
+          filePath: "src/pages/AuthCallback.tsx",
+          direction: "up",
+          depth: 1,
+        }),
+      ],
+      downTree: [
+        makeTreeNode({
+          chunkId: "auth-helper",
+          name: "syncAuthSession",
+          filePath: "src/auth/session.ts",
+          direction: "down",
+          depth: 1,
+        }),
+      ],
+      nodeCount: 3,
+    });
+    const metadata = makeMetadata({
+      "seed-1": makeChunk("seed-1", "useAuth", "function useAuth() { syncAuthSession(); }", {
+        filePath: "src/hooks/useAuth.tsx",
+      }),
+      "ui-caller": makeChunk("ui-caller", "AuthCallback", "function AuthCallback() { useAuth(); }", {
+        filePath: "src/pages/AuthCallback.tsx",
+      }),
+      "auth-helper": makeChunk("auth-helper", "syncAuthSession", "function syncAuthSession() {}", {
+        filePath: "src/auth/session.ts",
+      }),
+    });
+
+    const result = assembleFlowContext(tree, metadata as any, 10000, "how does useAuth manage auth state changes");
+
+    expect(result.text).toContain("syncAuthSession");
+    expect(result.text).not.toContain("AuthCallback");
   });
 });
 

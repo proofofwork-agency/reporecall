@@ -4,6 +4,7 @@ import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { IndexingPipeline } from '../indexer/pipeline.js'
 import { OllamaEmbedder } from '../indexer/embedder.js'
+import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
 
 function progressBar(current: number, total: number, width: number): string {
   if (total === 0) return '[' + ' '.repeat(width) + ']'
@@ -22,6 +23,10 @@ export function indexCommand(): Command {
         : detectProjectRoot(process.cwd())
 
       const config = loadConfig(projectRoot)
+      assertSqliteRuntimeHealthy({
+        cwd: projectRoot,
+        log: (message) => process.stderr.write(`${message}\n`),
+      })
 
       // Health check for Ollama
       if (config.embeddingProvider === 'ollama') {

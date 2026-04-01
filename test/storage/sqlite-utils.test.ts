@@ -1,9 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { openSqliteWithRecovery } from "../../src/storage/sqlite-utils.js";
 import { mkdirSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
+import {
+  assertSqliteRuntimeHealthy,
+  detectPreferredPackageManager,
+  openSqliteWithRecovery,
+} from "../../src/storage/sqlite-utils.js";
 
 function tmpDbPath(): string {
   const dir = join(tmpdir(), `sqlite-utils-test-${randomUUID()}`);
@@ -60,5 +64,69 @@ describe("openSqliteWithRecovery", () => {
     const dir = join(tmpdir(), `sqlite-utils-test-${randomUUID()}`);
     mkdirSync(dir, { recursive: true });
     expect(() => openSqliteWithRecovery(dir)).toThrow();
+  });
+});
+
+describe("sqlite runtime repair", () => {
+  it("prefers pnpm from user agent", () => {
+    expect(
+      detectPreferredPackageManager("/tmp/reporecall", {
+        npm_config_user_agent: "pnpm/10.0.0 node/v22.0.0 darwin arm64",
+      })
+    ).toBe("pnpm");
+  });
+
+  it("attempts one repair and retries the health probe", () => {
+    let opens = 0;
+    const logs: string[] = [];
+
+    expect(() =>
+      assertSqliteRuntimeHealthy({
+        cwd: process.cwd(),
+        log: (message) => logs.push(message),
+        openProbe: () => {
+          opens += 1;
+          if (opens === 1) {
+            throw new Error(
+              "The module was compiled against a different Node.js version using NODE_MODULE_VERSION 127."
+            );
+          }
+          return { close() {} } as { close(): void };
+        },
+        runCommand: () =>
+          ({
+            status: 0,
+            stdout: "rebuilt",
+            stderr: "",
+          }) as never,
+      })
+    ).not.toThrow();
+
+    expect(opens).toBe(2);
+    expect(logs[0]).toContain("Repaired better-sqlite3 native bindings");
+  });
+
+  it("surfaces a stronger error when repair does not recover the binding", () => {
+    let opens = 0;
+
+    expect(() =>
+      assertSqliteRuntimeHealthy({
+        cwd: process.cwd(),
+        openProbe: () => {
+          opens += 1;
+          throw new Error(
+            "Could not locate the bindings file. Tried: build/Release/better_sqlite3.node"
+          );
+        },
+        runCommand: () =>
+          ({
+            status: 0,
+            stdout: "rebuilt",
+            stderr: "",
+          }) as never,
+      })
+    ).toThrow(/attempted an automatic repair/i);
+
+    expect(opens).toBe(2);
   });
 });

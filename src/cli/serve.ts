@@ -25,6 +25,7 @@ import { MemoryStore } from '../storage/memory-store.js'
 import { createMemoryIndexer } from '../memory/indexer.js'
 import { MemorySearch } from '../memory/search.js'
 import { MemoryRuntime } from '../daemon/memory/runtime.js'
+import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
 
 export function serveCommand(): Command {
   return new Command('serve')
@@ -58,6 +59,10 @@ export function serveCommand(): Command {
         : detectProjectRoot(process.cwd())
 
       const config = loadConfig(projectRoot)
+      assertSqliteRuntimeHealthy({
+        cwd: projectRoot,
+        log: (message) => process.stderr.write(`${message}\n`),
+      })
       if (options.port) {
         const parsed = parseInt(options.port, 10)
         if (isNaN(parsed) || parsed < 1 || parsed > 65535) {

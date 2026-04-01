@@ -1,11 +1,12 @@
 import type { HybridSearch } from "../search/hybrid.js";
 import { type MemoryConfig, resolveContextBudget } from "../core/config.js";
 import type { AssembledContext } from "../search/types.js";
-import type { RouteDecision } from "../search/intent.js";
+import type { QueryMode } from "../search/intent.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import { resolveSeeds } from "../search/seed.js";
 import type { SeedResult } from "../search/seed.js";
+import type { BroadSelectionDiagnostics } from "../search/hybrid.js";
 import { buildStackTree } from "../search/tree-builder.js";
 import { assembleFlowContext, assembleDeepRouteContext } from "../search/context-assembler.js";
 import type { MemorySearch } from "../memory/search.js";
@@ -13,10 +14,27 @@ import { assembleMemoryContext, type AssembledMemoryContext } from "../memory/co
 import type { MemoryClass, MemoryRoute, MemorySearchResult } from "../memory/types.js";
 import { resolveMemoryClass, resolveMemorySummary } from "../memory/types.js";
 import { getLogger } from "../core/logger.js";
+import { detectExecutionSurfaces, GENERIC_BROAD_TERMS, STOP_WORDS, textMatchesQueryTerm, type ExecutionSurface } from "../search/utils.js";
+import { normalizeTargetText } from "../search/targets.js";
+
+const MEMORY_QUERY_RE = /\b(memory|remember|previous|earlier|last time|follow[- ]?up|policy|rule|decision|constraint|benchmark|claim|docs?|documentation|continuity)\b/i;
 
 export interface PromptContextResult {
   context: AssembledContext | null;
-  resolvedRoute: RouteDecision;
+  resolvedQueryMode: QueryMode;
+  deliveryMode?: "code_context" | "summary_only";
+  contextStrength?: "sufficient" | "partial" | "weak";
+  executionSurface?: ExecutionSurface | "mixed";
+  dominantFamily?: string;
+  familyConfidence?: number;
+  selectedFiles?: Array<{
+    filePath: string;
+    selectionSource: string;
+  }>;
+  deferredReason?: string;
+  missingEvidence?: string[];
+  recommendedNextReads?: string[];
+  advisoryText?: string;
   memoryRoute?: MemoryRoute;
   memoryTokenCount?: number;
   memoryCount?: number;
@@ -59,13 +77,34 @@ async function buildDeepRouteContext(
   return assembleDeepRouteContext(baseContext.chunks, budget, query);
 }
 
+function scoreTraceContextCoherence(query: string, context: AssembledContext): number {
+  const salientTerms = normalizeTargetText(query)
+    .split(" ")
+    .filter(Boolean)
+    .filter((term) =>
+      term.length >= 4
+      && !STOP_WORDS.has(term)
+      && !GENERIC_BROAD_TERMS.has(term)
+      && !["start", "trace", "full", "path", "page", "pages", "include", "including", "first", "then"].includes(term)
+    );
+  if (context.chunks.length === 0 || salientTerms.length === 0) return 0;
+
+  let score = 0;
+  for (const [index, chunk] of context.chunks.slice(0, 5).entries()) {
+    const chunkText = `${chunk.filePath} ${chunk.name}`;
+    const matches = salientTerms.filter((term) => textMatchesQueryTerm(chunkText, term)).length;
+    score += matches * (5 - index * 0.6);
+  }
+  return score;
+}
+
 export async function handlePromptContextDetailed(
   query: string,
   search: HybridSearch,
   config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
-  route?: RouteDecision,
+  queryMode?: QueryMode,
   metadata?: MetadataStore,
   fts?: FTSStore,
   seedResult?: SeedResult,
@@ -73,11 +112,11 @@ export async function handlePromptContextDetailed(
   memorySearchInstance?: MemorySearch
 ): Promise<PromptContextResult> {
   if (!query.trim()) {
-    return { context: null, resolvedRoute: "skip" };
+    return { context: null, resolvedQueryMode: "skip" };
   }
 
-  if (route === "skip") {
-    return { context: null, resolvedRoute: "skip" };
+  if (queryMode === "skip") {
+    return { context: null, resolvedQueryMode: "skip" };
   }
 
   const totalBudget = resolveContextBudget(config.contextBudget, chunkCount ?? 0);
@@ -93,7 +132,7 @@ export async function handlePromptContextDetailed(
     codeBudget,
     activeFiles,
     signal,
-    route,
+    queryMode,
     metadata,
     fts,
     seedResult
@@ -118,7 +157,7 @@ export async function handlePromptContextDetailed(
       .map((chunk) => chunk.parentName)
       .filter((name): name is string => !!name),
   ]);
-  const memoryContext = memoryEnabled && memoryBudget > 0
+  const memoryContext = memoryEnabled && memoryBudget > 0 && shouldSearchMemoryContext(query, codeContext)
     ? await searchMemories(query, memorySearchInstance!, config, memoryBudget, {
         activeFiles,
         topCodeFiles,
@@ -128,13 +167,14 @@ export async function handlePromptContextDetailed(
     : null;
 
   let context = codeContext;
-  if (memoryContext?.text && context) {
+  const injectMemory = shouldInjectMemoryIntoPrompt(query, codeContext, memoryContext);
+  if (injectMemory && memoryContext?.text && context) {
     context = {
       ...context,
-      text: memoryContext.text + "\n" + context.text,
+      text: context.text + "\n" + memoryContext.text,
       tokenCount: context.tokenCount + memoryContext.tokenCount,
     };
-  } else if (memoryContext?.text && !context) {
+  } else if (injectMemory && memoryContext?.text && !context) {
     context = {
       text: memoryContext.text,
       tokenCount: memoryContext.tokenCount,
@@ -145,7 +185,17 @@ export async function handlePromptContextDetailed(
 
   return {
     context: context ?? null,
-    resolvedRoute: codeResult.resolvedRoute,
+    resolvedQueryMode: codeResult.resolvedQueryMode,
+    deliveryMode: codeResult.deliveryMode ?? codeContext?.deliveryMode ?? "code_context",
+    contextStrength: codeResult.contextStrength,
+    executionSurface: codeResult.executionSurface,
+    dominantFamily: codeResult.dominantFamily,
+    familyConfidence: codeResult.familyConfidence,
+    selectedFiles: codeResult.selectedFiles,
+    deferredReason: codeResult.deferredReason,
+    missingEvidence: codeResult.missingEvidence,
+    recommendedNextReads: codeResult.recommendedNextReads,
+    advisoryText: codeResult.advisoryText,
     memoryRoute: memoryContext?.route ?? "M0",
     memoryTokenCount: memoryContext?.tokenCount ?? 0,
     memoryCount: memoryContext?.memories.length ?? 0,
@@ -221,32 +271,59 @@ async function resolveCodeContext(
   codeBudget: number,
   activeFiles?: string[],
   signal?: AbortSignal,
-  route?: RouteDecision,
+  queryMode?: QueryMode,
   metadata?: MetadataStore,
   fts?: FTSStore,
   seedResult?: SeedResult
 ): Promise<PromptContextResult> {
-  if (!route || route === "R0") {
-    return {
-      context: await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult),
-      resolvedRoute: "R0",
-    };
+  const getBroadDiagnostics = (): BroadSelectionDiagnostics | null =>
+    typeof (search as HybridSearch & { getLastBroadSelectionDiagnostics?: () => BroadSelectionDiagnostics | null }).getLastBroadSelectionDiagnostics === "function"
+      ? (search as HybridSearch & { getLastBroadSelectionDiagnostics: () => BroadSelectionDiagnostics | null }).getLastBroadSelectionDiagnostics()
+      : null;
+  if (!queryMode || queryMode === "lookup") {
+    const context = await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult);
+    return finalizePromptContextResult(query, {
+      context,
+      resolvedQueryMode: "lookup",
+      deliveryMode: context.deliveryMode ?? "code_context",
+    });
   }
-  if (route === "R1" && (!metadata || !fts)) {
-    return {
-      context: await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult),
-      resolvedRoute: "R0",
-    };
+  if (queryMode === "bug" || queryMode === "architecture" || queryMode === "change") {
+    const context = await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult);
+    const diagnostics = getBroadDiagnostics();
+    return finalizePromptContextResult(query, {
+      context,
+      resolvedQueryMode: queryMode,
+      deliveryMode: diagnostics?.deliveryMode ?? context.deliveryMode ?? "code_context",
+      dominantFamily: diagnostics?.dominantFamily,
+      familyConfidence: diagnostics?.familyConfidence,
+      selectedFiles: diagnostics?.selectedFiles,
+      deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+    });
   }
-  if (route === "R1" && metadata && fts) {
+  if (queryMode === "trace" && (!metadata || !fts)) {
+    const context = await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult);
+    return finalizePromptContextResult(query, {
+      context,
+      resolvedQueryMode: queryMode,
+      deliveryMode: context.deliveryMode ?? "code_context",
+    });
+  }
+  if (queryMode === "trace" && metadata && fts) {
     if (search.hasConceptContext(query)) {
-      return {
-        context: await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult),
-        resolvedRoute: "R0",
-      };
+      const context = await search.searchWithContext(query, codeBudget, activeFiles, signal, seedResult);
+      return finalizePromptContextResult(query, {
+        context,
+        resolvedQueryMode: "lookup",
+        deliveryMode: context.deliveryMode ?? "code_context",
+      });
     }
 
-    const resolvedSeeds = seedResult ?? resolveSeeds(query, metadata, fts);
+    const resolvedSeeds = search.prepareSeedResult(
+      query,
+      queryMode,
+      seedResult ?? resolveSeeds(query, metadata, fts)
+    );
     if (resolvedSeeds.bestSeed) {
       const tree = buildStackTree(metadata, {
         seed: resolvedSeeds.bestSeed,
@@ -256,35 +333,183 @@ async function resolveCodeContext(
         maxNodes: 24,
         query,
       });
+      const augmentedTree = augmentFlowTreeWithRelatedSeeds(tree, resolvedSeeds, query);
 
-      if (tree.nodeCount <= 1) {
-        return {
-          context: await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds),
-          resolvedRoute: "R2",
-        };
+      if (augmentedTree.nodeCount <= 1) {
+        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const diagnostics = getBroadDiagnostics();
+        return finalizePromptContextResult(query, {
+          context,
+          resolvedQueryMode: queryMode,
+          deliveryMode: diagnostics?.deliveryMode ?? context.deliveryMode ?? "code_context",
+          dominantFamily: diagnostics?.dominantFamily,
+          familyConfidence: diagnostics?.familyConfidence,
+          selectedFiles: diagnostics?.selectedFiles,
+          deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+        });
       }
 
-      const flowContext = assembleFlowContext(tree, metadata, codeBudget, query);
+      const flowContext = assembleFlowContext(augmentedTree, metadata, codeBudget, query);
       if (flowContext.chunks.length === 0 || !flowContext.text.trim()) {
-        return {
-          context: await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds),
-          resolvedRoute: "R2",
-        };
+        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const diagnostics = getBroadDiagnostics();
+        return finalizePromptContextResult(query, {
+          context,
+          resolvedQueryMode: queryMode,
+          deliveryMode: diagnostics?.deliveryMode ?? context.deliveryMode ?? "code_context",
+          dominantFamily: diagnostics?.dominantFamily,
+          familyConfidence: diagnostics?.familyConfidence,
+          selectedFiles: diagnostics?.selectedFiles,
+          deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+        });
       }
 
-      return { context: flowContext, resolvedRoute: "R1" };
+      const deepContext = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+      const flowScore = scoreTraceContextCoherence(query, flowContext);
+      const deepScore = scoreTraceContextCoherence(query, deepContext);
+      if (deepScore > flowScore * 1.1) {
+        const diagnostics = getBroadDiagnostics();
+        return finalizePromptContextResult(query, {
+          context: deepContext,
+          resolvedQueryMode: queryMode,
+          deliveryMode: diagnostics?.deliveryMode ?? deepContext.deliveryMode ?? "code_context",
+          dominantFamily: diagnostics?.dominantFamily,
+          familyConfidence: diagnostics?.familyConfidence,
+          selectedFiles: diagnostics?.selectedFiles,
+          deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+        });
+      }
+
+      return finalizePromptContextResult(query, { context: flowContext, resolvedQueryMode: queryMode, deliveryMode: "code_context" });
     }
 
-    return {
-      context: await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds),
-      resolvedRoute: "R2",
-    };
+    const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+    const diagnostics = getBroadDiagnostics();
+    return finalizePromptContextResult(query, {
+      context,
+      resolvedQueryMode: queryMode,
+      deliveryMode: diagnostics?.deliveryMode ?? context.deliveryMode ?? "code_context",
+      dominantFamily: diagnostics?.dominantFamily,
+      familyConfidence: diagnostics?.familyConfidence,
+      selectedFiles: diagnostics?.selectedFiles,
+      deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+    });
   }
 
+  const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, seedResult);
+  const diagnostics = getBroadDiagnostics();
+  return finalizePromptContextResult(query, {
+    context,
+    resolvedQueryMode: queryMode,
+    deliveryMode: diagnostics?.deliveryMode ?? context.deliveryMode ?? "code_context",
+    dominantFamily: diagnostics?.dominantFamily,
+    familyConfidence: diagnostics?.familyConfidence,
+    selectedFiles: diagnostics?.selectedFiles,
+    deferredReason: diagnostics?.deferredReason ?? diagnostics?.fallbackReason,
+  });
+}
+
+function finalizePromptContextResult(
+  _query: string,
+  result: PromptContextResult
+): PromptContextResult {
+  const context = result.context;
+  const selectedFiles = result.selectedFiles?.map((file) => file.filePath)
+    ?? Array.from(new Set(context?.chunks.map((chunk) => chunk.filePath) ?? []));
+  const executionSurface = inferDominantExecutionSurface(context);
+  const contextStrength = inferContextStrength(result.resolvedQueryMode, result.deliveryMode, context, selectedFiles, result.familyConfidence);
+  const recommendedNextReads = selectedFiles.slice(0, Math.min(contextStrength === "weak" ? 2 : 3, selectedFiles.length));
+  const missingEvidence = inferMissingEvidence(result.resolvedQueryMode, contextStrength, result.deliveryMode, selectedFiles, result.deferredReason);
   return {
-    context: await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, seedResult),
-    resolvedRoute: "R2",
+    ...result,
+    contextStrength,
+    executionSurface,
+    missingEvidence,
+    recommendedNextReads,
+    advisoryText: buildReporecallAdvisory(result.resolvedQueryMode, contextStrength, selectedFiles, missingEvidence),
   };
+}
+
+function inferDominantExecutionSurface(context: AssembledContext | null): ExecutionSurface | "mixed" {
+  if (!context || context.chunks.length === 0) return "mixed";
+  const counts = new Map<ExecutionSurface, number>();
+  for (const chunk of context.chunks.slice(0, 5)) {
+    for (const surface of detectExecutionSurfaces(chunk.filePath, chunk.name, chunk.content)) {
+      counts.set(surface, (counts.get(surface) ?? 0) + 1);
+    }
+  }
+  const ranked = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  if (ranked.length === 0) return "mixed";
+  if ((ranked[0]?.[1] ?? 0) === (ranked[1]?.[1] ?? -1)) return "mixed";
+  return ranked[0]?.[0] ?? "mixed";
+}
+
+function inferContextStrength(
+  queryMode: QueryMode,
+  deliveryMode: "code_context" | "summary_only" | undefined,
+  context: AssembledContext | null,
+  selectedFiles: string[],
+  familyConfidence?: number
+): "sufficient" | "partial" | "weak" {
+  if (!context || context.chunks.length === 0) return "weak";
+  if (deliveryMode === "summary_only") return "weak";
+  if (queryMode === "lookup") return selectedFiles.length >= 1 ? "sufficient" : "partial";
+  if (queryMode === "trace" || queryMode === "bug") {
+    if (selectedFiles.length >= 2) return "sufficient";
+    return "partial";
+  }
+  if ((queryMode === "architecture" || queryMode === "change") && (familyConfidence ?? 0) >= 0.72 && selectedFiles.length >= 2) {
+    return "sufficient";
+  }
+  return selectedFiles.length > 0 ? "partial" : "weak";
+}
+
+function inferMissingEvidence(
+  queryMode: QueryMode,
+  contextStrength: "sufficient" | "partial" | "weak",
+  deliveryMode: "code_context" | "summary_only" | undefined,
+  selectedFiles: string[],
+  deferredReason?: string
+): string[] {
+  const issues: string[] = [];
+  if (deliveryMode === "summary_only") {
+    issues.push("Reporecall deferred broad code injection because subsystem cohesion was weak.");
+  }
+  if ((queryMode === "bug" || queryMode === "trace") && contextStrength !== "sufficient") {
+    issues.push("Runtime caller or orchestrator coverage is still incomplete.");
+  }
+  if ((queryMode === "architecture" || queryMode === "change") && selectedFiles.length < 2) {
+    issues.push("Representative subsystem coverage is still thin.");
+  }
+  if (deferredReason) {
+    issues.push(`Deferred reason: ${deferredReason}.`);
+  }
+  return issues;
+}
+
+function buildReporecallAdvisory(
+  queryMode: QueryMode,
+  contextStrength: "sufficient" | "partial" | "weak",
+  selectedFiles: string[],
+  missingEvidence: string[]
+): string | undefined {
+  if (selectedFiles.length === 0) return undefined;
+  const lines = [
+    "## Reporecall Guidance",
+    "",
+    `Reporecall classified this as a \`${queryMode}\` query and already selected likely files: ${selectedFiles.slice(0, 4).join(", ")}${selectedFiles.length > 4 ? ` (+${selectedFiles.length - 4} more)` : ""}.`,
+  ];
+  if (contextStrength === "sufficient") {
+    lines.push("Prefer answering from these files first. Use extra read/search tools only to fill a clearly missing gap.");
+  } else if (contextStrength === "partial") {
+    lines.push("Start from these files first. If you need more evidence, prefer narrow targeted reads instead of broad codebase exploration.");
+  } else {
+    lines.push("The injected context is weak. If you expand, prefer the listed files first and keep exploration narrow.");
+  }
+  if (missingEvidence.length > 0) {
+    lines.push(`Missing evidence: ${missingEvidence.join(" ")}`);
+  }
+  return lines.join("\n");
 }
 
 function clamp01(value: number): number {
@@ -297,8 +522,147 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => !!value && value.trim().length > 0))];
 }
 
+function tokenizeQueryTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3);
+}
+
+function countQueryMatches(queryTerms: string[], ...texts: Array<string | undefined>): number {
+  if (queryTerms.length === 0) return 0;
+  const haystack = texts
+    .filter((text): text is string => !!text)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[_-]/g, " ");
+  let count = 0;
+  for (const term of queryTerms) {
+    const prefix = term.length >= 6 ? term.slice(0, 4) : term;
+    if (haystack.includes(term) || (prefix.length >= 4 && haystack.includes(prefix))) count++;
+  }
+  return count;
+}
+
+function augmentFlowTreeWithRelatedSeeds(
+  tree: ReturnType<typeof buildStackTree>,
+  seedResult: SeedResult,
+  query: string
+): ReturnType<typeof buildStackTree> {
+  const bestSeed = seedResult.bestSeed;
+  if (!bestSeed) return tree;
+
+  const queryTerms = tokenizeQueryTerms(query);
+  const normalizedQuery = normalizeTargetText(query);
+  const seenChunkIds = new Set([
+    tree.seed.chunkId,
+    ...tree.upTree.map((node) => node.chunkId),
+    ...tree.downTree.map((node) => node.chunkId),
+  ]);
+
+  const relatedSeeds = seedResult.seeds
+    .filter((seed) => seed.chunkId !== bestSeed.chunkId)
+    .filter((seed) => (seed.reason === "explicit_target" || seed.reason === "resolved_target"))
+    .filter((seed) => seed.confidence >= 0.9)
+    .filter((seed) => !seenChunkIds.has(seed.chunkId))
+    .filter((seed) => !isNoiseLikeFlowSeed(seed.filePath))
+    .map((seed) => ({
+      seed,
+      queryMatches: countQueryMatches(queryTerms, seed.filePath, seed.name, seed.resolvedAlias),
+      directNameMention: directlyMentionsSeed(normalizedQuery, seed.name),
+      directAliasMention: directlyMentionsSeed(normalizedQuery, seed.resolvedAlias),
+      directMention:
+        directlyMentionsSeed(normalizedQuery, seed.name)
+        || directlyMentionsSeed(normalizedQuery, seed.resolvedAlias),
+      nameTokenCount: normalizeTargetText(seed.name).split(" ").filter(Boolean).length,
+      aliasTokenCount: normalizeTargetText(seed.resolvedAlias ?? seed.name).split(" ").filter(Boolean).length,
+      genericAlias:
+        !!seed.resolvedAlias
+        && GENERIC_BROAD_TERMS.has(normalizeTargetText(seed.resolvedAlias)),
+    }))
+    .filter((item) =>
+      item.seed.resolutionSource !== "file_path"
+      || item.directNameMention
+      || (item.directAliasMention && item.aliasTokenCount >= 2)
+    )
+    .filter((item) => item.directNameMention || item.directAliasMention || item.aliasTokenCount >= 2 || item.nameTokenCount >= 2)
+    .filter((item) => !item.genericAlias || item.directNameMention || (item.directAliasMention && item.aliasTokenCount >= 2))
+    .filter((item) => item.directNameMention || (item.directAliasMention && item.aliasTokenCount >= 2) || item.queryMatches >= 2)
+    .filter((item) =>
+      !(bestSeed.reason === "explicit_target"
+        && item.seed.targetKind === "file_module"
+        && item.nameTokenCount < 2
+        && item.queryMatches < 2)
+    )
+    .sort((a, b) =>
+      Number(b.directMention) - Number(a.directMention)
+      || b.queryMatches - a.queryMatches
+      || Number((b.seed.targetKind === "endpoint" || b.seed.targetKind === "file_module"))
+        - Number((a.seed.targetKind === "endpoint" || a.seed.targetKind === "file_module"))
+    )
+    .slice(0, 2);
+
+  if (relatedSeeds.length === 0) return tree;
+
+  return {
+    ...tree,
+    downTree: [
+      ...tree.downTree,
+      ...relatedSeeds.map(({ seed }) => ({
+        chunkId: seed.chunkId,
+        name: seed.name,
+        filePath: seed.filePath,
+        kind: seed.kind,
+        depth: 1 as const,
+        direction: "down" as const,
+      })),
+    ],
+    edges: [
+      ...tree.edges,
+      ...relatedSeeds.map(({ seed }) => ({
+        from: tree.seed.chunkId,
+        to: seed.chunkId,
+        callType: "related",
+      })),
+    ],
+    nodeCount: tree.nodeCount + relatedSeeds.length,
+  };
+}
+
+function isNoiseLikeFlowSeed(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return /(?:^|\/)(migrations?|fixtures?|examples?|docs?|reports?)\//.test(lower)
+    || /\.(md|mdx|txt|sql)$/i.test(lower);
+}
+
+function directlyMentionsSeed(normalizedQuery: string, candidate?: string): boolean {
+  if (!candidate) return false;
+  const normalizedCandidate = normalizeTargetText(candidate);
+  if (!normalizedCandidate || normalizedCandidate.length < 3) return false;
+  return normalizedQuery.includes(normalizedCandidate);
+}
+
 function configAwareBudget(totalBudget: number, ratio: number): number {
   return Math.max(0, Math.floor(totalBudget * ratio));
+}
+
+function shouldInjectMemoryIntoPrompt(
+  query: string,
+  _codeContext: AssembledContext | null,
+  memoryContext: AssembledMemoryContext | null
+): boolean {
+  if (!memoryContext?.text) return false;
+  if (!MEMORY_QUERY_RE.test(query)) return false;
+  return true;
+}
+
+function shouldSearchMemoryContext(
+  query: string,
+  _codeContext: AssembledContext | null
+): boolean {
+  if (!MEMORY_QUERY_RE.test(query)) return false;
+  return true;
 }
 
 export async function handlePromptContext(
@@ -307,7 +671,7 @@ export async function handlePromptContext(
   config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
-  route?: RouteDecision,
+  queryMode?: QueryMode,
   metadata?: MetadataStore,
   fts?: FTSStore,
   seedResult?: SeedResult,
@@ -320,7 +684,7 @@ export async function handlePromptContext(
     config,
     activeFiles,
     signal,
-    route,
+    queryMode,
     metadata,
     fts,
     seedResult,

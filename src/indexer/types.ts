@@ -1,11 +1,13 @@
 import type { CodeChunk } from "../parser/types.js";
 
+export type EmbeddingVector = number[] | Float32Array;
+
 export interface IndexedChunk extends CodeChunk {
-  vector: number[];
+  vector: EmbeddingVector;
 }
 
 export interface EmbeddingProvider {
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[]): Promise<EmbeddingVector[]>;
   dimensions(): number;
   /** Whether this provider produces real embeddings. NullEmbedder returns false. */
   isEnabled(): boolean;

@@ -103,6 +103,14 @@ describe('initCommand — real file creation', () => {
     expect(promptHook.hooks[0].command).toContain('/hooks/prompt-context')
   })
 
+  it('does not generate Reporecall PreToolUse hooks', async () => {
+    await runInit(tmpDir)
+    const settings = JSON.parse(
+      readFileSync(resolve(tmpDir, '.claude', 'settings.json'), 'utf-8')
+    )
+    expect(settings.hooks.PreToolUse).toBeUndefined()
+  })
+
   it('hooks contain runtime token read and do not bake a static token', async () => {
     await runInit(tmpDir)
     const settings = JSON.parse(
@@ -151,6 +159,7 @@ describe('initCommand — real file creation', () => {
     // Exactly one Reporecall hook per event after two init runs
     expect(settings.hooks.SessionStart).toHaveLength(1)
     expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
+    expect(settings.hooks.PreToolUse).toBeUndefined()
   })
 
   it('preserves non-Reporecall hooks in settings.json', async () => {
@@ -184,6 +193,71 @@ describe('initCommand — real file creation', () => {
     ).toBe(true)
   })
 
+  it('removes legacy Reporecall PreToolUse hooks when re-initializing', async () => {
+    const { mkdirSync, writeFileSync } = await import('fs')
+    mkdirSync(resolve(tmpDir, '.claude'), { recursive: true })
+    writeFileSync(
+      resolve(tmpDir, '.claude', 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Agent',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'echo "Reporecall context is injected via hooks"'
+                }
+              ]
+            }
+          ],
+        },
+      })
+    )
+
+    await runInit(tmpDir)
+
+    const settings = JSON.parse(
+      readFileSync(resolve(tmpDir, '.claude', 'settings.json'), 'utf-8')
+    )
+    expect(settings.hooks.PreToolUse).toBeUndefined()
+  })
+
+  it('preserves non-Reporecall PreToolUse hooks', async () => {
+    const { mkdirSync, writeFileSync } = await import('fs')
+    mkdirSync(resolve(tmpDir, '.claude'), { recursive: true })
+    writeFileSync(
+      resolve(tmpDir, '.claude', 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'echo external-pretool'
+                }
+              ]
+            }
+          ],
+        },
+      })
+    )
+
+    await runInit(tmpDir)
+
+    const settings = JSON.parse(
+      readFileSync(resolve(tmpDir, '.claude', 'settings.json'), 'utf-8')
+    )
+    expect(settings.hooks.PreToolUse).toHaveLength(1)
+    const commands = settings.hooks.PreToolUse
+      .flatMap((hook: any) => Array.isArray(hook.hooks) ? hook.hooks : [])
+      .map((hook: any) => hook.command)
+      .filter(Boolean)
+    expect(commands).toContain('echo external-pretool')
+  })
+
   it('creates .mcp.json with Reporecall server config', async () => {
     await runInit(tmpDir)
     const mcpJsonPath = resolve(tmpDir, '.mcp.json')
@@ -194,6 +268,40 @@ describe('initCommand — real file creation', () => {
     expect(mcpConfig.mcpServers.reporecall.command).toBe(process.execPath)
     expect(mcpConfig.mcpServers.reporecall.args).toEqual([
       resolve(process.argv[1]),
+      'mcp',
+      '--project',
+      tmpDir,
+    ])
+  })
+
+  it('prefers the currently running CLI entry over a local package install', async () => {
+    const { mkdirSync, writeFileSync } = await import('fs')
+    const pkgDir = resolve(tmpDir, 'node_modules', '@proofofwork-agency', 'reporecall')
+    mkdirSync(resolve(pkgDir, 'dist'), { recursive: true })
+    writeFileSync(
+      resolve(pkgDir, 'package.json'),
+      JSON.stringify({ bin: { reporecall: 'dist/memory.js' } })
+    )
+    writeFileSync(resolve(pkgDir, 'dist', 'memory.js'), '// fake package entry\n')
+
+    const customDistDir = resolve(tmpDir, 'custom-reporecall', 'dist')
+    mkdirSync(customDistDir, { recursive: true })
+    const customEntry = resolve(customDistDir, 'memory.js')
+    writeFileSync(customEntry, '// fake custom dist entry\n')
+
+    const originalArgv1 = process.argv[1]
+    process.argv[1] = customEntry
+    try {
+      await runInit(tmpDir)
+    } finally {
+      process.argv[1] = originalArgv1
+    }
+
+    const mcpConfig = JSON.parse(
+      readFileSync(resolve(tmpDir, '.mcp.json'), 'utf-8')
+    )
+    expect(mcpConfig.mcpServers.reporecall.args).toEqual([
+      customEntry,
       'mcp',
       '--project',
       tmpDir,

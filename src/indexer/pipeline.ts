@@ -6,7 +6,7 @@ import { getLogger } from "../core/logger.js";
 import { scanFiles } from "./file-scanner.js";
 import { MerkleTree } from "./merkle.js";
 import { createEmbedder, formatChunkForEmbedding } from "./embedder.js";
-import type { EmbeddingProvider } from "./types.js";
+import type { EmbeddingProvider, EmbeddingVector } from "./types.js";
 import { chunkFileWithCalls } from "../parser/chunker.js";
 import { MetadataStore } from "../storage/metadata-store.js";
 import { FTSStore } from "../storage/fts-store.js";
@@ -17,6 +17,7 @@ import { resolveImportPath } from "../analysis/imports.js";
 import type { ImportRecord } from "../storage/import-store.js";
 import { analyzeConventions } from "../analysis/conventions.js";
 import { resolveCallTarget } from "../analysis/resolve.js";
+import { extractSemanticFeatures } from "../analysis/semantic-features.js";
 import { freeEncoder } from "../search/context-assembler.js";
 import { buildTargetCatalog, INDEX_FORMAT_VERSION } from "../search/targets.js";
 
@@ -35,6 +36,21 @@ export interface PipelineDependencies {
   merkle?: MerkleTree;
 }
 
+interface ChunkedFileRecord {
+  path: string;
+  hash?: string;
+  fileMtime: string;
+  chunks: Array<CodeChunk & { fileMtime: string }>;
+  callEdges: CallEdge[];
+  importRecords: ImportRecord[];
+  textBytes: number;
+}
+
+interface WindowProgressState {
+  discoveredChunks: number;
+  embeddedChunks: number;
+}
+
 function buildImportRecords(
   rawImports: Array<{ importedName: string; sourceModule: string; isDefault: boolean; isNamespace: boolean }>,
   relPath: string,
@@ -48,6 +64,19 @@ function buildImportRecords(
     isDefault: raw.isDefault,
     isNamespace: raw.isNamespace,
   }));
+}
+
+function estimateChunkTextBytes(chunk: {
+  kind: string;
+  name: string;
+  filePath: string;
+  docstring?: string;
+  content: string;
+}): number {
+  return Buffer.byteLength(
+    `${chunk.kind}\n${chunk.name}\n${chunk.filePath}\n${chunk.docstring ?? ""}\n${chunk.content}`,
+    "utf8"
+  );
 }
 
 export class IndexingPipeline {
@@ -74,6 +103,51 @@ export class IndexingPipeline {
     this.merkle = deps?.merkle ?? new MerkleTree(config.dataDir);
   }
 
+  private getFileBatchSize(): number {
+    return Math.max(1, this.config.fileBatchSize ?? this.config.batchSize ?? 32);
+  }
+
+  private getEmbedBatchSize(): number {
+    return Math.max(1, this.config.embedBatchSize ?? this.config.batchSize ?? 32);
+  }
+
+  private useAdaptiveBatching(): boolean {
+    return this.config.adaptiveBatching !== false;
+  }
+
+  private getHeapSoftLimitBytes(): number {
+    const limitMb = this.config.heapSoftLimitMb ?? 2048;
+    return Math.max(128, limitMb) * 1024 * 1024;
+  }
+
+  private getMaxChunkTextBytesPerWindow(): number {
+    return Math.max(128 * 1024, this.config.maxChunkTextBytesPerWindow ?? 2 * 1024 * 1024);
+  }
+
+  private getHeapUsedBytes(): number {
+    return process.memoryUsage().heapUsed;
+  }
+
+  private shouldReduceEmbeddingPressure(windowTextBytes: number): boolean {
+    if (!this.useAdaptiveBatching()) return false;
+    return this.getHeapUsedBytes() >= this.getHeapSoftLimitBytes() * 0.88
+      || windowTextBytes >= this.getMaxChunkTextBytesPerWindow() * 0.9;
+  }
+
+  private reduceBatchSize(batchSize: number): number {
+    return Math.max(1, Math.floor(batchSize / 2));
+  }
+
+  private getAdaptiveEmbedBatchSize(windowChunkCount: number, windowTextBytes: number): number {
+    let batchSize = this.getEmbedBatchSize();
+    if (!this.useAdaptiveBatching()) return batchSize;
+    if (windowChunkCount >= 96) batchSize = Math.min(batchSize, 8);
+    if (windowChunkCount >= 48) batchSize = Math.min(batchSize, 12);
+    if (windowTextBytes >= this.getMaxChunkTextBytesPerWindow()) batchSize = Math.min(batchSize, 8);
+    if (this.getHeapUsedBytes() >= this.getHeapSoftLimitBytes() * 0.82) batchSize = Math.min(batchSize, 6);
+    return Math.max(1, batchSize);
+  }
+
   private async ensureIndexFormat(): Promise<void> {
     const currentVersion = this.metadata.getStat("index_format_version");
     if (currentVersion === INDEX_FORMAT_VERSION) return;
@@ -95,207 +169,173 @@ export class IndexingPipeline {
     this.metadata.replaceAllTargets(targets, aliases);
   }
 
-  async indexAll(
-    onProgress?: (progress: IndexProgress) => void,
-    _isRetry = false
-  ): Promise<{ filesProcessed: number; chunksCreated: number }> {
+  private async forceFullReindex(onProgress?: (progress: IndexProgress) => void): Promise<{ filesProcessed: number; chunksCreated: number }> {
     const log = getLogger();
-    await this.ensureIndexFormat();
+    log.info("Existing local index is inconsistent — forcing a full rebuild");
+    this.metadata.resetIndexData();
+    this.fts.resetAll();
+    await this.vectors.resetAll();
+    this.merkle.clear();
+    this.metadata.setStat("index_format_version", INDEX_FORMAT_VERSION);
+    return this.indexAll(onProgress, true);
+  }
 
-    // Phase 1: Scan files
-    onProgress?.({
-      phase: "scanning",
-      current: 0,
-      total: 0,
-      message: "Scanning files...",
-    });
-    const files = await scanFiles(this.config);
-    log.info(`Found ${files.length} files`);
+  private async chunkChangedFile(changePath: string, hash?: string): Promise<ChunkedFileRecord | null> {
+    const absPath = resolve(this.config.projectRoot, changePath);
+    const fileMtime = (await stat(absPath)).mtime.toISOString();
+    const { chunks, callEdges, rawImports } = await chunkFileWithCalls(absPath, this.config.projectRoot);
+    const storedChunks = chunks.map((chunk) => ({ ...chunk, fileMtime }));
+    return {
+      path: changePath,
+      hash,
+      fileMtime,
+      chunks: storedChunks,
+      callEdges,
+      importRecords: buildImportRecords(rawImports, changePath, this.config.projectRoot),
+      textBytes: storedChunks.reduce((sum, chunk) => sum + estimateChunkTextBytes(chunk), 0),
+    };
+  }
 
-    // Phase 2: Detect changes
-    const { changes, pendingState } = await this.merkle.computeChanges(
-      files.map((f) => ({
-        relativePath: f.relativePath,
-        absolutePath: f.absolutePath,
-      }))
-    );
-
-    const toProcess = changes.filter((c) => c.type !== "deleted");
-    const toDelete = changes.filter((c) => c.type === "deleted");
-
-    log.info(
-      `Changes: ${toProcess.length} to process, ${toDelete.length} to delete`
-    );
-
-    if (toProcess.length === 0 && toDelete.length === 0) {
-      // Cross-check: if Merkle says no changes but stores are empty,
-      // the index is stale — force a full re-index
-      const storeChunkCount = this.metadata.getStats().totalChunks;
-      if (!_isRetry && storeChunkCount === 0 && files.length > 0) {
-        log.info("Merkle says no changes but stores are empty — forcing full re-index");
-        this.merkle.clear();
-        return this.indexAll(onProgress, true);
-      }
-
-      onProgress?.({
-        phase: "done",
-        current: 0,
-        total: 0,
-        message: "No changes detected",
-      });
-      return { filesProcessed: 0, chunksCreated: 0 };
+  private async embedWindowChunks(
+    chunks: Array<CodeChunk & { fileMtime: string }>,
+    windowTextBytes: number,
+    progressState: WindowProgressState,
+    onProgress?: (progress: IndexProgress) => void
+  ): Promise<Array<{ chunk: CodeChunk & { fileMtime: string }; vector: EmbeddingVector }>> {
+    const log = getLogger();
+    const keywordMode = this.config.embeddingProvider === "keyword" || !this.embedder.isEnabled();
+    if (keywordMode) {
+      progressState.embeddedChunks += chunks.length;
+      return chunks.map((chunk) => ({ chunk, vector: [] }));
     }
 
-    // Phase 3: Remove deleted files (batch)
-    if (toDelete.length > 0) {
-      const deletedPaths = toDelete.map((d) => d.path);
-      for (const delPath of deletedPaths) {
-        this.metadata.removeFile(delPath);
+    const embeddedChunks: Array<{ chunk: CodeChunk & { fileMtime: string }; vector: EmbeddingVector }> = [];
+    let batchSize = this.getAdaptiveEmbedBatchSize(chunks.length, windowTextBytes);
+    let index = 0;
+
+    while (index < chunks.length) {
+      if (this.shouldReduceEmbeddingPressure(windowTextBytes) && batchSize > 1) {
+        const reduced = this.reduceBatchSize(batchSize);
+        if (reduced < batchSize) {
+          log.info({
+            batchSize,
+            reducedBatchSize: reduced,
+            heapUsedMb: Math.round(this.getHeapUsedBytes() / 1024 / 1024),
+          }, "Reducing embedding batch size under memory pressure");
+          batchSize = reduced;
+        }
       }
-      this.fts.bulkRemoveByFiles(deletedPaths);
-      await this.vectors.removeByFiles(deletedPaths);
-    }
 
-    // Phase 4: Chunk changed files
-    onProgress?.({
-      phase: "chunking",
-      current: 0,
-      total: toProcess.length,
-      message: `Chunking ${toProcess.length} files...`,
-    });
-
-    const allChunks: Array<CodeChunk & { fileMtime: string }> = [];
-    const allCallEdges: CallEdge[] = [];
-    const allImportRecords: ImportRecord[] = [];
-    const successfulFiles = new Set<string>();
-
-    for (let i = 0; i < toProcess.length; i++) {
-      const change = toProcess[i];
-      if (!change) continue;
-      const absPath = resolve(this.config.projectRoot, change.path);
+      const batch = chunks.slice(index, index + batchSize);
+      const texts = batch.map(formatChunkForEmbedding);
 
       try {
-        const fileMtime = (await stat(absPath)).mtime.toISOString();
-        const { chunks, callEdges, rawImports } = await chunkFileWithCalls(absPath, this.config.projectRoot);
-        for (const chunk of chunks) {
-          allChunks.push({ ...chunk, fileMtime });
+        const vectors = await this.embedder.embed(texts);
+        for (let vectorIndex = 0; vectorIndex < batch.length; vectorIndex += 1) {
+          const batchChunk = batch[vectorIndex];
+          const batchVector = vectors[vectorIndex];
+          if (!batchChunk || !batchVector) continue;
+          embeddedChunks.push({ chunk: batchChunk, vector: batchVector });
         }
-        allCallEdges.push(...callEdges);
-
-        // Resolve and collect import records
-        allImportRecords.push(...buildImportRecords(rawImports, change.path, this.config.projectRoot));
-
-        successfulFiles.add(change.path);
+        index += batch.length;
       } catch (err) {
-        log.warn(`Failed to chunk ${change.path}: ${err}`);
+        if (this.useAdaptiveBatching() && batchSize > 1) {
+          const reduced = this.reduceBatchSize(batchSize);
+          if (reduced < batchSize) {
+            log.warn({
+              err,
+              batchSize,
+              reducedBatchSize: reduced,
+            }, "Embedding batch failed — retrying with smaller batch");
+            batchSize = reduced;
+            continue;
+          }
+        }
+
+        log.warn({ err, batchSize, failedChunks: batch.length }, "Embedding batch failed — falling back to keyword vectors for batch");
+        for (const chunk of batch) {
+          embeddedChunks.push({ chunk, vector: [] });
+        }
+        index += batch.length;
       }
 
-      onProgress?.({
-        phase: "chunking",
-        current: i + 1,
-        total: toProcess.length,
-        message: `Chunked ${change.path}`,
-      });
-    }
-
-    log.info(`Created ${allChunks.length} chunks, ${allCallEdges.length} call edges`);
-
-    const isKeywordMode = this.config.embeddingProvider === "keyword";
-
-    // Phase 5: Embed in batches (skip for keyword mode)
-    const embeddedChunks: Array<{
-      chunk: CodeChunk & { fileMtime: string };
-      vector: number[];
-    }> = [];
-
-    if (isKeywordMode) {
-      for (const chunk of allChunks) {
-        embeddedChunks.push({ chunk, vector: [] });
-      }
-      log.info("Keyword mode: skipping embedding");
-    } else {
+      progressState.embeddedChunks += batch.length;
       onProgress?.({
         phase: "embedding",
-        current: 0,
-        total: allChunks.length,
-        message: `Embedding ${allChunks.length} chunks...`,
+        current: progressState.embeddedChunks,
+        total: Math.max(progressState.discoveredChunks, progressState.embeddedChunks),
+        message: `Embedded ${progressState.embeddedChunks}/${Math.max(progressState.discoveredChunks, progressState.embeddedChunks)} chunks`,
       });
-
-      const batchSize = this.config.batchSize;
-
-      for (let i = 0; i < allChunks.length; i += batchSize) {
-        const batch = allChunks.slice(i, i + batchSize);
-        const texts = batch.map(formatChunkForEmbedding);
-
-        try {
-          const vectors = await this.embedder.embed(texts);
-          for (let j = 0; j < batch.length; j++) {
-            const batchChunk = batch[j];
-            const batchVector = vectors[j];
-            if (!batchChunk || !batchVector) continue;
-            embeddedChunks.push({ chunk: batchChunk, vector: batchVector });
-          }
-        } catch (err) {
-          log.warn(`Embedding batch failed, falling back to keyword-only for ${batch.length} chunks: ${err}`);
-          for (const chunk of batch) {
-            embeddedChunks.push({ chunk, vector: [] });
-          }
-        }
-
-        onProgress?.({
-          phase: "embedding",
-          current: Math.min(i + batchSize, allChunks.length),
-          total: allChunks.length,
-          message: `Embedded ${Math.min(i + batchSize, allChunks.length)}/${allChunks.length} chunks`,
-        });
-      }
     }
 
-    // Phase 6: Store
+    return embeddedChunks;
+  }
+
+  private async persistWindow(
+    records: ChunkedFileRecord[],
+    progressState: WindowProgressState,
+    onProgress?: (progress: IndexProgress) => void
+  ): Promise<{ filesProcessed: number; chunksCreated: number; filePaths: string[] }> {
+    if (records.length === 0) {
+      return { filesProcessed: 0, chunksCreated: 0, filePaths: [] };
+    }
+
+    const log = getLogger();
+    const now = new Date().toISOString();
+    const windowChunks = records.flatMap((record) => record.chunks);
+    const windowCallEdges = records.flatMap((record) => record.callEdges);
+    const windowImports = records.flatMap((record) => record.importRecords);
+    const windowTextBytes = records.reduce((sum, record) => sum + record.textBytes, 0);
+    const filePaths = records.map((record) => record.path);
+
+    log.info({
+      files: records.length,
+      chunks: windowChunks.length,
+      textBytes: windowTextBytes,
+      heapUsedMb: Math.round(this.getHeapUsedBytes() / 1024 / 1024),
+    }, "Processing indexing window");
+
+    const embeddedChunks = await this.embedWindowChunks(windowChunks, windowTextBytes, progressState, onProgress);
+
     onProgress?.({
       phase: "storing",
-      current: 0,
-      total: embeddedChunks.length,
-      message: "Storing chunks...",
+      current: progressState.embeddedChunks,
+      total: Math.max(progressState.discoveredChunks, progressState.embeddedChunks),
+      message: `Persisting ${records.length} files`,
     });
 
-    const now = new Date().toISOString();
-
-    // Delete old data for successfully chunked+embedded files before inserting new data
-    for (const filePath of successfulFiles) {
+    for (const filePath of filePaths) {
       this.metadata.removeChunksForFile(filePath);
       this.metadata.removeCallEdgesForFile(filePath);
       this.metadata.removeImportsForFile(filePath);
-      this.fts.removeByFile(filePath);
     }
-    await this.vectors.removeByFiles(Array.from(successfulFiles));
+    this.fts.bulkRemoveByFiles(filePaths);
+    await this.vectors.removeByFiles(filePaths);
 
-    // Store in metadata + FTS using bulk operations
     const metadataChunks = embeddedChunks.map(({ chunk }) => ({
       ...chunk,
       indexedAt: now,
       fileMtime: chunk.fileMtime,
     }));
-    this.metadata.bulkUpsertChunks(metadataChunks);
-    this.fts.bulkUpsert(
-      embeddedChunks.map(({ chunk }) => ({
-        id: chunk.id,
-        name: chunk.name,
-        filePath: chunk.filePath,
-        content: chunk.content,
-        kind: chunk.kind,
-      }))
-    );
 
-    // Store import records (before call edges so resolution can query them)
-    if (allImportRecords.length > 0) {
-      this.metadata.upsertImports(allImportRecords);
+    if (metadataChunks.length > 0) {
+      this.metadata.bulkUpsertChunks(metadataChunks);
+      this.fts.bulkUpsert(
+        embeddedChunks.map(({ chunk }) => ({
+          id: chunk.id,
+          name: chunk.name,
+          filePath: chunk.filePath,
+          content: chunk.content,
+          kind: chunk.kind,
+        }))
+      );
     }
 
-    this.rebuildTargetCatalog();
+    if (windowImports.length > 0) {
+      this.metadata.upsertImports(windowImports);
+    }
 
-    // Resolve call edge targets using stored imports and chunks
-    for (const edge of allCallEdges) {
+    for (const edge of windowCallEdges) {
       const resolution = resolveCallTarget(
         {
           targetName: edge.targetName,
@@ -313,51 +353,216 @@ export class IndexingPipeline {
       }
     }
 
-    // Store call edges (after resolution so target_file_path is populated)
-    if (allCallEdges.length > 0) {
-      this.metadata.upsertCallEdges(allCallEdges);
+    if (windowCallEdges.length > 0) {
+      this.metadata.upsertCallEdges(windowCallEdges);
     }
 
-    // Store vectors (skip for keyword mode)
-    if (!isKeywordMode) {
-      const vectorRecords = embeddedChunks
-        .filter(({ vector }) => vector.length > 0)
-        .map(({ chunk, vector }) => ({
-          id: chunk.id,
-          vector,
-          filePath: chunk.filePath,
-          name: chunk.name,
-          kind: chunk.kind,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-        }));
+    if (metadataChunks.length > 0) {
+      const callerCounts = new Map<string, number>();
+      for (const chunk of metadataChunks) {
+        callerCounts.set(
+          chunk.id,
+          this.metadata.findCallers(chunk.name, 200, chunk.filePath, chunk.id).length
+        );
+      }
+      const semanticFeatures = extractSemanticFeatures(metadataChunks, windowCallEdges, callerCounts);
+      this.metadata.replaceChunkFeatures(semanticFeatures.chunkFeatures);
+      this.metadata.replaceFileFeatures(semanticFeatures.fileFeatures);
+      this.metadata.replaceChunkTags(semanticFeatures.chunkTags);
+    }
 
-      if (vectorRecords.length > 0) {
-        await this.vectors.upsert(vectorRecords);
+    const vectorRecords = embeddedChunks
+      .filter(({ vector }) => vector.length > 0)
+      .map(({ chunk, vector }) => ({
+        id: chunk.id,
+        vector,
+        filePath: chunk.filePath,
+        name: chunk.name,
+        kind: chunk.kind,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+      }));
+
+    if (vectorRecords.length > 0) {
+      await this.vectors.upsert(vectorRecords);
+    }
+
+    for (const record of records) {
+      if (record.hash) {
+        this.metadata.upsertFile(record.path, record.hash);
       }
     }
 
-    // Update file hashes only for successful files
-    for (const change of toProcess) {
-      if (successfulFiles.has(change.path) && change.hash) {
-        this.metadata.upsertFile(change.path, change.hash);
-      }
+    return {
+      filesProcessed: records.length,
+      chunksCreated: metadataChunks.length,
+      filePaths,
+    };
+  }
+
+  private async flushWindow(
+    window: ChunkedFileRecord[],
+    progressState: WindowProgressState,
+    successfulFiles: Set<string>,
+    counters: { filesProcessed: number; chunksCreated: number },
+    onProgress?: (progress: IndexProgress) => void
+  ): Promise<void> {
+    if (window.length === 0) return;
+    const result = await this.persistWindow(window, progressState, onProgress);
+    counters.filesProcessed += result.filesProcessed;
+    counters.chunksCreated += result.chunksCreated;
+    for (const filePath of result.filePaths) successfulFiles.add(filePath);
+    window.length = 0;
+    this.rebuildTargetCatalog();
+  }
+
+  async indexAll(
+    onProgress?: (progress: IndexProgress) => void,
+    _isRetry = false
+  ): Promise<{ filesProcessed: number; chunksCreated: number }> {
+    const log = getLogger();
+    await this.ensureIndexFormat();
+
+    onProgress?.({
+      phase: "scanning",
+      current: 0,
+      total: 0,
+      message: "Scanning files...",
+    });
+    const files = await scanFiles(this.config);
+    log.info(`Found ${files.length} files`);
+
+    const existingStats = this.metadata.getStats();
+    const lastIndexedAt = this.metadata.getStat("lastIndexedAt");
+    const indexLooksInconsistent =
+      files.length > 0
+      && (
+        (existingStats.totalChunks > 0 && existingStats.totalFiles === 0)
+        || (existingStats.totalChunks > 0 && !lastIndexedAt)
+      );
+    if (!_isRetry && indexLooksInconsistent) {
+      return this.forceFullReindex(onProgress);
     }
 
-    // Apply pending merkle state filtered to successful files and save
+    const { changes, pendingState } = await this.merkle.computeChanges(
+      files.map((file) => ({
+        relativePath: file.relativePath,
+        absolutePath: file.absolutePath,
+      }))
+    );
+
+    const toProcess = changes.filter((change) => change.type !== "deleted");
+    const toDelete = changes.filter((change) => change.type === "deleted");
+
+    log.info(`Changes: ${toProcess.length} to process, ${toDelete.length} to delete`);
+
+    if (toProcess.length === 0 && toDelete.length === 0) {
+      const storeChunkCount = this.metadata.getStats().totalChunks;
+      const storeFileCount = this.metadata.getStats().totalFiles;
+      const indexedAt = this.metadata.getStat("lastIndexedAt");
+      if (
+        !_isRetry
+        && files.length > 0
+        && (
+          storeChunkCount === 0
+          || storeFileCount === 0
+          || !indexedAt
+        )
+      ) {
+        log.info("Merkle says no changes but stores are empty — forcing full re-index");
+        return this.forceFullReindex(onProgress);
+      }
+
+      onProgress?.({
+        phase: "done",
+        current: 0,
+        total: 0,
+        message: "No changes detected",
+      });
+      return { filesProcessed: 0, chunksCreated: 0 };
+    }
+
+    if (toDelete.length > 0) {
+      const deletedPaths = toDelete.map((entry) => entry.path);
+      for (const deletedPath of deletedPaths) {
+        this.metadata.removeFile(deletedPath);
+      }
+      this.fts.bulkRemoveByFiles(deletedPaths);
+      await this.vectors.removeByFiles(deletedPaths);
+    }
+
+    onProgress?.({
+      phase: "chunking",
+      current: 0,
+      total: toProcess.length,
+      message: `Chunking ${toProcess.length} files...`,
+    });
+
+    const successfulFiles = new Set<string>();
+    const progressState: WindowProgressState = { discoveredChunks: 0, embeddedChunks: 0 };
+    const counters = { filesProcessed: 0, chunksCreated: 0 };
+    const pendingWindow: ChunkedFileRecord[] = [];
+    let pendingWindowBytes = 0;
+
+    for (let index = 0; index < toProcess.length; index += 1) {
+      const change = toProcess[index];
+      if (!change) continue;
+
+      try {
+        const record = await this.chunkChangedFile(change.path, change.hash);
+        if (!record) continue;
+        progressState.discoveredChunks += record.chunks.length;
+
+        const wouldOverflowWindow =
+          pendingWindow.length > 0
+          && (
+            pendingWindow.length >= this.getFileBatchSize()
+            || pendingWindowBytes + record.textBytes > this.getMaxChunkTextBytesPerWindow()
+          );
+
+        if (wouldOverflowWindow) {
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+          pendingWindowBytes = 0;
+        }
+
+        pendingWindow.push(record);
+        pendingWindowBytes += record.textBytes;
+
+        const shouldFlushNow =
+          pendingWindow.length >= this.getFileBatchSize()
+          || pendingWindowBytes >= this.getMaxChunkTextBytesPerWindow();
+        if (shouldFlushNow) {
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+          pendingWindowBytes = 0;
+        }
+      } catch (err) {
+        log.warn(`Failed to chunk ${change.path}: ${err}`);
+      }
+
+      onProgress?.({
+        phase: "chunking",
+        current: index + 1,
+        total: toProcess.length,
+        message: `Chunked ${change.path}`,
+      });
+    }
+
+    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+
     const filteredPendingState: Record<string, string | { hash: string; mtimeMs: number }> = {};
     for (const [path, entry] of Object.entries(pendingState)) {
-      // Keep existing state for unchanged files + successful files only
-      const isChangedFile = toProcess.some((c) => c.path === path);
+      const isChangedFile = toProcess.some((change) => change.path === path);
       if (!isChangedFile || successfulFiles.has(path)) {
         filteredPendingState[path] = entry;
       }
     }
     this.merkle.applyPendingState(filteredPendingState);
     this.merkle.save();
+
+    this.rebuildTargetCatalog();
+    const now = new Date().toISOString();
     this.metadata.setStat("lastIndexedAt", now);
 
-    // Analyze conventions
     try {
       const conventions = analyzeConventions(this.metadata);
       this.metadata.setConventions(conventions);
@@ -367,15 +572,12 @@ export class IndexingPipeline {
 
     onProgress?.({
       phase: "done",
-      current: embeddedChunks.length,
-      total: embeddedChunks.length,
-      message: `Indexed ${successfulFiles.size} files, ${embeddedChunks.length} chunks`,
+      current: counters.chunksCreated,
+      total: counters.chunksCreated,
+      message: `Indexed ${counters.filesProcessed} files, ${counters.chunksCreated} chunks`,
     });
 
-    return {
-      filesProcessed: successfulFiles.size,
-      chunksCreated: embeddedChunks.length,
-    };
+    return counters;
   }
 
   async indexChanged(paths: string[]): Promise<{
@@ -384,132 +586,61 @@ export class IndexingPipeline {
   }> {
     const log = getLogger();
     await this.ensureIndexFormat();
-    let totalChunks = 0;
-    const successPaths = new Set<string>();
 
-    for (const p of paths) {
-      const relPath = isAbsolute(p) ? relative(this.config.projectRoot, p) : p;
+    const successfulFiles = new Set<string>();
+    const progressState: WindowProgressState = { discoveredChunks: 0, embeddedChunks: 0 };
+    const counters = { filesProcessed: 0, chunksCreated: 0 };
+    const pendingWindow: ChunkedFileRecord[] = [];
+    let pendingWindowBytes = 0;
+
+    for (const pathValue of paths) {
+      const relPath = isAbsolute(pathValue) ? relative(this.config.projectRoot, pathValue) : pathValue;
       const absPath = resolve(this.config.projectRoot, relPath);
 
-      // Validate path is within project root to prevent path traversal
       if (!absPath.startsWith(this.config.projectRoot + sep) && absPath !== this.config.projectRoot) {
-        log.warn(`Path traversal blocked: ${p} resolves outside project root`);
+        log.warn(`Path traversal blocked: ${pathValue} resolves outside project root`);
         continue;
       }
 
       try {
-        const fileMtime = (await stat(absPath)).mtime.toISOString();
-        const { chunks, callEdges, rawImports } = await chunkFileWithCalls(absPath, this.config.projectRoot);
-        if (chunks.length === 0) {
-          this.metadata.removeChunksForFile(relPath);
-          this.fts.removeByFile(relPath);
-          await this.vectors.removeByFile(relPath);
-          await this.merkle.updateHash(relPath, absPath);
-          continue;
-        }
+        const record = await this.chunkChangedFile(relPath);
+        if (!record) continue;
+        progressState.discoveredChunks += record.chunks.length;
 
-        const isKeywordMode = this.config.embeddingProvider === "keyword";
-        const now = new Date().toISOString();
-
-        let vectors: number[][] | undefined;
-        if (!isKeywordMode) {
-          try {
-            const texts = chunks.map(formatChunkForEmbedding);
-            vectors = await this.embedder.embed(texts);
-          } catch (err) {
-            log.warn(`Embedding failed for ${relPath}, falling back to keyword-only: ${err}`);
-          }
-        }
-
-        if (!isKeywordMode && !vectors) {
-          log.warn(`Skipping ${relPath}: embedding failed and not in keyword mode`);
-          continue;
-        }
-
-        // Delete old data AFTER embedding succeeds, BEFORE storing new data
-        this.metadata.removeChunksForFile(relPath);
-        this.metadata.removeCallEdgesForFile(relPath);
-        this.metadata.removeImportsForFile(relPath);
-        this.fts.removeByFile(relPath);
-        await this.vectors.removeByFile(relPath);
-
-        // Bulk upsert chunks and FTS entries
-        const validChunks = chunks.filter((c): c is NonNullable<typeof c> => c != null);
-        this.metadata.bulkUpsertChunks(
-          validChunks.map((chunk) => ({ ...chunk, indexedAt: now, fileMtime }))
-        );
-        this.fts.bulkUpsert(
-          validChunks.map((chunk) => ({
-            id: chunk.id,
-            name: chunk.name,
-            filePath: chunk.filePath,
-            content: chunk.content,
-            kind: chunk.kind,
-          }))
-        );
-
-        // Store import records (before call edges so resolution can query them)
-        if (rawImports.length > 0) {
-          this.metadata.upsertImports(buildImportRecords(rawImports, relPath, this.config.projectRoot));
-        }
-
-        this.rebuildTargetCatalog();
-
-        // Resolve call edge targets using stored imports and chunks
-        for (const edge of callEdges) {
-          const resolution = resolveCallTarget(
-            {
-              targetName: edge.targetName,
-              filePath: edge.filePath,
-              receiver: edge.receiver,
-              literalTargets: edge.literalTargets,
-            },
-            this.metadata
+        const wouldOverflowWindow =
+          pendingWindow.length > 0
+          && (
+            pendingWindow.length >= this.getFileBatchSize()
+            || pendingWindowBytes + record.textBytes > this.getMaxChunkTextBytesPerWindow()
           );
-          if (resolution) {
-            edge.targetFilePath = resolution.filePath;
-            edge.targetId = resolution.targetId;
-            edge.targetKind = resolution.targetKind;
-            edge.resolutionSource = resolution.resolutionSource;
-          }
+
+        if (wouldOverflowWindow) {
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+          pendingWindowBytes = 0;
         }
 
-        if (callEdges.length > 0) {
-          this.metadata.upsertCallEdges(callEdges);
-        }
+        pendingWindow.push(record);
+        pendingWindowBytes += record.textBytes;
 
-        if (!isKeywordMode && vectors) {
-          const resolvedVectors = vectors;
-          await this.vectors.upsert(
-            chunks.flatMap((chunk, i) => {
-              const vector = resolvedVectors[i];
-              if (!vector) return [];
-              return [{
-                id: chunk.id,
-                vector,
-                filePath: chunk.filePath,
-                name: chunk.name,
-                kind: chunk.kind,
-                startLine: chunk.startLine,
-                endLine: chunk.endLine,
-              }];
-            })
-          );
+        const shouldFlushNow =
+          pendingWindow.length >= this.getFileBatchSize()
+          || pendingWindowBytes >= this.getMaxChunkTextBytesPerWindow();
+        if (shouldFlushNow) {
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+          pendingWindowBytes = 0;
         }
-
-        totalChunks += chunks.length;
-        successPaths.add(relPath);
-        log.info(`Re-indexed ${relPath}: ${chunks.length} chunks`);
       } catch (err) {
         log.warn(`Failed to re-index ${relPath}: ${err}`);
       }
     }
 
-    // Update merkle state only for successfully re-indexed files
-    for (const p of paths) {
-      const relPath = isAbsolute(p) ? relative(this.config.projectRoot, p) : p;
+    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+
+    this.rebuildTargetCatalog();
+    for (const pathValue of paths) {
+      const relPath = isAbsolute(pathValue) ? relative(this.config.projectRoot, pathValue) : pathValue;
       const absPath = resolve(this.config.projectRoot, relPath);
-      if (!successPaths.has(relPath)) continue;
+      if (!successfulFiles.has(relPath)) continue;
       try {
         await this.merkle.updateHash(relPath, absPath);
       } catch {
@@ -517,9 +648,16 @@ export class IndexingPipeline {
       }
     }
     this.merkle.save();
-
     this.metadata.setStat("lastIndexedAt", new Date().toISOString());
-    return { filesProcessed: successPaths.size, chunksCreated: totalChunks };
+
+    try {
+      const conventions = analyzeConventions(this.metadata);
+      this.metadata.setConventions(conventions);
+    } catch (err) {
+      log.warn(`Conventions analysis failed: ${err}`);
+    }
+
+    return counters;
   }
 
   async removeFiles(paths: string[]): Promise<void> {
@@ -565,30 +703,23 @@ export class IndexingPipeline {
     this.metadata.close();
     this.fts.close();
     this.vectors.close().catch((err) => {
-      getLogger().warn({ err }, '[Pipeline] vectors.close() failed in sync close');
+      getLogger().warn({ err }, "[Pipeline] vectors.close() failed in sync close");
     });
   }
 
-  /** Async close that awaits vector store shutdown to prevent native teardown races. */
   async closeAsync(): Promise<void> {
     freeEncoder();
-    // Close SQLite stores first (synchronous) while event loop is still alive
     this.fts.close();
     this.metadata.close();
-    // Await async LanceDB close last to prevent libc++abi mutex errors
     await this.vectors.close();
   }
 
-  /** Close stores AND wipe merkle state — used only by clear_index */
   async closeAndClearMerkle(): Promise<void> {
     await this.closeAsync();
     this.merkle.clear();
   }
 
   async reinit(): Promise<void> {
-    // Close existing stores before creating new ones to release file
-    // descriptors and SQLite connections.  VectorStore.close() is async so we
-    // must await it; MetadataStore and FTSStore have synchronous close methods.
     const oldVectors = this.vectors;
     this.metadata.close();
     this.fts.close();

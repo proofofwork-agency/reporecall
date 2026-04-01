@@ -14,6 +14,52 @@ export interface StoredChunk {
   isExported?: boolean;
 }
 
+export interface ChunkFeature {
+  chunkId: string;
+  filePath: string;
+  returnsBoolean: boolean;
+  branchCount: number;
+  guardCount: number;
+  throwsCount: number;
+  earlyReturnCount: number;
+  callsPredicateCount: number;
+  callerCount: number;
+  calleeCount: number;
+  isPredicate: boolean;
+  isValidator: boolean;
+  isGuard: boolean;
+  isController: boolean;
+  isRegistry: boolean;
+  isUiComponent: boolean;
+  writesState: boolean;
+  writesNetwork: boolean;
+  writesStorage: boolean;
+  docLike: boolean;
+  testLike: boolean;
+}
+
+export interface FileFeature {
+  filePath: string;
+  predicateCount: number;
+  validatorCount: number;
+  guardCount: number;
+  controllerCount: number;
+  registryCount: number;
+  uiComponentCount: number;
+  writesStateCount: number;
+  writesNetworkCount: number;
+  writesStorageCount: number;
+  docLike: boolean;
+  testLike: boolean;
+}
+
+export interface ChunkTag {
+  chunkId: string;
+  filePath: string;
+  tag: string;
+  weight: number;
+}
+
 export interface ChunkScoringInfo {
   id: string;
   filePath: string;
@@ -62,4 +108,3 @@ export interface ResolvedTargetAliasHit {
   source: TargetAliasSource;
   weight: number;
 }
-

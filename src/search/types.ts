@@ -1,3 +1,5 @@
+import type { QueryMode } from "./intent.js";
+
 export interface SearchResult {
   id: string;
   score: number;
@@ -32,10 +34,11 @@ export interface AssembledContext {
   tokenCount: number;
   chunks: SearchResult[];
   routeStyle?: "standard" | "concept" | "flow" | "deep";
+  deliveryMode?: "code_context" | "summary_only";
 }
 
 export interface HookDebugRecord {
-  route: "skip" | "R0" | "R1" | "R2";
+  queryMode: QueryMode;
   intentType: { isCodeQuery: boolean; needsNavigation: boolean };
   skipReason: string | null;
   injectedTokenCount: number;
@@ -56,4 +59,13 @@ export interface HookDebugRecord {
   }>;
   memoryBudgetUsed?: number;
   memoryBudgetTotal?: number;
+  deliveryMode?: "code_context" | "summary_only";
+  contextStrength?: "sufficient" | "partial" | "weak";
+  executionSurface?: string;
+  selectedFiles?: string[];
+  missingEvidence?: string[];
+  recommendedNextReads?: string[];
+  dominantFamily?: string;
+  familyConfidence?: number;
+  deferredReason?: string;
 }
