@@ -118,8 +118,10 @@ describe('initCommand — real file creation', () => {
     )
     const command = settings.hooks.SessionStart[0].hooks[0].command as string
     // Token is read at runtime from the token file using $CLAUDE_PROJECT_DIR
+    // with a $PWD fallback for headless/sdk-cli sessions.
+    expect(command).toContain('PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"')
     expect(command).toContain('TOKEN=$(cat')
-    expect(command).toContain('$CLAUDE_PROJECT_DIR')
+    expect(command).toContain('$PROJECT_DIR')
     expect(command).toContain('.memory/daemon.token')
     expect(command).toContain('2>/dev/null || echo ""')
     // Bearer header is templated, not a literal value

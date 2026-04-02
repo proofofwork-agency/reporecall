@@ -23,6 +23,10 @@ reporecall index
 reporecall serve
 ```
 
+## v0.4.1 — Claude Hook Compatibility Fix
+
+This patch fixes Claude hook token lookup for real `claude -p` / headless sessions. Reporecall-generated hooks now fall back to `$PWD` when `$CLAUDE_PROJECT_DIR` is unavailable, so injected context reaches Claude reliably in local CLI sessions after re-running `reporecall init`.
+
 ## v0.4.0 — Intent-Based Retrieval Overhaul
 
 This release replaces the old `R0 / R1 / R2` routing model with intent-based query modes. The old model described retrieval shape (exact, trace, broad) — the new model describes what the user actually wants:

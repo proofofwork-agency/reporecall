@@ -105,9 +105,11 @@ export function initCommand(): Command {
         // use default port
       }
 
-      // Token file path — use $CLAUDE_PROJECT_DIR so hooks work across team members
-      // on different machines. Claude Code automatically provides this environment
-      // variable with the absolute path to the project root at hook runtime.
+      // Token file path — prefer $CLAUDE_PROJECT_DIR when Claude exposes it,
+      // but fall back to $PWD for entrypoints where the stable project-dir env
+      // is missing or not propagated. Hook execution still runs with cwd set to
+      // the project, so the fallback keeps local command hooks working in
+      // headless/sdk-cli sessions.
       const tokenPath = resolve(configDataDir, 'daemon.token')
 
       const existingHooks = (settings.hooks ?? {}) as Record<string, unknown[]>
@@ -123,15 +125,16 @@ export function initCommand(): Command {
         // If the token file is absent (daemon not started), $TOKEN is empty
         // and the header becomes "Authorization: Bearer " — the daemon
         // will reject it, which is safe.
-        // Uses $CLAUDE_PROJECT_DIR for portability — Claude Code provides this
-        // automatically at hook runtime with the absolute path to the project root.
+        // Prefer $CLAUDE_PROJECT_DIR, but fall back to $PWD for headless
+        // Claude entrypoints that do not propagate the stable project-dir env.
         const relPath = relative(projectRoot, tokenPath)
         if (!/^[\w./\\\-]+$/.test(relPath)) {
           console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
           process.exit(1)
         }
         const command = [
-          `TOKEN=$(cat "$CLAUDE_PROJECT_DIR/${relPath}" 2>/dev/null || echo "");`,
+          `PROJECT_DIR="${'$'}{CLAUDE_PROJECT_DIR:-$PWD}";`,
+          `TOKEN=$(cat "$PROJECT_DIR/${relPath}" 2>/dev/null || echo "");`,
           `curl -s -X POST`,
           `  -H "Authorization: Bearer $TOKEN"`,
           `  -H "Content-Type: application/json"`,

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.1] — 2026-04-02
+
+### Fixes
+
+- **Claude hook token lookup** — Generated `SessionStart` and `UserPromptSubmit` hook commands now fall back from `$CLAUDE_PROJECT_DIR` to `$PWD` when locating `.memory/daemon.token`. This fixes real `claude -p` / `sdk-cli` sessions where context hooks could run without injecting Reporecall context.
+- **Claude integration verification** — Verified against a live Claude CLI session on Duto: SessionStart and UserPromptSubmit now both return `additionalContext`, and Claude can answer from injected files without first reaching for `Read`/`Grep`.
+
+### Notes
+
+- Existing projects should re-run `reporecall init --project /path/to/repo` once to regenerate `.claude/settings.json` with the new hook command format.
+
 ## [0.3.3] — 2026-03-21
 
 ### Fixes
