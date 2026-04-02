@@ -1256,9 +1256,7 @@ export class HybridSearch {
     ].filter((term, index, items) => term.length >= 3 && items.indexOf(term) === index)));
     const runtimeTerms = Array.from(new Set([
       "return false",
-      "throw",
-      "if",
-      "switch",
+      "throw new",
       "reject",
       "allow",
       "error",
@@ -2008,13 +2006,7 @@ export class HybridSearch {
     const strongDomainMatch = profile.primaryTags.size > 0
       ? (
           directDomainEvidence
-          || (
-            runtimeGateOverlap
-            && (
-              directDomainEvidence
-              || semanticMatches > 0
-            )
-          )
+          || (runtimeGateOverlap && semanticMatches > 0)
         )
       : (
           literalMatches > 0
@@ -3957,7 +3949,7 @@ export class HybridSearch {
     };
     const isRoutingBackboneFile = (candidate: BroadFileCandidate): boolean => {
       const text = `${candidate.filePath} ${candidate.primary.result.name}`.toLowerCase();
-      if (candidate.filePath.endsWith("/App.tsx")) return true;
+      if (/\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath)) return true;
       if (/\b(protected|guard|redirect|callback|router|route)\b/.test(text)) return true;
       if (/(?:^|\/)src\/lib\/navigation\.ts$/.test(candidate.filePath)) return true;
       return false;
@@ -4599,7 +4591,7 @@ export class HybridSearch {
     const queryMentionsPending = profile.tokens.includes("pending") || profile.tokens.includes("pendingnavigation");
     const routingInventoryBackbone = (candidate: InventoryFileCandidate): boolean => {
       const text = `${candidate.filePath} ${candidate.primary.result.name}`.toLowerCase();
-      if (candidate.filePath.endsWith("/App.tsx")) return true;
+      if (/\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath)) return true;
       if (/\b(protected|guard|redirect|callback|auth|route|router)\b/.test(text)) return true;
       if (queryMentionsPending && /\bpending\b/.test(text)) return true;
       return false;
@@ -4939,12 +4931,12 @@ export class HybridSearch {
         const candidateText = normalizeTargetText(`${candidate.filePath} ${candidate.primary.result.name}`);
         return candidate.layers.includes("routing")
           || candidate.layers.includes("state")
-          || candidate.filePath.endsWith("/App.tsx")
+          || /\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath)
           || /\b(route|router|routing|redirect|callback|guard|protected|destination|pending|navigation)\b/.test(candidateText);
       }
       if (dominantFamily === "routing") {
         return candidate.layers.includes("state")
-          || candidate.filePath.endsWith("/App.tsx");
+          || /\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath);
       }
       return candidate.directAnchorCount > 0 || candidate.phraseMatchCount > 0;
     }
@@ -5105,7 +5097,7 @@ export class HybridSearch {
       const authRoutingBackbone = alignedCandidates.filter((candidate) =>
         candidate.layers.includes("routing")
         || candidate.layers.includes("state")
-        || candidate.filePath.endsWith("/App.tsx")
+        || /\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath)
       );
       if (authRoutingBackbone.length < 2) return "missing_routing_backbone";
       const genericNavigationRatio = considered.filter((candidate) => {
@@ -5125,7 +5117,7 @@ export class HybridSearch {
             || candidate.layers.includes("state")
             || candidate.layers.includes("routing")
             || candidate.layers.includes("backend")
-            || candidate.filePath.endsWith("/App.tsx")
+            || /\/(App|_app|Root|Main|Layout)\.[jt]sx?$/.test(candidate.filePath)
           );
       });
       if (authBackbone.length < 2) return "missing_auth_backbone";

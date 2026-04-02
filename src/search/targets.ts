@@ -13,7 +13,7 @@ export const INDEX_FORMAT_VERSION = "0.3.6-rebuild-execution-roots";
 
 const CODE_DELIMITER_RE = /[^a-z0-9]+/g;
 const PATH_LIKE_TARGET_RE = /\b[\w./-]+\b/g;
-const SLUG_RE = /\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b/g;
+const SLUG_RE = /\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b/;
 const INDEX_FILE_RE = /^index\.[^.]+$/i;
 const GENERIC_FILE_STEMS = new Set(["index", "types", "type", "utils", "util", "helpers", "helper", "constants", "fixtures", "fixture", "mock", "mocks", "demo", "demos"]);
 const ENDPOINT_DIR_HINT_RE = /(?:^|\/)(api|apis|route|routes|function|functions|endpoint|endpoints|handler|handlers|controller|controllers)\//i;
@@ -294,7 +294,7 @@ function extractLiteralPhraseCandidates(query: string): string[] {
   const lower = query.toLowerCase();
   const phrases = new Set<string>();
 
-  for (const match of lower.matchAll(SLUG_RE)) {
+  for (const match of lower.matchAll(/\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b/g)) {
     phrases.add(match[0]);
   }
   for (const match of lower.matchAll(PATH_LIKE_TARGET_RE)) {

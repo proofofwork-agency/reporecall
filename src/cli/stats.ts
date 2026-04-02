@@ -189,19 +189,24 @@ export function statsCommand(): Command {
         console.log(`  p95:  ${latency.p95}ms`)
       }
 
-      // Route breakdown
+      // Route breakdown (intent-based modes since v0.4.0)
       const routeSkip = metadata.getStat('route_skip_count') ?? '0'
-      const routeR0 = metadata.getStat('route_R0_count') ?? '0'
-      const routeR1 = metadata.getStat('route_R1_count') ?? '0'
-      const routeR2 = metadata.getStat('route_R2_count') ?? '0'
-      const totalRoutes = parseInt(routeSkip, 10) + parseInt(routeR0, 10) + parseInt(routeR1, 10) + parseInt(routeR2, 10)
+      const routeLookup = metadata.getStat('route_lookup_count') ?? '0'
+      const routeTrace = metadata.getStat('route_trace_count') ?? '0'
+      const routeBug = metadata.getStat('route_bug_count') ?? '0'
+      const routeArch = metadata.getStat('route_architecture_count') ?? '0'
+      const routeChange = metadata.getStat('route_change_count') ?? '0'
+      const totalRoutes = [routeSkip, routeLookup, routeTrace, routeBug, routeArch, routeChange]
+        .reduce((s, v) => s + parseInt(v, 10), 0)
       if (totalRoutes > 0) {
         console.log(``)
-        console.log(`Route Breakdown:`)
-        console.log(`  Skipped (meta/non-code):  ${routeSkip}`)
-        console.log(`  R0 (fast path):           ${routeR0}`)
-        console.log(`  R1 (flow route):          ${routeR1}`)
-        console.log(`  R2 (deep route):          ${routeR2}`)
+        console.log(`Query Mode Breakdown:`)
+        console.log(`  skip:          ${routeSkip}`)
+        console.log(`  lookup:        ${routeLookup}`)
+        console.log(`  trace:         ${routeTrace}`)
+        console.log(`  bug:           ${routeBug}`)
+        console.log(`  architecture:  ${routeArch}`)
+        console.log(`  change:        ${routeChange}`)
       }
 
       // Check daemon status

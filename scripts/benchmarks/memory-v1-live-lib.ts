@@ -12,7 +12,7 @@ import { MemorySearch } from "../../src/memory/search.js";
 import { resolveMemoryClass } from "../../src/memory/types.js";
 import { writeManagedMemoryFile } from "../../src/memory/files.js";
 import { HybridSearch } from "../../src/search/hybrid.js";
-import { classifyIntent, deriveRoute } from "../../src/search/intent.js";
+import { classifyIntent } from "../../src/search/intent.js";
 import { resolveSeeds } from "../../src/search/seed.js";
 import { MemoryStore } from "../../src/storage/memory-store.js";
 import {
@@ -40,7 +40,7 @@ export interface MemoryV1Query {
   id: string;
   group: MemoryQueryGroup;
   query: string;
-  expectedRoute?: "skip" | "R0" | "R1" | "R2";
+  expectedRoute?: "skip" | "lookup" | "trace" | "bug" | "architecture" | "change";
   expectedSymbols?: string[];
   expectedMemories?: string[];
   requiresWorkingMemory?: boolean;
@@ -147,14 +147,14 @@ const DEFAULT_QUERIES: MemoryV1Query[] = [
     id: "code_context_path",
     group: "code_only",
     query: "how does handlePromptContextDetailed combine code and memory context",
-    expectedRoute: "R0",
+    expectedRoute: "lookup",
     expectedSymbols: ["handlePromptContextDetailed"],
   },
   {
     id: "memory_runtime_flow",
     group: "code_only",
     query: "where does MemoryRuntime observe prompts and create working memory",
-    expectedRoute: "R1",
+    expectedRoute: "trace",
     expectedSymbols: ["MemoryRuntime", "observePrompt"],
   },
   {
@@ -449,10 +449,12 @@ async function runScenario(input: {
 
       if (scenario !== "baseline_tools") {
         const intent = classifyIntent(sanitized);
-        let route = deriveRoute(intent);
-        if (intent.needsNavigation) {
+        let route = intent.queryMode;
+        if (intent.needsNavigation && route === "lookup") {
           const seedResult = resolveSeeds(sanitized, metadata, fts);
-          route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
+          if (seedResult.bestSeed?.confidence && seedResult.bestSeed.confidence > 0.5) {
+            route = "trace";
+          }
         }
 
         const promptContext = await handlePromptContextDetailed(
@@ -469,7 +471,7 @@ async function runScenario(input: {
           scenario === "reporecall_code_only" ? undefined : memorySearch
         );
 
-        resolvedRoute = promptContext.resolvedRoute;
+        resolvedRoute = promptContext.resolvedQueryMode;
         memoryRoute = promptContext.memoryRoute ?? "M0";
         codeTokens =
           (promptContext.context?.tokenCount ?? 0) - (promptContext.memoryTokenCount ?? 0);

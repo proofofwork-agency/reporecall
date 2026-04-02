@@ -805,7 +805,7 @@ export function resolveSeeds(
       && !GENERIC_QUERY_ACTION_TERMS.has(normalizeTargetText(candidate.resolvedAlias ?? ""))
     );
 
-    if (hasSpecificResolvedTarget) {
+    if (hasSpecificResolvedTarget && broadAnchorTerms.length > 0) {
       const filtered = candidates.filter((candidate) => {
         if (candidate.reason !== "resolved_target") return true;
         const normalizedAlias = normalizeTargetText(candidate.resolvedAlias ?? "");

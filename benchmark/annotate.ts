@@ -6,7 +6,7 @@
  *   npx tsx benchmark/annotate.ts --project .
  *
  * For each query in benchmark/queries.json:
- *   1. Runs full pipeline: sanitizeQuery → classifyIntent → deriveRoute → resolveSeeds → search
+ *   1. Runs full pipeline: sanitizeQuery → classifyIntent → resolveSeeds → search
  *   2. Prints top-20 results with rank, name, filePath, kind, score
  *   3. Outputs benchmark/annotations-draft.json with all chunk names pre-filled at grade 0
  *
@@ -18,7 +18,7 @@ import { join, resolve } from "path";
 import { IndexingPipeline } from "../src/indexer/pipeline.js";
 import { HybridSearch } from "../src/search/hybrid.js";
 import { sanitizeQuery } from "../src/daemon/server.js";
-import { classifyIntent, deriveRoute } from "../src/search/intent.js";
+import { classifyIntent } from "../src/search/intent.js";
 import { resolveSeeds } from "../src/search/seed.js";
 import { handlePromptContextDetailed } from "../src/hooks/prompt-context.js";
 import { loadConfig } from "../src/core/config.js";
@@ -77,11 +77,13 @@ async function main() {
     const sanitized = sanitizeQuery(entry.query);
     const queryText = sanitized || entry.query;
     const intent = classifyIntent(queryText);
-    let route = deriveRoute(intent);
+    let route = intent.queryMode;
 
-    if (intent.needsNavigation && route === "R0") {
+    if (intent.needsNavigation && route === "lookup") {
       const seedResult = resolveSeeds(queryText, metadata, fts);
-      route = deriveRoute(intent, seedResult.bestSeed?.confidence ?? null);
+      if (seedResult.bestSeed?.confidence && seedResult.bestSeed.confidence > 0.5) {
+        route = "trace";
+      }
     }
 
     const id = entry.query
@@ -107,7 +109,7 @@ async function main() {
     const results = promptContext.context?.chunks ?? [];
 
     console.log(`\n━━━ "${entry.query}" ━━━`);
-    console.log(`  Route: ${route} → ${promptContext.resolvedRoute} | Expected: ${entry.expectedRoute}`);
+    console.log(`  Route: ${route} → ${promptContext.resolvedQueryMode} | Expected: ${entry.expectedRoute}`);
     console.log(`  Results: ${results.length}`);
 
     const relevance: Record<string, number> = {};

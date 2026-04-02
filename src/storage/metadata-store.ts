@@ -88,8 +88,10 @@ export class MetadataStore {
   }
 
   removeChunksForFile(filePath: string): void {
-    this.chunks.removeChunksForFile(filePath);
-    this.semantic.removeByFile(filePath);
+    this.db.transaction(() => {
+      this.chunks.removeChunksForFile(filePath);
+      this.semantic.removeByFile(filePath);
+    })();
   }
 
   getChunk(id: string): StoredChunk | undefined {

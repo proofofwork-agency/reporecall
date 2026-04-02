@@ -129,7 +129,7 @@ function recoverFromAbiMismatch(
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
   const openProbe = options.openProbe ?? openWithPragmas;
-  const runCommand = options.runCommand ?? ((command, args, spawnOptions) => spawnSync(command, args, spawnOptions));
+  const runCommand = options.runCommand ?? ((command, args, spawnOptions) => spawnSync(command, args, { ...spawnOptions, timeout: 30_000 }));
   const repair = tryRepairSqliteRuntime(cwd, env, runCommand);
 
   if (repair.succeeded) {

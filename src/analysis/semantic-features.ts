@@ -79,9 +79,7 @@ export function extractSemanticFeatures(
     const throwsCount = countMatches(lowerContent, THROW_RE);
     const earlyReturnCount = countMatches(lowerContent, EARLY_RETURN_RE);
     const guardCount = countGuardClauses(lowerContent);
-    const isFunctionLike =
-      /(?:function|method|arrow|generator|lexical)_/.test(chunk.kind)
-      || /(?:function|method|arrow|generator|lexical)/.test(chunk.kind);
+    const isFunctionLike = /\b(function|method|arrow|generator|lexical)\b/.test(chunk.kind);
     const docLike = DOC_RE.test(chunk.filePath) || /\.(md|mdx|txt)$/i.test(chunk.filePath);
     const testLike = TEST_RE.test(chunk.filePath) || /\.(test|spec)\.[^.]+$/i.test(chunk.filePath);
     const isUiComponent = UI_RE.test(chunk.filePath) || (chunk.language === "tsx" && /^[A-Z]/.test(chunk.name));
