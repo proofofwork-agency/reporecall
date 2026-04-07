@@ -6,7 +6,7 @@ import type {
   MemoryStatus,
 } from "./types.js";
 
-const VALID_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
+const VALID_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference", "wiki"]);
 const VALID_CLASSES = new Set<MemoryClass>(["rule", "fact", "episode", "working"]);
 const VALID_SCOPES = new Set<MemoryScope>(["global", "project", "branch"]);
 const VALID_STATUS = new Set<MemoryStatus>(["active", "archived", "superseded"]);
@@ -15,6 +15,11 @@ const VALID_SOURCE_KINDS = new Set<MemorySourceKind>([
   "reporecall_local",
   "generated",
 ]);
+const VALID_PAGE_TYPES = new Set<WikiPageType>(["community", "hub", "module", "flow", "exploration"]);
+const VALID_SOURCE_LAYERS = new Set<WikiSourceLayer>(["deterministic", "llm-enriched"]);
+
+export type WikiPageType = "community" | "hub" | "module" | "flow" | "exploration";
+export type WikiSourceLayer = "deterministic" | "llm-enriched";
 
 export interface ParsedMemory {
   name: string;
@@ -33,6 +38,14 @@ export interface ParsedMemory {
   supersedesId?: string;
   confidence?: number;
   reason?: string;
+  /** Wiki-specific: page category */
+  pageType?: WikiPageType;
+  /** Wiki-specific: how the page was generated */
+  sourceLayer?: WikiSourceLayer;
+  /** Wiki-specific: [[slug]] interlinks to other wiki pages */
+  links?: string[];
+  /** Wiki-specific: git commit SHA when page was written */
+  sourceCommit?: string;
 }
 
 /**
@@ -78,6 +91,12 @@ export function parseMemoryFile(raw: string): ParsedMemory | null {
   const relatedFiles = parseList(fields.get("relatedFiles"));
   const relatedSymbols = parseList(fields.get("relatedSymbols"));
 
+  // Wiki-specific fields (only parsed for type=wiki, ignored otherwise)
+  const pageType = fields.get("pageType") as WikiPageType | undefined;
+  const sourceLayer = fields.get("sourceLayer") as WikiSourceLayer | undefined;
+  const links = parseList(fields.get("links"));
+  const sourceCommit = fields.get("sourceCommit");
+
   return {
     name,
     description,
@@ -95,6 +114,10 @@ export function parseMemoryFile(raw: string): ParsedMemory | null {
     supersedesId,
     confidence,
     reason,
+    pageType: pageType && VALID_PAGE_TYPES.has(pageType) ? pageType : undefined,
+    sourceLayer: sourceLayer && VALID_SOURCE_LAYERS.has(sourceLayer) ? sourceLayer : undefined,
+    links,
+    sourceCommit,
   };
 }
 

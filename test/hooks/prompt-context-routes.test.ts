@@ -378,9 +378,7 @@ describe("handlePromptContext — route integration", () => {
 
   it("skips memory lookup for normal code queries when code context exists", async () => {
     const memorySearch = {
-      search: vi.fn(async () => {
-        throw new Error("memory search should not run");
-      }),
+      search: vi.fn(async () => []),
     };
 
     const result = await handlePromptContextDetailed(
@@ -399,7 +397,11 @@ describe("handlePromptContext — route integration", () => {
       memorySearch as any
     );
 
-    expect(memorySearch.search).not.toHaveBeenCalled();
+    // Memory search should only be called for wiki, not for regular memory
+    const memoryCalls = memorySearch.search.mock.calls.filter(
+      (call: unknown[]) => !(call[1] as Record<string, unknown>)?.types?.includes("wiki")
+    );
+    expect(memoryCalls).toHaveLength(0);
     expect(result.context).not.toBeNull();
     expect(result.memoryCount).toBe(0);
     expect(result.memoryRoute).toBe("M0");
@@ -407,9 +409,7 @@ describe("handlePromptContext — route integration", () => {
 
   it("skips memory lookup for summary-only code queries", async () => {
     const memorySearch = {
-      search: vi.fn(async () => {
-        throw new Error("memory search should not run");
-      }),
+      search: vi.fn(async () => []),
     };
 
     const result = await handlePromptContextDetailed(
@@ -440,7 +440,11 @@ describe("handlePromptContext — route integration", () => {
       memorySearch as any
     );
 
-    expect(memorySearch.search).not.toHaveBeenCalled();
+    // Memory search should only be called for wiki, not for regular memory
+    const memoryCalls = memorySearch.search.mock.calls.filter(
+      (call: unknown[]) => !(call[1] as Record<string, unknown>)?.types?.includes("wiki")
+    );
+    expect(memoryCalls).toHaveLength(0);
     expect(result.memoryCount).toBe(0);
     expect(result.memoryRoute).toBe("M0");
     expect(result.deliveryMode).toBe("summary_only");

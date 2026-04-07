@@ -7,6 +7,7 @@ import type {
   MemoryStatus,
   MemoryType,
 } from "./types.js";
+import type { WikiPageType, WikiSourceLayer } from "./parser.js";
 
 export interface ManagedMemoryInput {
   name: string;
@@ -25,6 +26,11 @@ export interface ManagedMemoryInput {
   supersedesId?: string;
   confidence?: number;
   reason?: string;
+  /** Wiki-specific fields */
+  pageType?: WikiPageType;
+  sourceLayer?: WikiSourceLayer;
+  links?: string[];
+  sourceCommit?: string;
 }
 
 export function safeMemorySlug(name: string): string {
@@ -61,6 +67,12 @@ export function buildMemoryMarkdown(input: ManagedMemoryInput): string {
   if (input.supersedesId) lines.push(`supersedesId: ${yamlString(input.supersedesId)}`);
   if (input.confidence !== undefined) lines.push(`confidence: ${Number(input.confidence).toFixed(3)}`);
   if (input.reason) lines.push(`reason: ${yamlString(input.reason)}`);
+  if (input.pageType) lines.push(`pageType: ${yamlString(input.pageType)}`);
+  if (input.sourceLayer) lines.push(`sourceLayer: ${yamlString(input.sourceLayer)}`);
+  if (input.links && input.links.length > 0) {
+    lines.push(`links: ${yamlString(JSON.stringify(input.links))}`);
+  }
+  if (input.sourceCommit) lines.push(`sourceCommit: ${yamlString(input.sourceCommit)}`);
 
   lines.push("---", "", input.content.trim(), "");
   return lines.join("\n");

@@ -392,5 +392,7 @@ function uniq(values: string[]): string[] {
 }
 
 function derivePromotedType(type: MemoryType): MemoryType {
-  return type === "feedback" ? "feedback" : "project";
+  if (type === "feedback") return "feedback";
+  if (type === "wiki") return "wiki";
+  return "project";
 }

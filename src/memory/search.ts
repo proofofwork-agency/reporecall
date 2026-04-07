@@ -36,6 +36,7 @@ const TYPE_BOOSTS: Record<MemoryType, number> = {
   user: 1.0,
   project: 1.0,
   reference: 0.9,
+  wiki: 1.1,
 };
 
 /**
@@ -138,9 +139,17 @@ export class MemorySearch {
       const recencyScore = Math.min(1.0, Math.max(0, 1 - age / ninetyDays));
       adjusted += RECENCY_WEIGHT * recencyScore;
 
-      // Importance boost based on access frequency
-      const accessBoost = Math.min(1.0, (memory.accessCount ?? 0) / 10);
-      adjusted += IMPORTANCE_WEIGHT * accessBoost * (1 / (RRF_K + 1));
+      // Importance: penalize over-accessed memories that fire on most queries.
+      // These are generic (broad keyword match) and drown out topic-specific results.
+      const accessCount = memory.accessCount ?? 0;
+      if (accessCount > 15) {
+        adjusted *= 0.5;
+      } else if (accessCount > 8) {
+        adjusted *= 0.75;
+      } else {
+        const accessBoost = Math.min(1.0, accessCount / 10);
+        adjusted += IMPORTANCE_WEIGHT * accessBoost * (1 / (RRF_K + 1));
+      }
 
       // Contextual boost from active files and top code symbols.
       if (matchesAny(memory.filePath, activeFiles) || matchesAny(memory.filePath, topCodeFiles)) {
@@ -206,7 +215,7 @@ export class MemorySearch {
     // within the filtered set — prevents cross-class score dominance.
     if (results.length > 1) {
       const topScore = results[0]![1];
-      const minThreshold = topScore * 0.7;
+      const minThreshold = topScore * 0.85;
       results = results.filter(([, score]) => score >= minThreshold);
     }
 

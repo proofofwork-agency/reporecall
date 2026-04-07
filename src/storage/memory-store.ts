@@ -115,6 +115,8 @@ function defaultClassForType(type: MemoryType): MemoryClass {
       return "fact";
     case "reference":
       return "fact";
+    case "wiki":
+      return "fact";
   }
 }
 
@@ -128,6 +130,8 @@ function defaultScopeForType(type: MemoryType): MemoryScope {
       return "project";
     case "reference":
       return "global";
+    case "wiki":
+      return "project";
   }
 }
 
@@ -335,6 +339,16 @@ export class MemoryStore {
       );
     `);
 
+    // Wiki interlinks table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS wiki_links (
+        from_name TEXT NOT NULL,
+        to_name TEXT NOT NULL,
+        PRIMARY KEY (from_name, to_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wiki_links_to ON wiki_links(to_name);
+    `);
+
     // If we recreated the FTS table, repopulate from the memories table
     if (needsFtsRebuild) {
       const rows = this.db.prepare(`
@@ -535,11 +549,17 @@ export class MemoryStore {
 
     if (terms.length === 0) return [];
 
-    // Phrase match for multi-word queries
+    // Phrase match for multi-word queries (stop-word-stripped terms only)
     if (terms.length > 1) {
-      const phraseQuery = `"${normalized.replace(/['"*(){}[\]^~\\:]/g, " ").trim()}"`;
-      const phraseResults = this.runFtsQuery(phraseQuery, limit);
-      if (phraseResults.length > 0) return phraseResults;
+      const strippedTerms = normalized
+        .replace(/['"*(){}[\]^~\\:]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 1 && !STOP_WORDS.has(w.toLowerCase()));
+      if (strippedTerms.length > 1) {
+        const phraseQuery = `"${strippedTerms.join(" ")}"`;
+        const phraseResults = this.runFtsQuery(phraseQuery, limit);
+        if (phraseResults.length > 0) return phraseResults;
+      }
     }
 
     // AND match
@@ -805,5 +825,42 @@ export class MemoryStore {
       return value;
     }
     return defaultSourceKindFromPath(filePath);
+  }
+
+  // --- Wiki links -----------------------------------------------------------
+
+  /** Replace all outgoing links for a wiki page. */
+  setWikiLinks(fromName: string, toNames: string[]): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM wiki_links WHERE from_name = ?").run(fromName);
+      const insert = this.db.prepare(
+        "INSERT OR IGNORE INTO wiki_links (from_name, to_name) VALUES (?, ?)"
+      );
+      for (const to of toNames) {
+        insert.run(fromName, to);
+      }
+    });
+    tx();
+  }
+
+  /** Get all outgoing links from a wiki page. */
+  getWikiLinks(fromName: string): string[] {
+    const rows = this.db.prepare(
+      "SELECT to_name FROM wiki_links WHERE from_name = ?"
+    ).all(fromName) as Array<{ to_name: string }>;
+    return rows.map((r) => r.to_name);
+  }
+
+  /** Get all pages that link TO a wiki page (backlinks). */
+  getWikiBacklinks(toName: string): string[] {
+    const rows = this.db.prepare(
+      "SELECT from_name FROM wiki_links WHERE to_name = ?"
+    ).all(toName) as Array<{ from_name: string }>;
+    return rows.map((r) => r.from_name);
+  }
+
+  /** Remove all links for a wiki page (both directions). */
+  removeWikiLinks(name: string): void {
+    this.db.prepare("DELETE FROM wiki_links WHERE from_name = ? OR to_name = ?").run(name, name);
   }
 }

@@ -276,6 +276,7 @@ export interface DaemonServerOptions {
   ftsStore?: import("../storage/fts-store.js").FTSStore;
   memorySearch?: import("../memory/search.js").MemorySearch;
   memoryRuntime?: MemoryRuntime;
+  memoryStore?: import("../storage/memory-store.js").MemoryStore;
 }
 
 export function createDaemonServer(
@@ -476,7 +477,7 @@ export function createDaemonServer(
           const startTime = Date.now();
           logHook(`[${requestId}] SESSION_START`);
 
-          const context = await handleSessionStart(search, config, metadata);
+          const context = await handleSessionStart(search, config, metadata, liveOptions.memoryStore);
 
           const elapsed = Date.now() - startTime;
           logHook(

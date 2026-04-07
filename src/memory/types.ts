@@ -1,4 +1,4 @@
-export type MemoryType = "user" | "feedback" | "project" | "reference";
+export type MemoryType = "user" | "feedback" | "project" | "reference" | "wiki";
 export type MemoryClass = "rule" | "fact" | "episode" | "working";
 export type MemoryScope = "global" | "project" | "branch";
 export type MemoryStatus = "active" | "archived" | "superseded";
@@ -142,6 +142,7 @@ const TYPE_TO_CLASS: Record<MemoryType, MemoryClass> = {
   user: "fact",
   project: "fact",
   reference: "fact",
+  wiki: "fact",
 };
 
 const TYPE_TO_SCOPE: Record<MemoryType, MemoryScope> = {
@@ -149,6 +150,7 @@ const TYPE_TO_SCOPE: Record<MemoryType, MemoryScope> = {
   user: "global",
   project: "project",
   reference: "global",
+  wiki: "project",
 };
 
 export function resolveMemoryClass(

@@ -104,6 +104,8 @@ function defaultClassForType(type: MemoryType): MemoryClass {
       return "fact";
     case "reference":
       return "fact";
+    case "wiki":
+      return "fact";
   }
 }
 
@@ -117,6 +119,8 @@ function defaultScopeForType(type: MemoryType): MemoryScope {
       return "project";
     case "reference":
       return "global";
+    case "wiki":
+      return "project";
   }
 }
 

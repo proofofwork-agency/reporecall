@@ -79,6 +79,10 @@ export interface MemoryConfig {
   memoryFactPromotionThreshold: number;
   /** Number of working-memory snapshots to retain */
   memoryWorkingHistoryLimit: number;
+  /** Token budget for wiki context injection (default 400) */
+  wikiBudget: number;
+  /** Max wiki pages to inject per prompt (default 3) */
+  wikiMaxPages: number;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -151,6 +155,8 @@ const UserConfigSchema = z.object({
   memoryAutoCreate: z.boolean().optional(),
   memoryFactPromotionThreshold: z.number().int().min(1).optional(),
   memoryWorkingHistoryLimit: z.number().int().min(1).optional(),
+  wikiBudget: z.number().min(0).optional(),
+  wikiMaxPages: z.number().int().min(1).max(10).optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -228,6 +234,8 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   memoryAutoCreate: true,
   memoryFactPromotionThreshold: 3,
   memoryWorkingHistoryLimit: 1,
+  wikiBudget: 400,
+  wikiMaxPages: 3,
   factExtractors: [],
   conceptBundles: [
     {
