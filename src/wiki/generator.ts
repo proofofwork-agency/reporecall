@@ -217,8 +217,8 @@ export class WikiGenerator {
         confidence: 0.90,
       });
 
+      result.surprisesPage = true;
       if (writeResult === "written") {
-        result.surprisesPage = true;
         result.pagesWritten++;
       }
     }
@@ -245,11 +245,12 @@ export class WikiGenerator {
       confidence: number;
     }
   ): "written" | "skipped" {
-    // Skip write if page exists and sourceCommit is unchanged
+    // Skip write if page exists and sourceCommit is unchanged.
+    // sourceCommit lives in frontmatter (stripped from DB content), so read from disk.
     const existing = this.memoryStore.getByName(slug);
-    if (existing && input.sourceCommit) {
-      const existingCommit = this.extractSourceCommit(existing.filePath);
-      if (existingCommit === input.sourceCommit) return "skipped";
+    if (existing && input.sourceCommit && existing.filePath) {
+      const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
+      if (existingCommit && existingCommit === input.sourceCommit) return "skipped";
     }
 
     const allLinks = resolveAllLinks(input.links, input.content);
@@ -283,7 +284,7 @@ export class WikiGenerator {
     return "written";
   }
 
-  private extractSourceCommit(filePath: string): string | undefined {
+  private extractSourceCommitFromFile(filePath: string): string | undefined {
     try {
       const raw = readFileSync(filePath, "utf-8");
       const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
