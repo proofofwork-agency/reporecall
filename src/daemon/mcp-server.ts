@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { resolve, sep } from 'path'
-import { realpathSync, unlinkSync, mkdirSync } from 'fs'
+import { realpathSync, unlinkSync, mkdirSync, readFileSync } from 'fs'
 import type { HybridSearch } from '../search/hybrid.js'
 import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
@@ -18,7 +18,12 @@ import type { MemoryStore } from '../storage/memory-store.js'
 import { resolveMemoryClass, resolveMemoryScope, resolveMemoryStatus, resolveMemorySummary } from '../memory/types.js'
 import { assembleMemoryContext } from '../memory/context.js'
 import type { MemoryRuntime } from './memory/runtime.js'
-import { writeManagedMemoryFile } from '../memory/files.js'
+import { writeManagedMemoryFile, safeMemorySlug } from '../memory/files.js'
+import type { WikiGenerator } from '../wiki/generator.js'
+import type { WikiAutoCapture } from '../wiki/auto-capture.js'
+import { checkPageStaleness } from '../wiki/staleness.js'
+import { resolveAllLinks } from '../wiki/links.js'
+import { getLogger } from '../core/logger.js'
 
 const require = createRequire(import.meta.url)
 
@@ -79,7 +84,9 @@ export function createMCPServer(
   memorySearch?: MemorySearch,
   memoryIndexer?: MemoryIndexer,
   memoryStore?: MemoryStore,
-  memoryRuntime?: MemoryRuntime
+  memoryRuntime?: MemoryRuntime,
+  wikiGenerator?: WikiGenerator,
+  wikiAutoCapture?: WikiAutoCapture
 ): McpServer {
   let metadata = initialMetadata
   const server = new McpServer({
@@ -173,11 +180,21 @@ export function createMCPServer(
           await doIndex()
         }
 
+        // Generate deterministic wiki pages from index data
+        let wikiResult: unknown
+        if (wikiGenerator) {
+          try {
+            wikiResult = await wikiGenerator.generateFromIndex()
+          } catch (err) {
+            getLogger().warn({ err }, 'Wiki generation after index failed')
+          }
+        }
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(result)
+              text: JSON.stringify({ ...(result as Record<string, unknown>), wiki: wikiResult ?? null })
             }
           ]
         }
@@ -432,14 +449,7 @@ export function createMCPServer(
           const ftsStore = pipeline.getFTSStore()
           const seedResult = resolveSeeds(seed, metadata, ftsStore)
           if (!seedResult.bestSeed) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `No matching code symbol found for "${seed}"`
-                }
-              ]
-            }
+            return null
           }
 
           const tree = buildStackTree(metadata, {
@@ -450,27 +460,45 @@ export function createMCPServer(
             maxNodes: 24
           })
 
+          const allNodes = [tree.seed, ...tree.upTree, ...tree.downTree]
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify(
-                  {
-                    seed: tree.seed,
-                    upTree: tree.upTree,
-                    downTree: tree.downTree,
-                    edges: tree.edges,
-                    nodeCount: tree.nodeCount,
-                    coverage: tree.coverage
-                  },
-                  null,
-                  2
-                )
-              }
-            ]
+            tree,
+            seedName: seedResult.bestSeed.name,
+            relatedFiles: [...new Set(allNodes.map(n => n.filePath).filter(Boolean))],
+            relatedSymbols: [...new Set(allNodes.map(n => n.name))]
           }
         }
-        return lock ? await lock.withRead(async () => doBuild()) : doBuild()
+        const built = lock ? await lock.withRead(async () => doBuild()) : doBuild()
+        if (!built) {
+          return {
+            content: [{ type: 'text' as const, text: `No matching code symbol found for "${seed}"` }]
+          }
+        }
+
+        const treeJson = JSON.stringify(
+          {
+            seed: built.tree.seed,
+            upTree: built.tree.upTree,
+            downTree: built.tree.downTree,
+            edges: built.tree.edges,
+            nodeCount: built.tree.nodeCount,
+            coverage: built.tree.coverage
+          },
+          null,
+          2
+        )
+
+        // Fire-and-forget wiki auto-capture
+        if (wikiAutoCapture) {
+          wikiAutoCapture.captureTreeResult(
+            seed, built.seedName, treeJson,
+            built.relatedFiles, built.relatedSymbols
+          ).catch(err => getLogger().warn({ err }, 'Wiki auto-capture (tree) failed'))
+        }
+
+        return {
+          content: [{ type: 'text' as const, text: treeJson }]
+        }
       } catch (err) {
         return errorResult(err)
       }
@@ -602,14 +630,7 @@ export function createMCPServer(
           const ftsStore = pipeline.getFTSStore()
           const seedResult = resolveSeeds(query, metadata, ftsStore)
           if (!seedResult.bestSeed) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `No matching code symbol found for "${query}"`
-                }
-              ]
-            }
+            return null
           }
 
           const tree = buildStackTree(metadata, {
@@ -632,36 +653,55 @@ export function createMCPServer(
             query
           )
 
+          const allNodes = [tree.seed, ...tree.upTree, ...tree.downTree]
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify(
-                  {
-                    seed: {
-                      name: seedResult.bestSeed.name,
-                      filePath: seedResult.bestSeed.filePath,
-                      kind: seedResult.bestSeed.kind,
-                      confidence: seedResult.bestSeed.confidence
-                    },
-                    tree: {
-                      nodeCount: tree.nodeCount,
-                      upCount: tree.upTree.length,
-                      downCount: tree.downTree.length,
-                      coverage: tree.coverage
-                    },
-                    flowContext: flowContext.text,
-                    tokenCount: flowContext.tokenCount,
-                    chunksIncluded: flowContext.chunks.length
-                  },
-                  null,
-                  2
-                )
-              }
-            ]
+            seed: seedResult.bestSeed,
+            tree,
+            flowContext,
+            relatedFiles: [...new Set(flowContext.chunks.map(c => c.filePath).filter(Boolean))],
+            relatedSymbols: [...new Set(allNodes.map(n => n.name))]
           }
         }
-        return lock ? await lock.withRead(async () => doExplain()) : doExplain()
+        const explained = lock ? await lock.withRead(async () => doExplain()) : doExplain()
+        if (!explained) {
+          return {
+            content: [{ type: 'text' as const, text: `No matching code symbol found for "${query}"` }]
+          }
+        }
+
+        const flowJson = JSON.stringify(
+          {
+            seed: {
+              name: explained.seed.name,
+              filePath: explained.seed.filePath,
+              kind: explained.seed.kind,
+              confidence: explained.seed.confidence
+            },
+            tree: {
+              nodeCount: explained.tree.nodeCount,
+              upCount: explained.tree.upTree.length,
+              downCount: explained.tree.downTree.length,
+              coverage: explained.tree.coverage
+            },
+            flowContext: explained.flowContext.text,
+            tokenCount: explained.flowContext.tokenCount,
+            chunksIncluded: explained.flowContext.chunks.length
+          },
+          null,
+          2
+        )
+
+        // Fire-and-forget wiki auto-capture
+        if (wikiAutoCapture) {
+          wikiAutoCapture.captureFlowResult(
+            query, explained.flowContext.text, explained.seed.name,
+            explained.relatedFiles, explained.relatedSymbols
+          ).catch(err => getLogger().warn({ err }, 'Wiki auto-capture (flow) failed'))
+        }
+
+        return {
+          content: [{ type: 'text' as const, text: flowJson }]
+        }
       } catch (err) {
         return errorResult(err)
       }
@@ -1379,6 +1419,199 @@ export function createMCPServer(
       }
     }
   );
+
+  // --- Wiki tools (registered when memory store is available) ---
+
+  if (memoryStore && memorySearch && memoryIndexer) {
+    server.registerTool(
+      'wiki_query',
+      {
+        description:
+          'Search wiki pages by keyword. Returns matching wiki pages with summaries. Use this to find existing codebase knowledge before exploring from scratch.',
+        inputSchema: {
+          query: z.string().min(1).describe('Search query for wiki pages'),
+          limit: z.number().int().min(1).max(20).optional().describe('Max results (default: 5)')
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ query, limit }) => {
+        try {
+          const results = await memorySearch.search(query, {
+            types: ['wiki'],
+            limit: limit ?? 5
+          })
+          const pages = results.map(r => ({
+            name: r.name,
+            description: r.description,
+            score: r.score,
+            summary: r.summary ?? r.description,
+            relatedFiles: r.relatedFiles?.slice(0, 5),
+            relatedSymbols: r.relatedSymbols?.slice(0, 5)
+          }))
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({ pages, count: pages.length }, null, 2) }]
+          }
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'wiki_read',
+      {
+        description:
+          'Read a wiki page by name, or list all wiki pages if no name is given.',
+        inputSchema: {
+          name: z.string().optional().describe('Wiki page name (omit to list all pages)')
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ name }) => {
+        try {
+          if (name) {
+            const page = memoryStore.getByName(name)
+            if (!page || page.type !== 'wiki') {
+              return { content: [{ type: 'text' as const, text: `Wiki page "${name}" not found` }] }
+            }
+            const links = memoryStore.getWikiLinks(name)
+            const backlinks = memoryStore.getWikiBacklinks(name)
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  name: page.name,
+                  description: page.description,
+                  content: page.content,
+                  relatedFiles: page.relatedFiles,
+                  relatedSymbols: page.relatedSymbols,
+                  links,
+                  backlinks,
+                  confidence: page.confidence
+                }, null, 2)
+              }]
+            }
+          }
+
+          // List all wiki pages
+          const all = memoryStore.getByType('wiki')
+          const index = all.map(p => ({
+            name: p.name,
+            description: p.description,
+            summary: p.summary ?? p.description
+          }))
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({ pages: index, count: index.length }, null, 2) }]
+          }
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'wiki_write',
+      {
+        description:
+          'Create or update a wiki page manually. Use this to persist codebase knowledge that should be available in future sessions.',
+        inputSchema: {
+          name: z.string().min(1).describe('Page name (will be slugified)'),
+          description: z.string().min(1).describe('One-line summary of the page'),
+          content: z.string().min(10).describe('Markdown content for the page'),
+          relatedFiles: z.array(z.string()).optional().describe('Related file paths'),
+          relatedSymbols: z.array(z.string()).optional().describe('Related symbol names'),
+          pageType: z.enum(['community', 'hub', 'module', 'flow', 'exploration']).optional().describe('Page type (default: exploration)')
+        },
+        annotations: { readOnlyHint: false }
+      },
+      async ({ name, description, content, relatedFiles, relatedSymbols, pageType }) => {
+        try {
+          const writableDir = memoryIndexer.getWritableDirs()[0]
+          if (!writableDir) {
+            return errorResult(new Error('No writable memory directory configured'))
+          }
+
+          const slug = `wiki-${safeMemorySlug(name)}`
+          const allLinks = resolveAllLinks([], content)
+
+          const filePath = writeManagedMemoryFile(writableDir, slug, {
+            name: slug,
+            description,
+            memoryType: 'wiki',
+            class: 'fact',
+            scope: 'project',
+            status: 'active',
+            summary: description,
+            sourceKind: 'claude_auto',
+            relatedFiles: (relatedFiles ?? []).slice(0, 20),
+            relatedSymbols: (relatedSymbols ?? []).slice(0, 20),
+            confidence: 0.85,
+            reason: 'Manually created wiki page',
+            pageType: pageType ?? 'exploration',
+            sourceLayer: 'llm-enriched',
+            links: allLinks,
+            sourceCommit: '',
+            content
+          })
+
+          await memoryIndexer.indexFile(filePath)
+          memoryStore.setWikiLinks(slug, allLinks)
+
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({ slug, filePath, links: allLinks }) }]
+          }
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'wiki_check_staleness',
+      {
+        description:
+          'Check if wiki pages are stale (referenced files changed since page was written). Optionally check a specific page or all pages.',
+        inputSchema: {
+          name: z.string().optional().describe('Wiki page name (omit to check all pages)')
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ name }) => {
+        try {
+          const pages = name
+            ? [memoryStore.getByName(name)].filter((p): p is NonNullable<typeof p> => p != null && p.type === 'wiki')
+            : memoryStore.getByType('wiki')
+
+          const results = pages.map(page => {
+            // sourceCommit is in frontmatter, which is stripped from page.content.
+            // Read the raw file from disk to extract it.
+            let sourceCommit = ''
+            try {
+              const raw = readFileSync(page.filePath, 'utf-8')
+              const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/)
+              sourceCommit = match?.[1] ?? ''
+            } catch { /* file may not exist */ }
+            return checkPageStaleness(
+              page.name,
+              sourceCommit,
+              page.relatedFiles ?? [],
+              config.projectRoot
+            )
+          })
+
+          const staleCount = results.filter(r => r.stale).length
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({ results, total: results.length, stale: staleCount }, null, 2)
+            }]
+          }
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+  }
 
   return server
 }

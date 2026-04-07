@@ -26,6 +26,8 @@ import { createMemoryIndexer } from '../memory/indexer.js'
 import { MemorySearch } from '../memory/search.js'
 import { MemoryRuntime } from '../daemon/memory/runtime.js'
 import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
+import { WikiGenerator } from '../wiki/generator.js'
+import { WikiAutoCapture } from '../wiki/auto-capture.js'
 
 export function serveCommand(): Command {
   return new Command('serve')
@@ -337,7 +339,8 @@ export function serveCommand(): Command {
           debugMode: !!options.debug,
           get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined },
           memorySearch: memorySearchInstance,
-          memoryRuntime
+          memoryRuntime,
+          memoryStore
         }
       )
 
@@ -363,6 +366,26 @@ export function serveCommand(): Command {
         }
       })
 
+      // --- Wiki layer initialization ---
+      let wikiGen: WikiGenerator | undefined
+      let wikiCapture: WikiAutoCapture | undefined
+      if (memoryEnabled && memoryStore && memoryIndexer) {
+        const writableDir = memoryIndexer.getWritableDirs()[0]
+        if (writableDir) {
+          wikiGen = new WikiGenerator(
+            pipeline.getMetadataStore(),
+            memoryStore,
+            memoryIndexer,
+            { writableDir, projectRoot }
+          )
+          wikiCapture = new WikiAutoCapture(
+            memoryIndexer,
+            memoryStore,
+            { writableDir, projectRoot }
+          )
+        }
+      }
+
       // Optionally start MCP server on stdio
       let mcpServer: McpServer | undefined
       if (options.mcp) {
@@ -375,7 +398,9 @@ export function serveCommand(): Command {
           memorySearchInstance,
           memoryIndexer,
           memoryStore,
-          memoryRuntime
+          memoryRuntime,
+          wikiGen,
+          wikiCapture
         )
 
         const { StdioServerTransport } =

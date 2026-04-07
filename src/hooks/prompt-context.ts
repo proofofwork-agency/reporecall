@@ -8,12 +8,13 @@ import { resolveSeeds } from "../search/seed.js";
 import type { SeedResult } from "../search/seed.js";
 import type { BroadSelectionDiagnostics } from "../search/hybrid.js";
 import { buildStackTree } from "../search/tree-builder.js";
-import { assembleFlowContext, assembleDeepRouteContext } from "../search/context-assembler.js";
+import { assembleFlowContext, assembleDeepRouteContext, countTokens } from "../search/context-assembler.js";
 import type { MemorySearch } from "../memory/search.js";
 import { assembleMemoryContext, type AssembledMemoryContext } from "../memory/context.js";
 import type { MemoryClass, MemoryRoute, MemorySearchResult } from "../memory/types.js";
 import { resolveMemoryClass, resolveMemorySummary } from "../memory/types.js";
 import { getLogger } from "../core/logger.js";
+import { assembleWikiContext, type AssembledWikiContext } from "../wiki/context.js";
 import { detectExecutionSurfaces, GENERIC_BROAD_TERMS, STOP_WORDS, textMatchesQueryTerm, type ExecutionSurface } from "../search/utils.js";
 import { normalizeTargetText } from "../search/targets.js";
 
@@ -60,6 +61,9 @@ export interface PromptContextResult {
     codeFloorRatio: number;
     classBudgets: Record<MemoryClass, number>;
   };
+  wikiTokenCount?: number;
+  wikiPageCount?: number;
+  wikiPageNames?: string[];
 }
 
 function buildTopologySummary(metadata: MetadataStore, detailed = false): string | null {
@@ -215,6 +219,20 @@ export async function handlePromptContextDetailed(
       })
     : null;
 
+  // --- Wiki search (always-on, separate from memory) ---
+  const memoryTokensUsed = memoryContext?.tokenCount ?? 0;
+  const wikiBudget = memoryEnabled
+    ? Math.min(config.wikiBudget ?? 400, Math.max(0, remainingBudget - memoryTokensUsed))
+    : 0;
+  let wikiContext: AssembledWikiContext | null = null;
+  if (memoryEnabled && wikiBudget > 0 && memorySearchInstance) {
+    wikiContext = await searchWikiPages(query, memorySearchInstance, wikiBudget, {
+      topCodeFiles,
+      topCodeSymbols,
+      maxPages: config.wikiMaxPages ?? 3,
+    });
+  }
+
   let context = codeContext;
   const injectMemory = shouldInjectMemoryIntoPrompt(query, codeContext, memoryContext);
   if (injectMemory && memoryContext?.text && context) {
@@ -232,16 +250,35 @@ export async function handlePromptContextDetailed(
     };
   }
 
-  // Inject topology summary when available
+  // Inject wiki context (always-on, separate from memory)
+  if (wikiContext?.text && context) {
+    context = {
+      ...context,
+      text: context.text + "\n" + wikiContext.text,
+      tokenCount: context.tokenCount + wikiContext.tokenCount,
+    };
+  } else if (wikiContext?.text && !context) {
+    context = {
+      text: wikiContext.text,
+      tokenCount: wikiContext.tokenCount,
+      chunks: [],
+      routeStyle: "standard",
+    };
+  }
+
+  // Inject topology summary when available and within budget
   if (context && metadata) {
     const isBroad = queryMode === "architecture" || queryMode === "change";
     const topoSummary = buildTopologySummary(metadata, isBroad);
     if (topoSummary) {
-      context = {
-        ...context,
-        text: context.text + "\n" + topoSummary,
-        tokenCount: context.tokenCount + Math.ceil(topoSummary.length / 4),
-      };
+      const topoTokens = countTokens(topoSummary);
+      if (context.tokenCount + topoTokens <= totalBudget) {
+        context = {
+          ...context,
+          text: context.text + "\n" + topoSummary,
+          tokenCount: context.tokenCount + topoTokens,
+        };
+      }
     }
   }
 
@@ -277,6 +314,9 @@ export async function handlePromptContextDetailed(
     memoryClassTokens: memoryContext?.classTokens,
     memoryClassCounts: memoryContext?.classCounts,
     memoryBudget: memoryContext?.budget,
+    wikiTokenCount: wikiContext?.tokenCount ?? 0,
+    wikiPageCount: wikiContext?.pageCount ?? 0,
+    wikiPageNames: wikiContext?.pageNames ?? [],
   };
 }
 
@@ -295,6 +335,7 @@ async function searchMemories(
   try {
     const results = await memorySearch.search(query, {
       limit: 8,
+      types: ["user", "feedback", "project", "reference"],
       statuses: ["active"],
       minConfidence: 0.55,
       activeFiles: context?.activeFiles,
@@ -707,6 +748,34 @@ function directlyMentionsSeed(normalizedQuery: string, candidate?: string): bool
 
 function configAwareBudget(totalBudget: number, ratio: number): number {
   return Math.max(0, Math.floor(totalBudget * ratio));
+}
+
+async function searchWikiPages(
+  query: string,
+  memorySearch: MemorySearch,
+  budget: number,
+  context: {
+    topCodeFiles?: string[];
+    topCodeSymbols?: string[];
+    maxPages?: number;
+  }
+): Promise<AssembledWikiContext | null> {
+  try {
+    const results = await memorySearch.search(query, {
+      limit: context.maxPages ?? 3,
+      types: ["wiki"],
+      statuses: ["active"],
+      minConfidence: 0.5,
+      topCodeFiles: context.topCodeFiles,
+      topCodeSymbols: context.topCodeSymbols,
+    });
+    if (results.length === 0) return null;
+
+    return assembleWikiContext(results, budget, context.maxPages ?? 3);
+  } catch (err) {
+    getLogger().warn({ err }, "Wiki search failed — continuing without wiki context");
+    return null;
+  }
 }
 
 function shouldInjectMemoryIntoPrompt(

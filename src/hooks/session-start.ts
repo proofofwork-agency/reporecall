@@ -1,6 +1,7 @@
 import type { HybridSearch as _HybridSearch } from '../search/hybrid.js'
 import type { MemoryConfig as _MemoryConfig } from '../core/config.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
+import type { MemoryStore } from '../storage/memory-store.js'
 import type { AssembledContext } from '../search/types.js'
 import { countTokens } from '../search/context-assembler.js'
 
@@ -46,13 +47,34 @@ const MEMORY_BEHAVIOR_INSTRUCTION =
 export async function handleSessionStart(
   _search: _HybridSearch,
   _config: _MemoryConfig,
-  metadata?: MetadataStore
+  metadata?: MetadataStore,
+  memoryStore?: MemoryStore
 ): Promise<AssembledContext> {
-  const text = MEMORY_BEHAVIOR_INSTRUCTION + (metadata ? formatConventionsSummary(metadata) : '')
+  const parts = [MEMORY_BEHAVIOR_INSTRUCTION]
+
+  if (metadata) parts.push(formatConventionsSummary(metadata))
+
+  // Wiki status line
+  if (memoryStore) {
+    const wikiStatus = formatWikiStatus(memoryStore)
+    if (wikiStatus) parts.push(wikiStatus)
+  }
+
+  const text = parts.join('')
   return {
     text,
     tokenCount: countTokens(text),
     chunks: [],
     routeStyle: 'standard',
+  }
+}
+
+function formatWikiStatus(store: MemoryStore): string {
+  try {
+    const wikiPages = store.getByType('wiki')
+    if (wikiPages.length === 0) return ''
+    return `Wiki: ${wikiPages.length} pages available\n\n`
+  } catch {
+    return ''
   }
 }

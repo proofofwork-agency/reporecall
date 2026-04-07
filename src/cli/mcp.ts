@@ -11,6 +11,8 @@ import { MemoryStore } from "../storage/memory-store.js";
 import { createMemoryIndexer } from "../memory/indexer.js";
 import { MemorySearch } from "../memory/search.js";
 import { MemoryRuntime } from "../daemon/memory/runtime.js";
+import { WikiGenerator } from "../wiki/generator.js";
+import { WikiAutoCapture } from "../wiki/auto-capture.js";
 import { setLogDestination, setLogLevel } from "../core/logger.js";
 import { OllamaEmbedder } from "../indexer/embedder.js";
 
@@ -133,6 +135,26 @@ export function mcpCommand(): Command {
         });
       }
 
+      // --- Wiki layer initialization ---
+      let wikiGen: WikiGenerator | undefined;
+      let wikiCapture: WikiAutoCapture | undefined;
+      if (memoryEnabled && memoryStore && memoryIndexer) {
+        const writableDir = memoryIndexer.getWritableDirs()[0];
+        if (writableDir) {
+          wikiGen = new WikiGenerator(
+            pipeline.getMetadataStore(),
+            memoryStore,
+            memoryIndexer,
+            { writableDir, projectRoot }
+          );
+          wikiCapture = new WikiAutoCapture(
+            memoryIndexer,
+            memoryStore,
+            { writableDir, projectRoot }
+          );
+        }
+      }
+
       const server = createMCPServer(
         search,
         pipeline,
@@ -142,7 +164,9 @@ export function mcpCommand(): Command {
         memorySearchInstance,
         memoryIndexer,
         memoryStore,
-        memoryRuntime
+        memoryRuntime,
+        wikiGen,
+        wikiCapture
       );
 
       await server.connect(
