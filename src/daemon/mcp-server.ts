@@ -1255,5 +1255,130 @@ export function createMCPServer(
     )
   }
 
+  // --- Topology analysis tools ------------------------------------------------
+
+  server.registerTool(
+    'get_communities',
+    {
+      description:
+        'Get detected code communities (clusters of tightly-coupled modules). Returns community IDs, member counts, cohesion scores, and labels.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional().describe('Max communities to return (default: 20)')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ limit }) => {
+      try {
+        const doGet = () => {
+          const communities = metadata.getAllCommunities(limit ?? 20);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({ communities, count: communities.length }, null, 2)
+            }]
+          };
+        };
+        return lock ? await lock.withRead(async () => doGet()) : doGet();
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'get_hub_nodes',
+    {
+      description:
+        'Get the most connected nodes (god nodes / architectural hubs) in the call graph. These are functions or classes with the highest number of call relationships.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional().describe('Max hub nodes to return (default: 10)')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ limit }) => {
+      try {
+        const doGet = () => {
+          const godNodes = metadata.getGodNodes(limit ?? 10);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({ hubNodes: godNodes, count: godNodes.length }, null, 2)
+            }]
+          };
+        };
+        return lock ? await lock.withRead(async () => doGet()) : doGet();
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'get_surprises',
+    {
+      description:
+        'Get surprising cross-module connections in the codebase — edges that bridge structurally distant communities, cross execution surfaces, or involve weakly-resolved targets.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional().describe('Max surprising connections to return (default: 10)')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ limit }) => {
+      try {
+        const doGet = () => {
+          const surprises = metadata.getTopSurprises(limit ?? 10);
+          const enriched = surprises.map(s => {
+            const sourceChunk = metadata.getChunk(s.sourceChunkId);
+            const targetChunk = metadata.getChunk(s.targetChunkId);
+            return {
+              source: { name: sourceChunk?.name ?? s.sourceChunkId, filePath: sourceChunk?.filePath },
+              target: { name: targetChunk?.name ?? s.targetChunkId, filePath: targetChunk?.filePath },
+              score: s.score,
+              reasons: s.reasons,
+              relation: s.relation,
+            };
+          });
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({ surprises: enriched, count: enriched.length }, null, 2)
+            }]
+          };
+        };
+        return lock ? await lock.withRead(async () => doGet()) : doGet();
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'suggest_investigations',
+    {
+      description:
+        'Get suggested investigation questions based on codebase topology — weak resolution edges, bridge nodes, hub nodes with uncertain relationships, isolated code, and low-cohesion modules.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(20).optional().describe('Max questions to return (default: 7)')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ limit }) => {
+      try {
+        const doGet = () => {
+          const questions = metadata.getSuggestedQuestions(limit ?? 7);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({ questions, count: questions.length }, null, 2)
+            }]
+          };
+        };
+        return lock ? await lock.withRead(async () => doGet()) : doGet();
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
   return server
 }

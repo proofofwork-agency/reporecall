@@ -11,6 +11,7 @@ export class IndexScheduler {
   private lock: ReadWriteLock | undefined;
   private retryCount = new Map<string, number>();
   private readonly MAX_RETRIES = 3;
+  private readonly MAX_QUEUE_SIZE = 50_000;
   private stopped = false;
   private flushDoneCallbacks: Array<() => void> = [];
 
@@ -44,6 +45,20 @@ export class IndexScheduler {
         this.queue.add(change.path);
         this.deleteQueue.delete(change.path);
       }
+    }
+
+    // Bound queue sizes to prevent unbounded memory growth
+    if (this.queue.size > this.MAX_QUEUE_SIZE) {
+      const evicted = this.queue.size - this.MAX_QUEUE_SIZE;
+      const kept = Array.from(this.queue).slice(-this.MAX_QUEUE_SIZE);
+      this.queue = new Set(kept);
+      log.warn(`Index queue exceeded ${this.MAX_QUEUE_SIZE}, evicted ${evicted} oldest entries`);
+    }
+    if (this.deleteQueue.size > this.MAX_QUEUE_SIZE) {
+      const evicted = this.deleteQueue.size - this.MAX_QUEUE_SIZE;
+      const kept = Array.from(this.deleteQueue).slice(-this.MAX_QUEUE_SIZE);
+      this.deleteQueue = new Set(kept);
+      log.warn(`Delete queue exceeded ${this.MAX_QUEUE_SIZE}, evicted ${evicted} oldest entries`);
     }
 
     log.info(

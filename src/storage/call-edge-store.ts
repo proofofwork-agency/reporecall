@@ -11,6 +11,7 @@ export class CallEdgeStore {
   private findCalleesForChunkStmt!: Database.Statement;
   private getTopCallTargetsStmt!: Database.Statement;
   private clearStmt!: Database.Statement;
+  private getAllResolvedStmt!: Database.Statement;
 
   constructor(private readonly db: Database.Database) {}
 
@@ -104,6 +105,10 @@ export class CallEdgeStore {
       `SELECT target_name, COUNT(*) as c FROM call_edges GROUP BY target_name ORDER BY c DESC LIMIT ?`
     );
     this.clearStmt = this.db.prepare(`DELETE FROM call_edges`);
+    this.getAllResolvedStmt = this.db.prepare(
+      `SELECT source_chunk_id, target_name, target_file_path, target_id, call_type, resolution_source, file_path
+       FROM call_edges WHERE target_name IS NOT NULL`
+    );
   }
 
   upsertCallEdges(edges: CallEdge[]): void {
@@ -224,6 +229,35 @@ export class CallEdgeStore {
   getTopCallTargets(limit = 10): string[] {
     const rows = this.getTopCallTargetsStmt.all(limit) as Array<{ target_name: string; c: number }>;
     return rows.map((r) => r.target_name);
+  }
+
+  getAllResolvedEdges(): Array<{
+    sourceChunkId: string;
+    targetName: string;
+    targetFilePath: string | null;
+    targetId: string | null;
+    callType: string;
+    resolutionSource: string | null;
+    filePath: string;
+  }> {
+    const rows = this.getAllResolvedStmt.all() as Array<{
+      source_chunk_id: string;
+      target_name: string;
+      target_file_path: string | null;
+      target_id: string | null;
+      call_type: string;
+      resolution_source: string | null;
+      file_path: string;
+    }>;
+    return rows.map(r => ({
+      sourceChunkId: r.source_chunk_id,
+      targetName: r.target_name,
+      targetFilePath: r.target_file_path,
+      targetId: r.target_id,
+      callType: r.call_type,
+      resolutionSource: r.resolution_source,
+      filePath: r.file_path,
+    }));
   }
 
   clearAll(): void {

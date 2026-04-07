@@ -20,6 +20,11 @@ import { resolveCallTarget } from "../analysis/resolve.js";
 import { extractSemanticFeatures } from "../analysis/semantic-features.js";
 import { freeEncoder } from "../search/context-assembler.js";
 import { buildTargetCatalog, INDEX_FORMAT_VERSION } from "../search/targets.js";
+import { buildAdjacencyGraph } from "../analysis/graph-builder.js";
+import { detectCommunities } from "../analysis/community-detection.js";
+import { findGodNodes, findSurprises, suggestQuestions } from "../analysis/topology-analysis.js";
+import type { TopologySnapshot } from "../storage/community-store.js";
+import type { ReadWriteLock } from "../core/rwlock.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -159,6 +164,48 @@ export class IndexingPipeline {
     await this.vectors.resetAll();
     this.merkle.clear();
     this.metadata.setStat("index_format_version", INDEX_FORMAT_VERSION);
+  }
+
+  private lastTopologyAt = 0;
+  private readonly TOPOLOGY_COOLDOWN_MS = 30_000;
+
+  private computeTopologyAnalysis(log: ReturnType<typeof getLogger>): void {
+    const now = Date.now();
+    if (now - this.lastTopologyAt < this.TOPOLOGY_COOLDOWN_MS) return;
+    this.lastTopologyAt = now;
+    try {
+      const graph = buildAdjacencyGraph(this.metadata);
+      if (graph.nodeCount < 5 || graph.edgeCount < 3) return;
+
+      const communities = detectCommunities(graph);
+      const godNodes = findGodNodes(graph, communities);
+      const surprises = findSurprises(graph, communities);
+      const questions = suggestQuestions(graph, communities);
+      const now = new Date().toISOString();
+
+      const snapshot: TopologySnapshot = {
+        communities: [...communities.communities.entries()].map(([id, members]) => ({
+          id: `c_${id}`,
+          nodeCount: members.length,
+          cohesion: communities.cohesion.get(id) ?? 0,
+          label: communities.labels.get(id) ?? null,
+          computedAt: now,
+        })),
+        memberships: [...communities.membership.entries()].map(([chunkId, cid]) => ({
+          chunkId,
+          communityId: `c_${cid}`,
+        })),
+        surprises,
+        godNodes,
+        questions,
+        computedAt: now,
+      };
+
+      this.metadata.replaceTopology(snapshot);
+      log.info(`Topology: ${communities.communities.size} communities, ${godNodes.length} hubs, ${surprises.length} surprises`);
+    } catch (err) {
+      log.warn(`Topology analysis failed: ${err}`);
+    }
   }
 
   private rebuildTargetCatalog(): void {
@@ -570,6 +617,8 @@ export class IndexingPipeline {
       log.warn(`Conventions analysis failed: ${err}`);
     }
 
+    this.computeTopologyAnalysis(log);
+
     onProgress?.({
       phase: "done",
       current: counters.chunksCreated,
@@ -657,6 +706,8 @@ export class IndexingPipeline {
       log.warn(`Conventions analysis failed: ${err}`);
     }
 
+    this.computeTopologyAnalysis(log);
+
     return counters;
   }
 
@@ -696,6 +747,34 @@ export class IndexingPipeline {
 
   getEmbedder(): EmbeddingProvider {
     return this.embedder;
+  }
+
+  async vacuum(lock?: ReadWriteLock): Promise<void> {
+    const run = async (): Promise<void> => {
+      const log = getLogger();
+      try {
+        log.info("Starting SQLite vacuum (this may take a moment)...");
+
+        const metaDb = this.metadata.getDb();
+        metaDb.pragma("wal_checkpoint(TRUNCATE)");
+
+        const ftsDb = this.fts.getDb();
+        ftsDb.pragma("wal_checkpoint(TRUNCATE)");
+
+        metaDb.exec("VACUUM");
+        ftsDb.exec("VACUUM");
+
+        log.info("SQLite vacuum completed successfully");
+      } catch (err) {
+        getLogger().warn({ err }, "SQLite vacuum failed");
+      }
+    };
+
+    if (lock) {
+      await lock.withWrite(run);
+    } else {
+      await run();
+    }
   }
 
   close(): void {

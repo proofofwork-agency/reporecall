@@ -62,6 +62,55 @@ export interface PromptContextResult {
   };
 }
 
+function buildTopologySummary(metadata: MetadataStore, detailed = false): string | null {
+  try {
+    const communityLimit = detailed ? 8 : 5;
+    const hubLimit = detailed ? 5 : 3;
+    const surpriseLimit = detailed ? 3 : 1;
+
+    const communities = metadata.getAllCommunities(communityLimit);
+    const godNodes = metadata.getGodNodes(hubLimit);
+    const surprises = metadata.getTopSurprises(surpriseLimit);
+
+    if (communities.length === 0 && godNodes.length === 0) return null;
+
+    const lines: string[] = ["## Codebase topology"];
+    // Filter out test/scripts communities for cleaner summaries
+    const srcCommunities = communities.filter(c =>
+      c.label && !c.label.startsWith("test:") && !c.label.startsWith("scripts:")
+    );
+    const displayCommunities = srcCommunities.length > 0 ? srcCommunities : communities;
+
+    if (displayCommunities.length > 0) {
+      lines.push(`- **${displayCommunities.length}+ module communities** detected`);
+      if (detailed) {
+        for (const c of displayCommunities.slice(0, 5)) {
+          lines.push(`  - "${c.label}" (${c.nodeCount} nodes, cohesion: ${c.cohesion})`);
+        }
+      } else {
+        const top3 = displayCommunities.slice(0, 3).map(c => `"${c.label}"`).join(", ");
+        lines.push(`  Top: ${top3}`);
+      }
+    }
+    if (godNodes.length > 0) {
+      const hubList = godNodes.map(g => `${g.name} (${g.degree} edges)`).join(", ");
+      lines.push(`- **Hub nodes:** ${hubList}`);
+    }
+    if (surprises.length > 0) {
+      for (const s of surprises) {
+        const srcChunk = metadata.getChunk(s.sourceChunkId);
+        const tgtChunk = metadata.getChunk(s.targetChunkId);
+        const srcName = srcChunk?.name ?? s.sourceChunkId;
+        const tgtName = tgtChunk?.name ?? s.targetChunkId;
+        lines.push(`- **Surprising:** ${srcName} → ${tgtName} (${s.reasons[0] ?? "cross-boundary"})`);
+      }
+    }
+    return lines.join("\n");
+  } catch {
+    return null;
+  }
+}
+
 async function buildDeepRouteContext(
   query: string,
   search: HybridSearch,
@@ -181,6 +230,19 @@ export async function handlePromptContextDetailed(
       chunks: [],
       routeStyle: "standard",
     };
+  }
+
+  // Inject topology summary when available
+  if (context && metadata) {
+    const isBroad = queryMode === "architecture" || queryMode === "change";
+    const topoSummary = buildTopologySummary(metadata, isBroad);
+    if (topoSummary) {
+      context = {
+        ...context,
+        text: context.text + "\n" + topoSummary,
+        tokenCount: context.tokenCount + Math.ceil(topoSummary.length / 4),
+      };
+    }
   }
 
   return {

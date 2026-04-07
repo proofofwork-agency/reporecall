@@ -41,6 +41,7 @@ export interface MemoryConfig {
   testPenaltyFactor: number;
   anonymousPenaltyFactor: number;
   debounceMs: number;
+  shutdownTimeoutMs: number;
   port: number;
   implementationPaths: string[];
   factExtractors: Array<{ keyword: string; pattern: string; label: string }>;
@@ -118,6 +119,7 @@ const UserConfigSchema = z.object({
   testPenaltyFactor: z.number().optional(),
   anonymousPenaltyFactor: z.number().optional(),
   debounceMs: z.number().positive().optional(),
+  shutdownTimeoutMs: z.number().min(1000).max(60000).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   implementationPaths: z.array(z.string()).optional(),
   factExtractors: z.array(z.object({
@@ -195,6 +197,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   testPenaltyFactor: 0.3,
   anonymousPenaltyFactor: 0.5,
   debounceMs: 2000,
+  shutdownTimeoutMs: 10000,
   port: 37222,
   implementationPaths: [
     "src/",

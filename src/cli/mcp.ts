@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolve } from "path";
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
 import { detectProjectRoot } from "../core/project.js";
 import { loadConfig } from "../core/config.js";
 import { IndexingPipeline } from "../indexer/pipeline.js";
@@ -12,6 +12,33 @@ import { createMemoryIndexer } from "../memory/indexer.js";
 import { MemorySearch } from "../memory/search.js";
 import { MemoryRuntime } from "../daemon/memory/runtime.js";
 import { setLogDestination, setLogLevel } from "../core/logger.js";
+import { OllamaEmbedder } from "../indexer/embedder.js";
+
+async function isDaemonRunning(port: number, dataDir: string): Promise<boolean> {
+  try {
+    let token: string | undefined;
+    try {
+      token = readFileSync(resolve(dataDir, "daemon.token"), "utf-8").trim();
+    } catch {
+      // No token file — daemon likely not running
+      return false;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: controller.signal,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return res.ok;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    return false;
+  }
+}
 
 export function mcpCommand(): Command {
   return new Command("mcp")
@@ -30,6 +57,32 @@ export function mcpCommand(): Command {
         : detectProjectRoot(process.cwd());
 
       const config = loadConfig(projectRoot);
+
+      // Check if daemon is already running — warn about dual-process risk
+      const daemonUp = await isDaemonRunning(config.port, config.dataDir);
+      if (daemonUp) {
+        console.error(
+          `Warning: Reporecall daemon is already running on port ${config.port}. ` +
+          `Running a standalone MCP process risks SQLite lock contention. ` +
+          `Consider using "serve --mcp" instead to share the daemon's infrastructure.`
+        );
+      }
+
+      // Health check for Ollama (mirrors serve.ts)
+      if (config.embeddingProvider === "ollama") {
+        const embedder = new OllamaEmbedder(
+          config.embeddingModel,
+          config.ollamaUrl,
+          config.embeddingDimensions
+        );
+        const healthy = await embedder.healthCheck();
+        if (!healthy) {
+          console.error(
+            "Error: Ollama is not running. Start it with: ollama serve"
+          );
+          process.exit(1);
+        }
+      }
 
       const pipeline = new IndexingPipeline(config);
 

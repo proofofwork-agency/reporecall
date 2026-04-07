@@ -14,6 +14,11 @@ import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
 import type { HookDebugRecord } from "../search/types.js";
 import type { MemoryRuntime } from "./memory/runtime.js";
+import {
+  SessionStartBodySchema,
+  PromptContextBodySchema,
+  PreToolUseBodySchema,
+} from "./hook-schemas.js";
 
 // --- Header helpers ---------------------------------------------------------
 
@@ -451,6 +456,23 @@ export function createDaemonServer(
         endpoint === "/hooks/session-start"
       ) {
         await withTimeout(async (_signal) => {
+          // Validate request body (session-start currently ignores it, but
+          // we still enforce schema so malformed payloads are caught early).
+          const body = await readBody(req);
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              const result = SessionStartBodySchema.safeParse(parsed);
+              if (!result.success) {
+                json(res, { error: "Invalid request body", details: result.error.issues }, 400);
+                return;
+              }
+            } catch {
+              json(res, { error: "Invalid JSON" }, 400);
+              return;
+            }
+          }
+
           const startTime = Date.now();
           logHook(`[${requestId}] SESSION_START`);
 
@@ -510,10 +532,16 @@ export function createDaemonServer(
 
           try {
             const parsed = JSON.parse(body);
-            sessionKey = resolveHookSessionKey(parsed);
-            query = parsed.query ?? parsed.prompt ?? parsed.message ?? "";
-            if (Array.isArray(parsed.activeFiles)) {
-              activeFiles = parsed.activeFiles
+            const validation = PromptContextBodySchema.safeParse(parsed);
+            if (!validation.success) {
+              json(res, { error: "Invalid request body", details: validation.error.issues }, 400);
+              return;
+            }
+            const validated = validation.data;
+            sessionKey = resolveHookSessionKey(validated as Record<string, unknown>);
+            query = validated.query ?? validated.prompt ?? validated.message ?? "";
+            if (Array.isArray(validated.activeFiles)) {
+              activeFiles = validated.activeFiles
                 .filter((f: unknown) => typeof f === "string" && f.length < 1024)
                 .slice(0, 100);
             }
@@ -924,7 +952,13 @@ export function createDaemonServer(
           const body = await readBody(req);
           let parsed: Record<string, unknown> = {};
           try {
-            parsed = JSON.parse(body);
+            const raw = JSON.parse(body);
+            const validation = PreToolUseBodySchema.safeParse(raw);
+            if (!validation.success) {
+              json(res, { error: "Invalid request body", details: validation.error.issues }, 400);
+              return;
+            }
+            parsed = validation.data as Record<string, unknown>;
           } catch {
             parsed = {};
           }

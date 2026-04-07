@@ -4,6 +4,9 @@ import { readFileSync, existsSync } from "fs";
 import ignore from "ignore";
 import type { MemoryConfig } from "../core/config.js";
 import { loadMemoryIgnore } from "../core/project.js";
+import { getLogger } from "../core/logger.js";
+
+const MAX_PENDING = 10_000;
 
 export type WatcherCallback = (
   changes: Array<{ path: string; type: "add" | "change" | "unlink" }>
@@ -61,6 +64,16 @@ export class FileWatcher {
 
       const relPath = relative(this.config.projectRoot, filePath);
       if (ig.ignores(relPath)) return;
+
+      if (this.pendingChanges.length >= MAX_PENDING) {
+        const drop = Math.max(1, Math.floor(MAX_PENDING * 0.1));
+        this.pendingChanges.splice(0, drop);
+        getLogger().warn(
+          { dropped: drop, maxPending: MAX_PENDING },
+          `FileWatcher backpressure: dropped ${drop} oldest pending events`
+        );
+      }
+
       this.pendingChanges.push({ path: relPath, type: eventType });
 
       // Debounce

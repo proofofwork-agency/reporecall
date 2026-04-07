@@ -1722,6 +1722,129 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     }
   });
 
+  it("prefers user-facing auth flow files over backend auth infrastructure for broad prompts", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const now = new Date().toISOString();
+    const chunks = [
+      { id: "auth-page", filePath: "src/pages/Auth.tsx", name: "Auth", kind: "function_declaration", startLine: 1, endLine: 20, content: "export function Auth() { return <AuthModal />; }", language: "typescript", indexedAt: now },
+      { id: "use-auth", filePath: "src/hooks/useAuth.tsx", name: "useAuth", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function useAuth() { return supabase.auth.getSession(); }", language: "typescript", indexedAt: now },
+      { id: "auth-callback", filePath: "src/pages/AuthCallback.tsx", name: "AuthCallback", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function AuthCallback() { navigate('/projects'); }", language: "typescript", indexedAt: now },
+      { id: "protected-route", filePath: "src/components/ProtectedRoute.tsx", name: "ProtectedRoute", kind: "function_declaration", startLine: 1, endLine: 25, content: "export function ProtectedRoute() { return session ? children : <Navigate to='/auth' />; }", language: "typescript", indexedAt: now },
+      { id: "provider", filePath: "mcp-server/src/auth/provider.ts", name: "DutoOAuthProvider", kind: "class_declaration", startLine: 1, endLine: 60, content: "export class DutoOAuthProvider { async authorize() {} async verifyAccessToken() {} }", language: "typescript", indexedAt: now },
+      { id: "consent-page", filePath: "mcp-server/src/auth/consentPage.ts", name: "buildConsentPage", kind: "function_declaration", startLine: 1, endLine: 30, content: "export function buildConsentPage() { return '<html>consent</html>'; }", language: "typescript", indexedAt: now },
+      { id: "client-store", filePath: "mcp-server/src/auth/clientStore.ts", name: "SupabaseClientStore", kind: "class_declaration", startLine: 1, endLine: 40, content: "export class SupabaseClientStore { async store() {} }", language: "typescript", indexedAt: now },
+    ];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const byPath = new Map<string, any[]>();
+    for (const chunk of chunks) {
+      const existing = byPath.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      byPath.set(chunk.filePath, existing);
+    }
+
+    const mockMetadata = {
+      getChunkScoringInfo: (ids: string[]) =>
+        ids.map((id) => chunkMap.get(id)).filter(Boolean).map((chunk) => ({
+          id: chunk.id,
+          filePath: chunk.filePath,
+          name: chunk.name,
+          kind: chunk.kind,
+          parentName: undefined,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          indexedAt: chunk.indexedAt,
+          fileMtime: undefined,
+        })),
+      getChunksByIds: (ids: string[]) => ids.map((id) => chunkMap.get(id)).filter(Boolean),
+      findChunksByFilePath: (filePath: string) => byPath.get(filePath) ?? [],
+      resolveTargetAliases: (_aliases: string[], _limit?: number, kinds?: string[]) => {
+        if (kinds && !kinds.includes("file_module")) return [];
+        return [
+          {
+            target: { id: "file_module:src/pages/Auth.tsx", kind: "file_module", canonicalName: "Auth", normalizedName: "auth", filePath: "src/pages/Auth.tsx", ownerChunkId: "auth-page", subsystem: "pages", confidence: 0.95 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.96,
+          },
+          {
+            target: { id: "file_module:src/hooks/useAuth.tsx", kind: "file_module", canonicalName: "useAuth", normalizedName: "use auth", filePath: "src/hooks/useAuth.tsx", ownerChunkId: "use-auth", subsystem: "hooks", confidence: 0.94 },
+            alias: "auth",
+            normalizedAlias: "auth",
+            source: "file_path",
+            weight: 0.95,
+          },
+          {
+            target: { id: "file_module:src/pages/AuthCallback.tsx", kind: "file_module", canonicalName: "AuthCallback", normalizedName: "auth callback", filePath: "src/pages/AuthCallback.tsx", ownerChunkId: "auth-callback", subsystem: "pages", confidence: 0.93 },
+            alias: "auth callback",
+            normalizedAlias: "auth callback",
+            source: "file_path",
+            weight: 0.94,
+          },
+        ];
+      },
+      findTargetsBySubsystem: () => [],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findChunksByNames: () => [],
+      findSiblings: () => [],
+      getTopCallTargets: () => [],
+      close: () => {},
+    };
+
+    const search = new HybridSearch(
+      {
+        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
+        dimensions: () => 4,
+        isEnabled: () => true,
+      } as any,
+      {
+        search: async () => [
+          { id: "provider", score: 0.99 },
+          { id: "consent-page", score: 0.98 },
+          { id: "client-store", score: 0.97 },
+          { id: "auth-page", score: 0.92 },
+          { id: "use-auth", score: 0.91 },
+          { id: "auth-callback", score: 0.9 },
+          { id: "protected-route", score: 0.89 },
+        ],
+        upsert: async () => {},
+        removeByFile: async () => {},
+        count: async () => 7,
+      } as any,
+      {
+        search: () => [
+          { id: "provider", rank: -10 },
+          { id: "client-store", rank: -9 },
+          { id: "auth-page", rank: -8 },
+          { id: "use-auth", rank: -7 },
+          { id: "auth-callback", rank: -6 },
+          { id: "protected-route", rank: -5 },
+        ],
+        upsert: () => {},
+        removeByFile: () => {},
+        close: () => {},
+      } as any,
+      mockMetadata as any,
+      createConfig({ embeddingProvider: "local" })
+    );
+
+    const context = await search.searchWithContext("how does the auth flow work?", 4000);
+    const diagnostics = search.getLastBroadSelectionDiagnostics();
+    const uniquePaths = Array.from(new Set(context.chunks.map((chunk) => chunk.filePath)));
+    const topThree = new Set(uniquePaths.slice(0, 3));
+
+    expect(diagnostics?.dominantFamily).toBe("auth");
+    expect(diagnostics?.deliveryMode).toBe("code_context");
+    expect(topThree.has("src/pages/Auth.tsx")).toBe(true);
+    expect(topThree.has("src/pages/AuthCallback.tsx")).toBe(true);
+    expect(uniquePaths).not.toContain("mcp-server/src/auth/clientStore.ts");
+    expect(uniquePaths).not.toContain("mcp-server/src/auth/consentPage.ts");
+    expect(uniquePaths.length).toBeLessThanOrEqual(3);
+  });
+
   it("prefers executable validators over passive declarations within a selected bug file", async () => {
     const { HybridSearch } = await import("../../src/search/hybrid.js");
     const now = new Date().toISOString();
@@ -1778,29 +1901,14 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
         }),
     };
 
-    const search = new HybridSearch(
-      {
-        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3, 0.4]),
-        dimensions: () => 4,
-        isEnabled: () => true,
-      } as any,
-      {
-        search: async () => [],
-        upsert: async () => {},
-        removeByFile: async () => {},
-        count: async () => 0,
-      } as any,
-      {
-        search: () => [],
-        upsert: () => {},
-        removeByFile: () => {},
-        close: () => {},
-      } as any,
-      mockMetadata as any,
-      createConfig({ embeddingProvider: "local" })
-    );
+    const { BugStrategy } = await import("../../src/search/bug-strategy.js");
+    const bugStrategy = new BugStrategy({
+      metadata: mockMetadata as any,
+      config: createConfig({ embeddingProvider: "local" }),
+      fts: { search: () => [], upsert: () => {}, removeByFile: () => {}, close: () => {} } as any,
+    });
 
-    const promoted = (search as any).promoteBugRepresentativeChunk(
+    const promoted = bugStrategy.promoteBugRepresentativeChunk(
       {
         id: "task-coordinator",
         score: 20,
@@ -1837,8 +1945,10 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
 
   it("keeps production bug retrieval logic free of repo-specific names", () => {
     const hybridSource = readFileSync(resolve(process.cwd(), "src/search/hybrid.ts"), "utf8");
+    const bugSource = readFileSync(resolve(process.cwd(), "src/search/bug-strategy.ts"), "utf8");
 
     expect(hybridSource).not.toMatch(/FlowEditor|QuickConnect|nodeConnectionSchema|documentation\/NODES/i);
+    expect(bugSource).not.toMatch(/FlowEditor|QuickConnect|nodeConnectionSchema|documentation\/NODES/i);
   });
 
   it("builds a search inventory bundle from typed file modules instead of prompt-context neighbors", async () => {
