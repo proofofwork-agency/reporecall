@@ -306,6 +306,10 @@ export class FTSStore {
     this._dfCache.clear();
   }
 
+  getDb(): Database.Database {
+    return this.db;
+  }
+
   close(): void {
     try {
       this.db.pragma("wal_checkpoint(TRUNCATE)");

@@ -394,9 +394,9 @@ export function serveCommand(): Command {
 
         // Safety timeout: force exit if graceful shutdown hangs
         const forceExitTimer = setTimeout(() => {
-          log.error('Graceful shutdown timed out after 10s, forcing exit')
+          log.error(`Graceful shutdown timed out after ${config.shutdownTimeoutMs}ms, forcing exit`)
           process.exit(1)
-        }, 10000)
+        }, config.shutdownTimeoutMs)
         forceExitTimer.unref()
 
         try {

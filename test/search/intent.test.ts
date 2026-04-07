@@ -43,6 +43,13 @@ describe("classifyIntent", () => {
     expectMode("where should I implement audit logging across the billing flow?", "change");
   });
 
+  it("classifies plural bug terms as bug mode", () => {
+    expectMode("bugs in duto cli", "bug");
+    expectMode("duto cli bugs", "bug");
+    expectMode("are there any issues with the auth flow", "bug");
+    expectMode("what problems does the parser have", "bug");
+  });
+
   it("does not confuse broad nouns with architecture when the prompt is causal", () => {
     const intent = classifyIntent("why are routes breaking after redirect?");
     expect(intent.queryMode).toBe("bug");

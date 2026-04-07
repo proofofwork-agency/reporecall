@@ -70,8 +70,13 @@ export async function getLanguage(
   return loadedLanguages.get(languageName)!;
 }
 
+/** Timeout for Tree-sitter parsing (5 seconds). Prevents hangs on malformed files. */
+export const PARSE_TIMEOUT_MICROS = 5_000_000;
+
 export function createParser(language: Parser.Language): Parser {
   const parser = new Parser();
   parser.setLanguage(language);
+  // setTimeoutMicros exists at runtime in web-tree-sitter >=0.20 but is missing from the type definitions
+  (parser as any).setTimeoutMicros(PARSE_TIMEOUT_MICROS);
   return parser;
 }

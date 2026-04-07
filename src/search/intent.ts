@@ -91,7 +91,7 @@ const LOOKUP_HINT_RE =
 const TRACE_RE =
   /\b(explain\s+how|how\s+does|how\s+do|walk\s+me\s+through|what\s+happens\s+(?:when|if)|who\s+calls|what\s+calls|called\s+by)\b/i;
 const BUG_RE =
-  /\b(why|how\s+is\s+this\s+possible|how\s+is\s+it\s+possible|shouldn'?t|supposed\s+to|unexpected|wrong|incorrect|broken|fails?|failing|failure|issue|problem|bug|not\s+supposed\s+to)\b/i;
+  /\b(why|how\s+is\s+this\s+possible|how\s+is\s+it\s+possible|shouldn'?t|supposed\s+to|unexpected|wrong|incorrect|broken|fails?|failing|failure|issues?|problems?|bugs?|not\s+supposed\s+to)\b/i;
 const LONG_FORM_SYMPTOM_RE =
   /\b(flaky|forgets?|forgot|lost|missing|wrong\s+page|original\s+destination|queued\s+destination|pending\s+navigation|handoff)\b/i;
 const CHANGE_RE =

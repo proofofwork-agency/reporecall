@@ -20,8 +20,16 @@ import { ConventionsStore } from "./conventions-store.js";
 import { ImportStore } from "./import-store.js";
 import { TargetStore } from "./target-store.js";
 import { SemanticStore } from "./semantic-store.js";
+import { CommunityStore } from "./community-store.js";
 import type { ImportRecord } from "./import-store.js";
 import type { ChunkFeature, ChunkTag, FileFeature } from "./types.js";
+import type {
+  TopologySnapshot,
+  CommunityRecord,
+  SurpriseRecord,
+  GodNodeRecord,
+  SuggestedQuestion,
+} from "./community-store.js";
 
 // Re-export focused stores and types for consumers
 export { ChunkStore, type ChunkLightweight } from "./chunk-store.js";
@@ -31,6 +39,15 @@ export { ConventionsStore } from "./conventions-store.js";
 export { ImportStore, type ImportRecord } from "./import-store.js";
 export { TargetStore } from "./target-store.js";
 export { SemanticStore } from "./semantic-store.js";
+export { CommunityStore } from "./community-store.js";
+export type {
+  TopologySnapshot,
+  CommunityRecord,
+  CommunityMembership,
+  SurpriseRecord,
+  GodNodeRecord,
+  SuggestedQuestion,
+} from "./community-store.js";
 
 /**
  * Facade that composes the focused stores (ChunkStore, CallEdgeStore,
@@ -47,6 +64,7 @@ export class MetadataStore {
   private imports: ImportStore;
   private targets: TargetStore;
   private semantic: SemanticStore;
+  private communities: CommunityStore;
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
@@ -59,6 +77,7 @@ export class MetadataStore {
     this.imports = new ImportStore(this.db);
     this.targets = new TargetStore(this.db);
     this.semantic = new SemanticStore(this.db);
+    this.communities = new CommunityStore(this.db);
 
     this.chunks.initSchema();
     this.callEdges.initSchema();
@@ -66,6 +85,7 @@ export class MetadataStore {
     this.imports.initSchema();
     this.targets.initSchema();
     this.semantic.initSchema();
+    this.communities.initSchema();
   }
 
   // --- Chunk delegation -------------------------------------------------------
@@ -311,10 +331,59 @@ export class MetadataStore {
     this.imports.clearAll();
     this.targets.clearAll();
     this.semantic.clearAll();
+    this.communities.clearAll();
     this.chunks.clearAll();
   }
 
+  // --- Community / topology delegation ----------------------------------------
+
+  replaceTopology(snapshot: TopologySnapshot): void {
+    this.communities.replaceTopology(snapshot);
+  }
+
+  getCommunityForChunk(chunkId: string): string | undefined {
+    return this.communities.getCommunityForChunk(chunkId);
+  }
+
+  getCommunityInfo(communityId: string): CommunityRecord | undefined {
+    return this.communities.getCommunityInfo(communityId);
+  }
+
+  getAllCommunities(limit?: number): CommunityRecord[] {
+    return this.communities.getAllCommunities(limit);
+  }
+
+  getTopSurprises(limit?: number): SurpriseRecord[] {
+    return this.communities.getTopSurprises(limit);
+  }
+
+  getGodNodes(limit?: number): GodNodeRecord[] {
+    return this.communities.getGodNodes(limit);
+  }
+
+  getSuggestedQuestions(limit?: number): SuggestedQuestion[] {
+    return this.communities.getSuggestedQuestions(limit);
+  }
+
+  // --- Call edges: bulk resolved edges for graph building ----------------------
+
+  getAllResolvedCallEdges(): Array<{
+    sourceChunkId: string;
+    targetName: string;
+    targetFilePath: string | null;
+    targetId: string | null;
+    callType: string;
+    resolutionSource: string | null;
+    filePath: string;
+  }> {
+    return this.callEdges.getAllResolvedEdges();
+  }
+
   // --- Lifecycle --------------------------------------------------------------
+
+  getDb(): Database.Database {
+    return this.db;
+  }
 
   close(): void {
     try {
