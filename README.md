@@ -421,6 +421,14 @@ Query: `runWorkflow` (depth: 2, direction: both)
 
 ## Changelog
 
+### v0.6.1 - Wiki Startup Generation & Version Sync
+
+**Wiki startup generation.** Wiki pages now auto-generate on MCP server and daemon startup, not just during `index_codebase`. Ensures wiki context is always available without requiring a full re-index.
+
+**Wiki generator freshness guard.** `writePage` now checks `sourceCommit` from disk to skip unchanged pages. Fixed `surprisesPage` flag not being set on the generation result.
+
+**Version sync.** `package-lock.json` synced to match `package.json`.
+
 ### v0.6.0 - Wiki Layer & Memory Precision
 
 This release adds an **always-on wiki layer** for persistent codebase knowledge and fixes three memory retrieval bugs that caused noisy or missing context injection.
