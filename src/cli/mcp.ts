@@ -152,6 +152,15 @@ export function mcpCommand(): Command {
             memoryStore,
             { writableDir, projectRoot }
           );
+
+          // Generate wiki pages from existing index on startup
+          wikiGen.generateFromIndex().then((res) => {
+            if (res.pagesWritten > 0) {
+              console.error(`Wiki: generated ${res.pagesWritten} pages (${res.communityPages} communities, ${res.hubPages} hubs)`);
+            }
+          }).catch((err) => {
+            console.error(`Wiki generation on startup failed: ${err}`);
+          });
         }
       }
 

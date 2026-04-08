@@ -383,6 +383,15 @@ export function serveCommand(): Command {
             memoryStore,
             { writableDir, projectRoot }
           )
+
+          // Generate wiki pages from existing index on startup
+          wikiGen.generateFromIndex().then((res) => {
+            if (res.pagesWritten > 0) {
+              console.log(`Wiki: generated ${res.pagesWritten} pages (${res.communityPages} communities, ${res.hubPages} hubs)`)
+            }
+          }).catch((err) => {
+            getLogger().warn({ err }, 'Wiki generation on startup failed')
+          })
         }
       }
 
