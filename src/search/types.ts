@@ -25,6 +25,7 @@ export interface SearchOptions {
   graphExpansion?: boolean;
   graphTopN?: number;
   siblingExpansion?: boolean;
+  /** @deprecated Runtime reranking has been removed; this flag is ignored. */
   rerank?: boolean;
   signal?: AbortSignal;
 }

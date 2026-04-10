@@ -30,9 +30,12 @@ export const TRACE_NOISE_TERMS = new Set([
 const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
   auth: ["routing", "permissions"],
   routing: ["auth", "permissions"],
-  billing: ["auth"],
-  storage: ["auth"],
-  generation: ["storage"],
+  billing: ["auth", "generation"],
+  storage: ["auth", "generation"],
+  generation: ["storage", "queue", "billing", "workflow"],
+  queue: ["generation"],
+  workflow: ["generation", "queue"],
+  bot: ["webhook", "daemon"],
 };
 
 const MODE_EXPLICIT_LOGGING_RE =

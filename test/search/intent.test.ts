@@ -36,11 +36,18 @@ describe("classifyIntent", () => {
     expectMode("which files implement the authentication flow", "architecture");
     expectMode("how does auth flow work?", "architecture");
     expectMode("trace the full image generation flow from UI to edge function", "architecture");
+    expectMode("how does the telegram bot work?", "architecture");
+    expectMode("how does saving and publishing a flow work?", "architecture");
+    expectMode("how are credits checked before generation runs?", "architecture");
   });
 
   it("classifies cross-cutting edit prompts as change", () => {
     expectMode("add logging to every step in the authentication flow", "change");
     expectMode("where should I implement audit logging across the billing flow?", "change");
+  });
+
+  it("classifies orchestration traces that use 'how are' phrasing", () => {
+    expectMode("how are generation jobs fetched and polled?", "trace");
   });
 
   it("classifies plural bug terms as bug mode", () => {

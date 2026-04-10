@@ -77,14 +77,17 @@ export const STRICT_WORKFLOW_FAMILY_COHESION = new Set([
   "billing",
   "storage",
   "generation",
+  "workflow",
 ]);
 
 export const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
   auth: ["routing", "permissions"],
   routing: ["auth", "permissions"],
-  billing: ["auth"],
-  storage: ["auth"],
-  generation: ["storage"],
+  billing: ["auth", "generation"],
+  storage: ["auth", "generation"],
+  generation: ["storage", "queue", "billing", "workflow"],
+  queue: ["generation", "workflow"],
+  workflow: ["generation", "queue"],
 };
 
 // ---------------------------------------------------------------------------

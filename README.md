@@ -9,9 +9,9 @@
 ╚═╝  ╚═╝╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝
 ```
 
-Local codebase memory and retrieval for Claude Code and MCP.
+Local codebase memory, auto-generated wiki, and an interactive architecture dashboard — for Claude Code and MCP.
 
-Reporecall indexes your repository locally, classifies each query by intent, and injects focused code context, wiki knowledge, and persistent memory before Claude answers - no cloud, no embeddings API, everything stays on your machine.
+Reporecall indexes your repository locally, classifies each query by intent, and injects focused code context, **auto-generated wiki pages**, and persistent memory before Claude answers. Then it gives you a **self-contained HTML dashboard** to see the whole picture at a glance. No cloud, no embeddings API, everything stays on your machine.
 
 ---
 
@@ -21,27 +21,62 @@ Reporecall indexes your repository locally, classifies each query by intent, and
 npm install -g @proofofwork-agency/reporecall
 
 reporecall init          # Create .memory/, hooks, MCP config
-reporecall index         # Index the codebase
+reporecall index         # Index the codebase (builds topology + wiki)
 reporecall serve         # Start daemon + file watcher
+reporecall lens --serve  # Open the architecture dashboard
 ```
 
-That's it. Context is injected automatically into every Claude Code prompt via hooks.
+That's it. Context is injected automatically into every Claude Code prompt via hooks, wiki pages regenerate as the code changes, and the lens dashboard is always one command away.
 
 ---
 
-## Features
+## Headline Features
 
-- **Intent-based retrieval** - query mode selected by local rule-based classification, no LLM cost
-- **Multi-signal search** - FTS keywords, vector similarity, AST metadata, semantic features, imports, call graphs
-- **Wiki layer** - auto-generated knowledge pages from codebase topology, always-on injection with token budgeting
-- **Topology analysis** - Louvain community detection, hub node identification, surprise scoring, investigation suggestions
-- **Bug localization** - dedicated pipeline with subject profiling, contradiction pruning, and graph expansion
-- **Local memory** - persistent rules, facts, episodes, and working context across sessions
-- **Delivery modes** - `code_context` (focused chunks) or `summary_only` (structured summary when confidence is low)
-- **Hook guidance** - context strength, execution surface, missing evidence, and recommended next reads
-- **Streaming indexer** - bounded file windows, adaptive embedding batches, lower peak heap
-- **SQLite ABI self-repair** - detects native module mismatch and attempts automatic rebuild
-- **MCP server** - 26 tools for code search, call graphs, topology, memory, and wiki
+### Lens — interactive architecture dashboard
+
+One command, one HTML file, your whole codebase at a glance:
+
+```bash
+reporecall lens --serve --open
+```
+
+A five-tab dark-themed dashboard built from your pre-computed index:
+
+- **Overview** — project stats, a D3 chord diagram of inter-community call flows, top hubs, top surprises
+- **Communities** — expandable Louvain cluster cards with member tables, cohesion scores, cross-community bar charts
+- **Hubs** — the structural load-bearing walls of your codebase, each with caller/callee lists and wiki mentions
+- **Surprises** — a sortable table of unexpected cross-boundary connections with reasons and investigation questions
+- **Wiki** — a full browser for auto-generated wiki pages with interlinks, backlinks, and related symbols
+
+Every tab includes an inline legend explaining how to read it. The HTML is fully self-contained (inline CSS, inline JSON data, D3 from CDN) — email it, host it on S3, drop it in a PR comment, or serve it locally with `--serve` for a clickable localhost URL.
+
+### Wiki — a living, auto-generated knowledge base
+
+Inspired by [Andrej Karpathy's LLM Wiki](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-knowledge-base-claude-code) concept — but built for you, from your code, automatically.
+
+- **Zero authoring required.** Wiki pages are generated from topology: one page per community, one per hub, one per surprise cluster, plus flow traces.
+- **Always fresh.** Pages regenerate on every index, on daemon startup, and on `reporecall lens`. A `sourceCommit` guard skips unchanged pages so regeneration is cheap.
+- **Injected, not searched.** Relevant wiki pages are injected directly into Claude Code prompts within a configurable token budget — no manual `wiki_read` needed.
+- **Linked and navigable.** Pages reference each other with `[[slug]]` interlinks; backlinks are tracked automatically. Browse them in the lens Wiki tab or via the `wiki_*` MCP tools.
+- **Measured.** On a 1,140-file production codebase, wiki injection shows **100% precision** with 50% hit rate — when it fires, it's right.
+
+### Intent-routed retrieval
+
+Every prompt is classified locally into one of six modes — `lookup`, `trace`, `bug`, `architecture`, `change`, or `skip` — and routed to a tailored retrieval strategy. No LLM cost, no latency, no cloud calls.
+
+---
+
+## What else is in the box
+
+- **Multi-signal search** — FTS keywords, vector similarity, AST metadata, semantic features, imports, call graphs
+- **Topology analysis** — Louvain community detection, hub identification, surprise scoring, investigation suggestions
+- **Bug localization** — dedicated pipeline with subject profiling, contradiction pruning, graph expansion
+- **Persistent memory** — rules, facts, episodes, and working context across sessions
+- **Delivery modes** — `code_context` (focused chunks) or `summary_only` (structured fallback when confidence is low)
+- **Hook guidance** — context strength, execution surface, missing evidence, recommended next reads
+- **Streaming indexer** — bounded file windows, adaptive embedding batches, lower peak heap
+- **SQLite ABI self-repair** — detects native module mismatch and attempts automatic rebuild
+- **MCP server** — 26 tools for code search, call graphs, topology, memory, and wiki
 
 ---
 
@@ -127,15 +162,23 @@ flowchart LR
   Trace --> Path["seed + graph path reconstruction"]
 ```
 
-### Wiki layer
-
-Auto-generated wiki pages from codebase topology are indexed alongside code and injected into every prompt context within a configurable token budget. No manual authoring required - pages are created during indexing from hub nodes, flow traces, and architectural surprises.
-
-Inspired by [Andrej Karpathy's LLM Wiki](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-knowledge-base-claude-code) concept - structured markdown knowledge bases that LLMs can query efficiently. Reporecall automates wiki generation from code topology and enriches pages with optional LLM summaries.
-
 ### Memory layer
 
 Persistent project memory across sessions. Stores feedback rules, project decisions, user preferences, and reference pointers. Memory search uses FTS5 with RRF scoring, recency decay, access frequency penalties, and type-based boosts.
+
+### `reporecall lens` flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project <path>` | auto-detect | Project root path |
+| `--open` | - | Open generated HTML in default browser (or the served URL when combined with `--serve`) |
+| `--serve` | - | Serve the dashboard over HTTP on localhost |
+| `--port <n>` | `7878` | Port for `--serve` |
+| `--output <path>` | `.memory/lens.html` | Custom output path |
+| `--json` | - | Output raw `DashboardData` JSON instead of HTML |
+| `--max-communities <n>` | `20` | Max communities to include |
+| `--max-hubs <n>` | `15` | Max hub nodes to include |
+| `--max-surprises <n>` | `20` | Max surprises to include |
 
 ---
 
@@ -145,6 +188,7 @@ Persistent project memory across sessions. Stores feedback rules, project decisi
 reporecall init          # Create .memory/, hooks, MCP config
 reporecall index         # Index the codebase
 reporecall serve         # Start daemon + file watcher
+reporecall lens          # Generate interactive architecture dashboard
 reporecall explain       # Inspect retrieval for a query
 reporecall mcp           # Run as MCP server (stdio)
 reporecall doctor        # Health checks
@@ -421,7 +465,28 @@ Query: `runWorkflow` (depth: 2, direction: both)
 
 ## Changelog
 
-### v0.6.1 - Wiki Startup Generation & Version Sync
+### v0.6.2 - Lens Architecture Dashboard
+
+This release adds `reporecall lens`, an interactive architecture dashboard that visualizes your codebase structure as a self-contained HTML file, and promotes the wiki layer into a first-class selling point alongside it.
+
+**Lens dashboard.** Five-tab HTML dashboard generated from existing index data: Overview (stats + D3 chord diagram), Communities (expandable Louvain cluster cards), Hubs (caller/callee cards), Surprises (sortable table + investigation questions), Wiki (browsable auto-generated pages). Every tab includes a legend explaining what the data means. No external server needed — one HTML file with inline CSS, JS, and D3.js.
+
+**Lens `--serve` mode.** New `--serve` / `--port <n>` flags spin up a minimal local HTTP server (default `http://localhost:7878`) so you can open the dashboard as a URL rather than a `file://` path. Combines with `--open` to launch it straight into your browser. Cross-platform (macOS/Linux/Windows), graceful Ctrl+C shutdown, no caching so reruns show fresh data.
+
+**Wiki generation on lens.** `reporecall lens` auto-generates wiki pages from topology before building the dashboard, so wiki content is always fresh without needing `reporecall index`.
+
+**Community membership fix.** Fixed a bug where wiki community pages were never generated because `getCommunityForChunk` was called with symbol names instead of chunk IDs.
+
+**Reranker removal.** Removed the local cross-encoder reranker. The retrieval pipeline now uses hydration only. The `rerank` config option is deprecated and ignored.
+
+**Search intent expansion.** New regex patterns improve query routing for workflow lifecycle, bot systems, billing/generation cross-domain, and job orchestration queries.
+
+**Concept family expansion.** New "workflow" and "bot" concept families. Expanded "billing" (credits) and "queue" (poll, status) families.
+
+**Hybrid search tuning.** Broader trace-aware prepend for bot/webhook/queue/workflow queries. New seed scoring penalty for generic resolved file targets.
+
+<details>
+<summary>v0.6.1 - Wiki Startup Generation & Version Sync</summary>
 
 **Wiki startup generation.** Wiki pages now auto-generate on MCP server and daemon startup, not just during `index_codebase`. Ensures wiki context is always available without requiring a full re-index.
 
@@ -429,7 +494,10 @@ Query: `runWorkflow` (depth: 2, direction: both)
 
 **Version sync.** `package-lock.json` synced to match `package.json`.
 
-### v0.6.0 - Wiki Layer & Memory Precision
+</details>
+
+<details>
+<summary>v0.6.0 - Wiki Layer & Memory Precision</summary>
 
 This release adds an **always-on wiki layer** for persistent codebase knowledge and fixes three memory retrieval bugs that caused noisy or missing context injection.
 
@@ -452,6 +520,8 @@ Benchmark results (1,140-file production codebase, 30 queries):
 | Code   | 57%       | 100%     | Always injected                        |
 | Wiki   | 100%      | 50%      | Only injects when relevant pages exist |
 | Memory | 73%       | ~60%     | After access penalty + threshold fix   |
+
+</details>
 
 <details>
 <summary>v0.5.0 - Topology-Aware Search & Architecture Decomposition</summary>

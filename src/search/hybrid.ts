@@ -2,7 +2,7 @@
  * HybridSearch — orchestrator for the multi-strategy search pipeline.
  *
  * This module is the public entry-point.  All heavy lifting is delegated to:
- *   - RetrievalPipeline  (vector + keyword retrieval, fusion, expansion, reranking)
+ *   - RetrievalPipeline  (vector + keyword retrieval, fusion, expansion, hydration)
  *   - BugStrategy         (bug-localisation bundle selection)
  *   - ArchitectureStrategy(broad / inventory bundle selection)
  *   - trace-strategy      (trace-mode retrieval helpers)
@@ -314,7 +314,11 @@ export class HybridSearch {
         )
       : prependExplicitTargetResults(query, results, metadata, this.fts, chunkToResult, seeds);
 
-    const traceAware = queryMode === "trace" && isInfrastructureTracePrompt(query)
+    const traceAware = queryMode === "trace" && (
+      isInfrastructureTracePrompt(query)
+      || seeds.bestSeed?.targetKind === "file_module"
+      || /\b(bot|telegram|discord|whatsapp|webhook|queue|job|jobs|poll|polling|publish|publishing|save|saving|saved)\b/i.test(query)
+    )
       ? prependTraceTargetResults(query, exactAware, metadata, implPaths)
       : exactAware;
 
@@ -568,6 +572,12 @@ export class HybridSearch {
             || GENERIC_QUERY_ACTION_TERMS.has(aliasTokens[0] ?? "")
             || BUG_GENERIC_SEED_ALIAS_TERMS.has(aliasTokens[0] ?? "")
           );
+        const genericResolvedFilePenalty =
+          seed.reason === "resolved_target"
+          && seed.targetKind === "file_module"
+          && aliasIsGeneric
+            ? (queryMode === "trace" ? 3.4 : queryMode === "architecture" || queryMode === "change" ? 2.8 : 0)
+            : 0;
         const compoundBonus = /[A-Z_]/.test(seed.name) ? 1.5 : aliasTokens.length >= 2 ? 1 : 0;
         const reasonBonus =
           seed.reason === "explicit_target" ? 1.4
@@ -575,7 +585,7 @@ export class HybridSearch {
               : seed.targetKind === "symbol" ? 1.1
                 : seed.targetKind === "file_module" ? 0.8
                   : 0.5;
-        return focusMatches * 5 + familyMatches * 3 + compoundBonus + reasonBonus - (aliasIsGeneric ? 2.2 : 0);
+        return focusMatches * 5 + familyMatches * 3 + compoundBonus + reasonBonus - (aliasIsGeneric ? 2.2 : 0) - genericResolvedFilePenalty;
       };
       const diff = scoreSeed(b) - scoreSeed(a);
       if (Math.abs(diff) > 0.01) return diff;

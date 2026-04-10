@@ -15,7 +15,6 @@ import {
   expandQueryTerms,
 } from "./utils.js";
 import { getLogger } from "../core/logger.js";
-import { LocalReranker } from "./reranker.js";
 import type { SearchResult, SearchOptions } from "./types.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
 import { classifyIntent } from "./intent.js";
@@ -53,8 +52,7 @@ const EMBED_CACHE_MAX = 50;
 
 /**
  * Encapsulates the low-level retrieval pipeline: vector search, keyword
- * search, reciprocal-rank fusion, graph/sibling expansion, reranking,
- * and hydration.
+ * search, reciprocal-rank fusion, graph/sibling expansion, and hydration.
  */
 export class RetrievalPipeline {
   private embedder: EmbeddingProvider;
@@ -62,7 +60,6 @@ export class RetrievalPipeline {
   private fts: FTSStore;
   private metadata: MetadataStore;
   private config: MemoryConfig;
-  private reranker: LocalReranker | null = null;
   private queryEmbedCache = new Map<string, EmbeddingVector>();
 
   constructor(opts: RetrievalPipelineConfig) {
@@ -335,54 +332,13 @@ export class RetrievalPipeline {
     ranked.sort((a, b) => b.score - a.score);
   }
 
-  // ── Rerank (cross-encoder) or hydrate (plain fetch) ─────────────
+  // ── Hydrate top-ranked chunks ───────────────────────────────────
   async rerankOrHydrate(
-    query: string,
+    _query: string,
     ranked: Array<{ id: string; score: number }>,
     limit: number,
-    options?: SearchOptions
+    _options?: SearchOptions
   ): Promise<SearchResult[]> {
-    const doReranking =
-      this.embedder.isEnabled() &&
-      (options?.rerank ?? this.config.reranking);
-
-    if (doReranking) {
-      const log = getLogger();
-      const rerankTopK = this.config.rerankTopK;
-      const topForReranking = ranked.slice(0, rerankTopK).map((r) => r.id);
-      const rerankChunks = this.metadata.getChunksByIds(topForReranking);
-      const rerankMap = new Map(rerankChunks.map((c) => [c.id, c]));
-
-      const candidates: SearchResult[] = [];
-      for (const r of ranked.slice(0, rerankTopK)) {
-        const chunk = rerankMap.get(r.id);
-        if (!chunk) {
-          log.debug(`Filtered stale chunk from reranking: ${r.id}`);
-          continue;
-        }
-        candidates.push({
-          id: r.id,
-          score: r.score,
-          filePath: chunk.filePath,
-          name: chunk.name,
-          kind: chunk.kind,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          content: chunk.content,
-          docstring: chunk.docstring,
-          parentName: chunk.parentName,
-          language: chunk.language ?? "",
-        });
-      }
-
-      if (!this.reranker) {
-        this.reranker = new LocalReranker(this.config.rerankingModel);
-      }
-
-      return this.reranker.rerank(query, candidates, limit);
-    }
-
-    // Hydrate top results with full content
     const log = getLogger();
     const topIds = ranked.slice(0, limit).map((r) => r.id);
     const fullChunks = this.metadata.getChunksByIds(topIds);

@@ -26,7 +26,7 @@ const NON_CODE_PATTERNS: RegExp[] = [
   // Greetings followed by conversational filler ("hello how are you", "hi there what's up")
   /^(hello|hi|hey|yo|sup|howdy|hola|good\s+(morning|afternoon|evening|night))(\s+there)?\s+(how|what|nice|hope|glad)\b/,
   // Standalone conversational openers
-  /^how\s+are\s+you\b/,
+  /^how\s+are\s+(you|things|we|everyone)\b/,
   /^what('s|\s+is)\s+(up|new|good)\b/,
   // Thanks
   /^(thanks|thank\s+you|thx|ty|cheers)[\s!.?]*$/,
@@ -57,6 +57,7 @@ const NAVIGATION_PATTERNS: RegExp[] = [
   /\bhow\s+does\b/,
   /\bhow\s+do\b/,
   /\bhow\s+is\b/,
+  /\bhow\s+are\b/,
   /\bwalk\s+me\s+through\b/,
   /\bwhy\s+does\b/,
   /\bwhy\s+is\b/,
@@ -76,6 +77,11 @@ const CONCEPT_FAMILY_RE =
 const FILE_INVENTORY_RE = /\bwhich\s+files?\b|\ball\s+(?:the\s+)?files?\b/;
 const WHOLE_SYSTEM_SCOPE_RE = /\b(full|entire|complete|end-to-end|across)\b|\bevery\s+step\b|\bfrom\s+.+\s+to\s+.+\b/;
 const CROSS_CUTTING_EDIT_RE = /\b(add|instrument|trace|audit|update|change|logging?)\b/;
+const WORKFLOW_LIFECYCLE_RE = /\b(save|saving|saved|publish|publishing|published|serialize|serialization|share|sharing)\b/;
+const JOB_ORCHESTRATION_RE = /\b(poll|polling|status|queue|job|jobs|worker|workers)\b/;
+const BOT_SYSTEM_RE = /\b(bot|telegram|discord|whatsapp)\b/;
+const BILLING_RE = /\b(billing|checkout|portal|subscription|invoice|payment|credit|credits)\b/;
+const GENERATION_RE = /\b(generate|generation|render|image|images|job|jobs|queue|worker|workers)\b/;
 const LIFECYCLE_SYSTEM_RE = /\b(shutdown|startup|drain|close|teardown|boot|bootstrap)\b/;
 const ARCHITECTURAL_QUESTION_RE = /^(what|how|explain|describe|show)\s+(is|does|are|do)?\s*(the\s+)?(architecture|design|structure|system|overview)/i;
 const REDIRECT_DEBUG_RE =
@@ -89,7 +95,7 @@ const INFRASTRUCTURE_TRACE_RE =
 const LOOKUP_HINT_RE =
   /^(show|find|where\s+is|open|read|locate)\b|\b(path|file|symbol|class|function|type|interface|module|endpoint|implementation)\b/i;
 const TRACE_RE =
-  /\b(explain\s+how|how\s+does|how\s+do|walk\s+me\s+through|what\s+happens\s+(?:when|if)|who\s+calls|what\s+calls|called\s+by)\b/i;
+  /\b(explain\s+how|how\s+does|how\s+do|how\s+are|walk\s+me\s+through|what\s+happens\s+(?:when|if)|who\s+calls|what\s+calls|called\s+by)\b/i;
 const BUG_RE =
   /\b(why|how\s+is\s+this\s+possible|how\s+is\s+it\s+possible|shouldn'?t|supposed\s+to|unexpected|wrong|incorrect|broken|fails?|failing|failure|issues?|problems?|bugs?|not\s+supposed\s+to)\b/i;
 const LONG_FORM_SYMPTOM_RE =
@@ -156,6 +162,12 @@ export function classifyIntent(query: string): QueryIntent {
   const hasFileInventoryCue = FILE_INVENTORY_RE.test(lower);
   const hasWholeSystemScope = WHOLE_SYSTEM_SCOPE_RE.test(lower);
   const hasCrossCuttingCue = CROSS_CUTTING_EDIT_RE.test(lower);
+  const hasWorkflowLifecycleCue = WORKFLOW_LIFECYCLE_RE.test(lower);
+  const hasJobOrchestrationCue = JOB_ORCHESTRATION_RE.test(lower);
+  const hasBotSystemCue = BOT_SYSTEM_RE.test(lower);
+  const mentionsBillingDomain = BILLING_RE.test(lower);
+  const mentionsGenerationDomain = GENERATION_RE.test(lower);
+  const hasCrossDomainBoundaryCue = /\b(before|after|during)\b/.test(lower);
   const hasBugCue = BUG_RE.test(lower);
   const hasLongFormSymptomCue =
     LONG_FORM_SYMPTOM_RE.test(lower)
@@ -166,6 +178,10 @@ export function classifyIntent(query: string): QueryIntent {
     || hasFileInventoryCue
     || ARCHITECTURAL_QUESTION_RE.test(lower)
     || (hasWorkflowNoun && hasWholeSystemScope)
+    || (hasWorkflowNoun && hasWorkflowLifecycleCue)
+    || (hasWorkflowNoun && hasJobOrchestrationCue)
+    || (hasBotSystemCue && /\bhow\s+does\b.*\bwork\b/.test(lower))
+    || (hasCrossDomainBoundaryCue && mentionsBillingDomain && mentionsGenerationDomain)
     || (!looksLikeDirectLookup && hasWorkflowNoun && hasConceptFamily)
     || (hasWholeSystemScope && LIFECYCLE_SYSTEM_RE.test(lower));
   const hasChangeCue =
@@ -178,6 +194,10 @@ export function classifyIntent(query: string): QueryIntent {
     || ARCHITECTURAL_QUESTION_RE.test(lower)
     || (hasNavigationCue && hasWholeSystemScope)
     || (hasWorkflowNoun && hasWholeSystemScope)
+    || (hasWorkflowNoun && hasWorkflowLifecycleCue)
+    || (hasWorkflowNoun && hasJobOrchestrationCue)
+    || (hasBotSystemCue && /\bhow\s+does\b.*\bwork\b/.test(lower))
+    || (hasCrossDomainBoundaryCue && mentionsBillingDomain && mentionsGenerationDomain)
     || (!looksLikeDirectLookup && hasWorkflowNoun && hasConceptFamily)
     || (hasWholeSystemScope && LIFECYCLE_SYSTEM_RE.test(lower))
     || (hasWholeSystemScope && hasCrossCuttingCue)

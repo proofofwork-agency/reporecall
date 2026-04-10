@@ -72,12 +72,12 @@ export class WikiGenerator {
     };
 
     // Build chunk-to-community map for community member lookup
-    const chunks = this.metadata.getChunksLightweight();
+    const chunks = this.metadata.getAllChunks();
     const chunkCommunityMap = new Map<string, string>();
     const communityChunks = new Map<string, Array<{ name: string; filePath: string; kind: string }>>();
 
     for (const chunk of chunks) {
-      const communityId = this.metadata.getCommunityForChunk(chunk.name);
+      const communityId = this.metadata.getCommunityForChunk(chunk.id);
       if (communityId) {
         chunkCommunityMap.set(chunk.name, communityId);
         if (!communityChunks.has(communityId)) communityChunks.set(communityId, []);
