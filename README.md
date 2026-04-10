@@ -30,8 +30,6 @@ That's it. Context is injected automatically into every Claude Code prompt via h
 
 ---
 
-## Headline Features
-
 ### Lens — interactive architecture dashboard
 
 One command, one HTML file, your whole codebase at a glance:
