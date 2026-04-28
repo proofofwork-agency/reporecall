@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/proofofwork-agency-reporecall-badge.png)](https://mseep.ai/app/proofofwork-agency-reporecall)
+
 # Reporecall
 
 ```text
