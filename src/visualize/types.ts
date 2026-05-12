@@ -8,8 +8,17 @@ export interface DashboardMeta {
   totalSymbols: number;
   totalFiles: number;
   totalEdges: number;
+  graphDetails?: {
+    included: boolean;
+    reason: "within_limit" | "too_many_chunks";
+    totalChunks: number;
+    maxGraphChunks: number;
+    edgeCount: number;
+  };
   communityCount: number;
   wikiPageCount: number;
+  businessPageCount: number;
+  productAreaCount: number;
   hubCount: number;
   surpriseCount: number;
 }
@@ -87,6 +96,76 @@ export interface WikiPageViz {
   sourceCommit: string;
 }
 
+export interface WikiGraphNodeViz {
+  name: string;
+  pageType: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  relatedFiles: string[];
+  relatedSymbols: string[];
+}
+
+export interface WikiGraphEdgeViz {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+export interface BusinessPageViz {
+  name: string;
+  capability: string;
+  displayName: string;
+  description: string;
+  summary: string;
+  displaySummary: string;
+  displayQuality: "high" | "medium" | "low" | "fallback";
+  presentationSafe: boolean;
+  presentationIssues: string[];
+  actor: string;
+  trigger: string;
+  businessTerms: string[];
+  userActions: string[];
+  decisionPoints: string[];
+  sideEffects: string[];
+  businessOutcome: string;
+  dataConcepts: string[];
+  externalSystems: string[];
+  confidence: number;
+  confidenceLabel: "low" | "medium" | "high";
+  supportingFiles: string[];
+  supportingSymbols: string[];
+  technicalEvidence: {
+    files: string[];
+    symbols: string[];
+  };
+  links: string[];
+  content: string;
+}
+
+export interface ProductAreaViz {
+  id: string;
+  name: string;
+  displayName: string;
+  areaKind: "fixed" | "discovered" | "fallback";
+  summary: string;
+  displaySummary: string;
+  displayQuality: "high" | "medium" | "low" | "fallback";
+  presentationSafe: boolean;
+  presentationIssues: string[];
+  businessTerms: string[];
+  capabilities: string[];
+  businessPages: string[];
+  supportingFiles: string[];
+  supportingSymbols: string[];
+  technicalEvidence: {
+    files: string[];
+    symbols: string[];
+  };
+  confidence: number;
+  confidenceLabel: "low" | "medium" | "high";
+}
+
 export interface DashboardData {
   meta: DashboardMeta;
   communities: CommunityViz[];
@@ -94,6 +173,10 @@ export interface DashboardData {
   surprises: SurpriseViz[];
   questions: QuestionViz[];
   wikiPages: WikiPageViz[];
+  wikiGraphNodes: WikiGraphNodeViz[];
+  wikiGraphEdges: WikiGraphEdgeViz[];
+  businessPages: BusinessPageViz[];
+  productAreas: ProductAreaViz[];
   /** community×community cross-edge counts for chord diagram */
   chordMatrix: number[][];
   /** community labels corresponding to chord matrix rows/columns */
@@ -110,4 +193,6 @@ export interface LensOptions {
   maxCommunities?: number;
   json?: boolean;
   open?: boolean;
+  /** Optional progress reporter so library callers can route messages instead of writing to console. */
+  onProgress?: (level: "info" | "error", message: string) => void;
 }

@@ -9,7 +9,9 @@ reports
 .DS_Store
 skills-lock.json
 .agents/
+.contextrelay/
 open-multi-agent-main
 claude-code-source-main
 .tmp/
+test/.test-data-server-*/
 test/.test-data-server-*/graphify-3/

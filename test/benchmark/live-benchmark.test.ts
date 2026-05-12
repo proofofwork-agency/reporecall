@@ -14,10 +14,15 @@ describe("live-repo benchmark", { timeout: 300_000 }, () => {
     const results = await runLiveBenchmark("keyword");
     printLiveResults(results);
 
-    // Regression floor — ~80% of observed values with production pipeline + concept bundles
+    // Regression floor — ~80% of observed values with production pipeline + concept bundles.
+    // v0.7.1: MAP floor lowered from 0.18 → 0.17 to absorb the deliberate
+    // trade-off in the lookup anchor gate (rejects confident-wrong seeds that
+    // were previously returned with high scores) and the architecture/change
+    // testFileMode = "exclude" path. NDCG@10, MRR, and route accuracy all
+    // improved with the same changes.
     expect(results.meanNDCG10).toBeGreaterThanOrEqual(0.35);
     expect(results.meanMRR).toBeGreaterThanOrEqual(0.48);
-    expect(results.meanMAP).toBeGreaterThanOrEqual(0.18);
+    expect(results.meanMAP).toBeGreaterThanOrEqual(0.17);
     // Route accuracy
     expect(results.routeAccuracy).toBeGreaterThan(65);
     expect(results.totalQueries).toBeGreaterThanOrEqual(40);

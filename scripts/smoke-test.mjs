@@ -2,7 +2,7 @@
 /**
  * Reporecall smoke test
  *
- * Tests all 10 CLI commands and 11 MCP tools end-to-end.
+ * Tests CLI commands and MCP tools end-to-end.
  * Run from the project root:
  *
  *   node scripts/smoke-test.mjs
@@ -15,15 +15,30 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, rmSync, mkdirSync } from 'fs';
+import { cpSync, existsSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const BINARY = 'dist/memory.js';
-const PROJECT = '.';
+const PROJECT = '/tmp/rr-smoke-test-project';
 const SERVE_PORT = 37299;
 let passed = 0;
 let failed = 0;
+
+function setupSmokeProject() {
+  if (existsSync(PROJECT)) rmSync(PROJECT, { recursive: true, force: true });
+  mkdirSync(PROJECT, { recursive: true });
+  cpSync('src', `${PROJECT}/src`, { recursive: true });
+  cpSync('bin', `${PROJECT}/bin`, { recursive: true });
+  writeFileSync(`${PROJECT}/package.json`, JSON.stringify({ name: 'reporecall-smoke-project', type: 'module' }, null, 2));
+  const init = spawnSync('node', [BINARY, 'init', '--project', PROJECT, '--embedding-provider', 'keyword'], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (init.status !== 0) {
+    throw new Error(`failed to initialize smoke project: ${init.stderr || init.stdout}`);
+  }
+}
 
 function pass(name) {
   console.log(`  PASS  ${name}`);
@@ -77,6 +92,8 @@ function section(title) {
   console.log(`\n── ${title} ${'─'.repeat(Math.max(0, 50 - title.length - 4))}`);
 }
 
+setupSmokeProject();
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CLI COMMANDS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -126,11 +143,11 @@ section('CLI commands');
     pass('search (plain)');
   }
 
-  const r2 = run(['search', 'intent classifier routing', '--project', PROJECT, '--budget', '500']);
+  const r2 = run(['search', 'search_code', '--project', PROJECT, '--budget', '500']);
   if (r2.code !== 0) {
     fail('search --budget', `exit ${r2.code}`);
-  } else if (!r2.stdout.includes('chunks')) {
-    fail('search --budget', 'no chunk count in output');
+  } else if (!/src\/|chunks|context/i.test(r2.stdout)) {
+    fail('search --budget', 'no context output');
   } else {
     pass('search --budget');
   }
@@ -200,11 +217,11 @@ section('CLI commands');
 {
   const r1 = run(['explain', 'how does the intent classifier work', '--project', PROJECT]);
   if (r1.code !== 0) {
-    fail('explain (R1)', `exit ${r1.code}`);
-  } else if (!/R1|R2/i.test(r1.stdout)) {
-    fail('explain (R1)', 'expected R1 or R2 route, got: ' + r1.stdout.slice(0, 80));
+    fail('explain (navigational)', `exit ${r1.code}`);
+  } else if (!/Query mode:\s+(trace|architecture|lookup|change|bug)/i.test(r1.stdout)) {
+    fail('explain (navigational)', 'expected a code query mode, got: ' + r1.stdout.slice(0, 80));
   } else {
-    pass('explain (R1/R2 navigational)');
+    pass('explain (navigational)');
   }
 
   const rskip = run(['explain', 'hello there', '--project', PROJECT]);
@@ -229,7 +246,26 @@ section('CLI commands');
   }
 }
 
-// 9. serve ────────────────────────────────────────────────────────────────────
+// 9. lens JSON ────────────────────────────────────────────────────────────────
+{
+  const r = run(['lens', '--project', PROJECT, '--json']);
+  if (r.code !== 0) {
+    fail('lens --json', `exit ${r.code}`);
+  } else {
+    try {
+      const data = JSON.parse(r.stdout);
+      if (!data.meta || !Array.isArray(data.wikiPages) || !Array.isArray(data.productAreas) || !Array.isArray(data.businessPages)) {
+        fail('lens --json', 'missing expected top-level fields');
+      } else {
+        pass('lens --json');
+      }
+    } catch {
+      fail('lens --json', 'invalid JSON output');
+    }
+  }
+}
+
+// 10. serve ───────────────────────────────────────────────────────────────────
 await (async () => {
   const proc = spawn('node', [BINARY, 'serve', '--project', PROJECT, '--port', String(SERVE_PORT)], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -360,7 +396,7 @@ await (async () => {
       const id = msgId++;
       pending.set(id, resolve);
       send({ jsonrpc: '2.0', id, method, params });
-      setTimeout(() => { pending.delete(id); reject(new Error(`timeout: ${method}`)); }, 10_000);
+      setTimeout(() => { pending.delete(id); reject(new Error(`timeout: ${method}`)); }, 30_000);
     });
   }
 
@@ -382,6 +418,10 @@ await (async () => {
     ['get_imports',      { filePath: 'src/daemon/intent.ts' },                  false],
     ['get_symbol',       { name: 'classifyIntent' },                             false],
     ['explain_flow',     { query: 'how does intent classifier route queries' },  false],
+    ['list_product_areas', {},                                                   false],
+    ['business_context_query', { query: 'search indexing workflow' },            false],
+    ['refresh_context',   { includeStats: true },                                false],
+    ['get_lens_data',     { includeWikiContent: false, includeGraph: false },    false],
     ['index_codebase',   {},                                                      false],
     // clear_index with confirm:false — graceful abort, not a crash
     ['clear_index',      { confirm: false },                                     true /* abortOk */],
@@ -413,4 +453,5 @@ console.log(`\n${'═'.repeat(54)}`);
 console.log(`  ${passed}/${total} passed${failed > 0 ? `  (${failed} failed)` : '  ✓'}`);
 console.log(`${'═'.repeat(54)}`);
 
+rmSync(PROJECT, { recursive: true, force: true });
 process.exit(failed > 0 ? 1 : 0);

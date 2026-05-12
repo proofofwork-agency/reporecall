@@ -92,6 +92,23 @@ describe("loadConfig — default config", () => {
     expect(config.port).toBe(37222);
   });
 
+  it("defaults memoryWritableDir under <projectRoot>/.memory/reporecall-memories", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.memoryWritableDir).toBe(join(tmpDir, ".memory", "reporecall-memories"));
+  });
+
+  it("enables capability evidence and generic hydration by default", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.capabilityEvidence).toBe(true);
+    expect(config.genericCapabilityHydration).toBe(true);
+  });
+
+  it("enables topology analysis with a large-repo chunk cap by default", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.topologyEnabled).toBe(true);
+    expect(config.topologyMaxChunks).toBe(50_000);
+  });
+
   it("includes the full current parser language surface in default extensions", () => {
     const config = loadConfig(tmpDir);
     for (const ext of [".cs", ".php", ".zig", ".lua", ".html", ".vue", ".toml"]) {
@@ -126,6 +143,26 @@ describe("loadConfig — valid user config", () => {
     expect(config.embeddingProvider).toBe("openai");
   });
 
+  it("applies capability evidence feature flags", () => {
+    writeConfigJson(tmpDir, {
+      capabilityEvidence: false,
+      genericCapabilityHydration: false,
+    });
+    const config = loadConfig(tmpDir);
+    expect(config.capabilityEvidence).toBe(false);
+    expect(config.genericCapabilityHydration).toBe(false);
+  });
+
+  it("applies topology guardrail overrides", () => {
+    writeConfigJson(tmpDir, {
+      topologyEnabled: false,
+      topologyMaxChunks: 1000,
+    });
+    const config = loadConfig(tmpDir);
+    expect(config.topologyEnabled).toBe(false);
+    expect(config.topologyMaxChunks).toBe(1000);
+  });
+
   it("applies a valid port override", () => {
     writeConfigJson(tmpDir, { port: 9000 });
     const config = loadConfig(tmpDir);
@@ -158,6 +195,19 @@ describe("loadConfig — valid user config", () => {
     const config = loadConfig(tmpDir);
     expect(config.factExtractors).toHaveLength(1);
     expect(config.factExtractors[0].label).toBe("todo");
+  });
+
+  it("resolves a relative memoryWritableDir under the project root", () => {
+    writeConfigJson(tmpDir, { memoryWritableDir: "local/memory" });
+    const config = loadConfig(tmpDir);
+    expect(config.memoryWritableDir).toBe(join(tmpDir, "local", "memory"));
+  });
+
+  it("preserves an absolute memoryWritableDir", () => {
+    const absoluteDir = join(tmpdir(), "reporecall-absolute-memory");
+    writeConfigJson(tmpDir, { memoryWritableDir: absoluteDir });
+    const config = loadConfig(tmpDir);
+    expect(config.memoryWritableDir).toBe(absoluteDir);
   });
 });
 

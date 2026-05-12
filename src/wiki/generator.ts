@@ -7,7 +7,8 @@
  */
 
 import { execFileSync } from "child_process";
-import { readFileSync } from "fs";
+import { createHash } from "crypto";
+import { readFileSync, rmSync } from "fs";
 import { basename } from "path";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { MemoryStore } from "../storage/memory-store.js";
@@ -15,6 +16,10 @@ import type { MemoryIndexer } from "../memory/indexer.js";
 import { writeManagedMemoryFile } from "../memory/files.js";
 import { resolveAllLinks } from "./links.js";
 import { getLogger } from "../core/logger.js";
+import { buildBusinessPages } from "./business.js";
+
+const WIKI_GENERATOR_VERSION = "deterministic-wiki-v3-business-presentation";
+const GENERATED_WIKI_PREFIXES = /^(business-|community-|hub-|surprises-)/;
 
 export interface WikiGeneratorOptions {
   /** Directory to write wiki markdown files. */
@@ -34,6 +39,7 @@ export interface WikiGenerateResult {
   pagesUpdated: number;
   communityPages: number;
   hubPages: number;
+  businessPages: number;
   surprisesPage: boolean;
 }
 
@@ -63,11 +69,13 @@ export class WikiGenerator {
   async generateFromIndex(): Promise<WikiGenerateResult> {
     const log = getLogger();
     const sourceCommit = this.getHeadCommit();
+    const generatedNames = new Set<string>();
     const result: WikiGenerateResult = {
       pagesWritten: 0,
       pagesUpdated: 0,
       communityPages: 0,
       hubPages: 0,
+      businessPages: 0,
       surprisesPage: false,
     };
 
@@ -75,11 +83,13 @@ export class WikiGenerator {
     const chunks = this.metadata.getAllChunks();
     const chunkCommunityMap = new Map<string, string>();
     const communityChunks = new Map<string, Array<{ name: string; filePath: string; kind: string }>>();
+    const chunkIdCommunityMap = new Map<string, string>();
 
     for (const chunk of chunks) {
       const communityId = this.metadata.getCommunityForChunk(chunk.id);
       if (communityId) {
         chunkCommunityMap.set(chunk.name, communityId);
+        chunkIdCommunityMap.set(chunk.id, communityId);
         if (!communityChunks.has(communityId)) communityChunks.set(communityId, []);
         communityChunks.get(communityId)!.push({
           name: chunk.name,
@@ -91,6 +101,26 @@ export class WikiGenerator {
 
     // Generate community pages
     const communities = this.metadata.getAllCommunities(this.opts.maxCommunities);
+    const hubs = this.metadata.getGodNodes(this.opts.maxHubs);
+    const hubsByCommunity = new Map<string, typeof hubs>();
+    for (const hub of hubs) {
+      if (!hub.communityId) continue;
+      if (!hubsByCommunity.has(hub.communityId)) hubsByCommunity.set(hub.communityId, []);
+      hubsByCommunity.get(hub.communityId)!.push(hub);
+    }
+
+    const surprises = this.metadata.getTopSurprises(this.opts.maxSurprises);
+    const surprisesByCommunity = new Map<string, typeof surprises>();
+    for (const surprise of surprises) {
+      const sourceCommunity = chunkIdCommunityMap.get(surprise.sourceChunkId);
+      const targetCommunity = chunkIdCommunityMap.get(surprise.targetChunkId);
+      for (const communityId of [sourceCommunity, targetCommunity]) {
+        if (!communityId) continue;
+        if (!surprisesByCommunity.has(communityId)) surprisesByCommunity.set(communityId, []);
+        surprisesByCommunity.get(communityId)!.push(surprise);
+      }
+    }
+
     for (const community of communities) {
       if (!community.label) continue;
       const members = communityChunks.get(community.id) ?? [];
@@ -126,17 +156,17 @@ export class WikiGenerator {
         sourceCommit,
         confidence: 0.95,
       });
+      generatedNames.add(slug);
 
       if (writeResult === "written") {
         result.communityPages++;
         result.pagesWritten++;
-      } else {
+      } else if (writeResult === "updated") {
         result.pagesUpdated++;
       }
     }
 
     // Generate hub node pages
-    const hubs = this.metadata.getGodNodes(this.opts.maxHubs);
     for (const hub of hubs) {
       const slug = `hub-${slugify(hub.name)}`;
 
@@ -167,17 +197,49 @@ export class WikiGenerator {
         sourceCommit,
         confidence: 0.95,
       });
+      generatedNames.add(slug);
 
       if (writeResult === "written") {
         result.hubPages++;
         result.pagesWritten++;
-      } else {
+      } else if (writeResult === "updated") {
+        result.pagesUpdated++;
+      }
+    }
+
+    const businessPages = buildBusinessPages(
+      communities.map((community) => ({
+        community,
+        members: communityChunks.get(community.id) ?? [],
+        hubs: hubsByCommunity.get(community.id) ?? [],
+        surprises: surprisesByCommunity.get(community.id) ?? [],
+      })),
+      this.opts.maxCommunities
+    );
+
+    for (const businessPage of businessPages) {
+      const writeResult = this.writePage(businessPage.slug, {
+        description: businessPage.description,
+        pageType: "business",
+        content: businessPage.content,
+        summary: businessPage.summary,
+        relatedFiles: businessPage.relatedFiles,
+        relatedSymbols: businessPage.relatedSymbols,
+        links: businessPage.links,
+        sourceCommit,
+        confidence: businessPage.confidence,
+      });
+      generatedNames.add(businessPage.slug);
+
+      if (writeResult === "written") {
+        result.businessPages++;
+        result.pagesWritten++;
+      } else if (writeResult === "updated") {
         result.pagesUpdated++;
       }
     }
 
     // Generate surprises page (single page for all cross-community bridges)
-    const surprises = this.metadata.getTopSurprises(this.opts.maxSurprises);
     if (surprises.length > 0) {
       const slug = "surprises-cross-module";
 
@@ -216,15 +278,20 @@ export class WikiGenerator {
         sourceCommit,
         confidence: 0.90,
       });
+      generatedNames.add(slug);
 
       result.surprisesPage = true;
       if (writeResult === "written") {
         result.pagesWritten++;
+      } else if (writeResult === "updated") {
+        result.pagesUpdated++;
       }
     }
 
+    this.removeStaleGeneratedPages(generatedNames);
+
     log.info(
-      { pagesWritten: result.pagesWritten, communities: result.communityPages, hubs: result.hubPages },
+      { pagesWritten: result.pagesWritten, communities: result.communityPages, hubs: result.hubPages, business: result.businessPages },
       "Wiki generation complete"
     );
 
@@ -235,7 +302,7 @@ export class WikiGenerator {
     slug: string,
     input: {
       description: string;
-      pageType: "community" | "hub" | "module" | "flow" | "exploration";
+      pageType: "community" | "hub" | "module" | "flow" | "exploration" | "business";
       content: string;
       summary: string;
       relatedFiles: string[];
@@ -244,13 +311,17 @@ export class WikiGenerator {
       sourceCommit: string;
       confidence: number;
     }
-  ): "written" | "skipped" {
-    // Skip write if page exists and sourceCommit is unchanged.
-    // sourceCommit lives in frontmatter (stripped from DB content), so read from disk.
+  ): "written" | "updated" | "skipped" {
+    const fingerprint = this.pageFingerprint(input);
+
+    // Skip write only if both the source commit and generated output match.
+    // This lets generator/schema changes refresh wiki pages even when the
+    // indexed code commit did not change.
     const existing = this.memoryStore.getByName(slug);
     if (existing && input.sourceCommit && existing.filePath) {
       const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
-      if (existingCommit && existingCommit === input.sourceCommit) return "skipped";
+      const existingFingerprint = existing.fingerprint || this.extractFrontmatterValue(existing.filePath, "fingerprint");
+      if (existingCommit && existingCommit === input.sourceCommit && existingFingerprint === fingerprint) return "skipped";
     }
 
     const allLinks = resolveAllLinks(input.links, input.content);
@@ -264,6 +335,7 @@ export class WikiGenerator {
       status: "active",
       summary: input.summary,
       sourceKind: "generated",
+      fingerprint,
       relatedFiles: input.relatedFiles,
       relatedSymbols: input.relatedSymbols,
       confidence: input.confidence,
@@ -272,6 +344,7 @@ export class WikiGenerator {
       sourceLayer: "deterministic",
       links: allLinks,
       sourceCommit: input.sourceCommit,
+      generatorVersion: WIKI_GENERATOR_VERSION,
       content: input.content,
     });
 
@@ -281,13 +354,61 @@ export class WikiGenerator {
     );
     this.memoryStore.setWikiLinks(slug, allLinks);
 
-    return "written";
+    return existing ? "updated" : "written";
+  }
+
+  private removeStaleGeneratedPages(currentNames: Set<string>): void {
+    for (const memory of this.memoryStore.getByType("wiki")) {
+      if (currentNames.has(memory.name)) continue;
+      if (!GENERATED_WIKI_PREFIXES.test(memory.name)) continue;
+      if (memory.sourceKind !== "generated") continue;
+
+      const sourceLayer = this.extractFrontmatterValue(memory.filePath, "sourceLayer");
+      const pageType = this.extractFrontmatterValue(memory.filePath, "pageType");
+      const deterministic = sourceLayer === "deterministic" || (!sourceLayer && !pageType);
+      if (!deterministic) continue;
+
+      try {
+        rmSync(memory.filePath, { force: true });
+      } catch {
+        // The DB row may outlive the markdown file after manual cleanup.
+      }
+      this.memoryStore.removeWikiLinks(memory.name);
+      this.memoryStore.remove(memory.id);
+    }
+  }
+
+  private pageFingerprint(input: {
+    pageType: "community" | "hub" | "module" | "flow" | "exploration" | "business";
+    content: string;
+    summary: string;
+    relatedFiles: string[];
+    relatedSymbols: string[];
+    links: string[];
+  }): string {
+    return createHash("sha256")
+      .update(WIKI_GENERATOR_VERSION)
+      .update("\0")
+      .update(JSON.stringify({
+        pageType: input.pageType,
+        content: input.content,
+        summary: input.summary,
+        relatedFiles: input.relatedFiles,
+        relatedSymbols: input.relatedSymbols,
+        links: input.links,
+      }))
+      .digest("hex")
+      .slice(0, 24);
   }
 
   private extractSourceCommitFromFile(filePath: string): string | undefined {
+    return this.extractFrontmatterValue(filePath, "sourceCommit");
+  }
+
+  private extractFrontmatterValue(filePath: string, key: string): string | undefined {
     try {
       const raw = readFileSync(filePath, "utf-8");
-      const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
+      const match = raw.match(new RegExp(`^${key}:\\s*\"?([^\"\\n]+)\"?`, "m"));
       return match?.[1];
     } catch {
       return undefined;

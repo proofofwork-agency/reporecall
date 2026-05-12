@@ -309,8 +309,9 @@ ${MEMORY_MARKER}`
       }
 
       console.log('\nDone! Next steps:')
-      console.log('  1. Index your codebase: reporecall index')
-      console.log('  2. Start daemon: reporecall serve')
+      console.log('  1. Start daemon: reporecall serve')
+      console.log('     This runs the initial index, generates wiki pages, and watches changes.')
+      console.log('  2. Optional one-off foreground index: reporecall index')
       console.log(
         '  Or use --autostart to have it start automatically on login.'
       )

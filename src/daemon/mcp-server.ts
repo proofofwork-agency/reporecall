@@ -23,6 +23,10 @@ import type { WikiGenerator } from '../wiki/generator.js'
 import type { WikiAutoCapture } from '../wiki/auto-capture.js'
 import { checkPageStaleness } from '../wiki/staleness.js'
 import { resolveAllLinks } from '../wiki/links.js'
+import { suggestWikiPages } from '../wiki/suggestions.js'
+import { buildBusinessContextFromMemoryStore, queryBusinessContext } from '../business/product-areas.js'
+import { extractDashboardData } from '../visualize/data-extractor.js'
+import type { DashboardData } from '../visualize/types.js'
 import { getLogger } from '../core/logger.js'
 
 const require = createRequire(import.meta.url)
@@ -66,6 +70,43 @@ function errorResult(err: unknown) {
   }
 }
 
+function shapeLensData(
+  data: DashboardData,
+  options: {
+    includeWikiContent?: boolean
+    includeBusinessPages?: boolean
+    includeGraph?: boolean
+  }
+): DashboardData {
+  const includeWikiContent = options.includeWikiContent === true
+  const includeBusinessPages = options.includeBusinessPages !== false
+  const includeGraph = options.includeGraph !== false
+
+  return {
+    ...data,
+    communities: includeGraph ? data.communities : [],
+    hubs: includeGraph ? data.hubs : [],
+    surprises: includeGraph ? data.surprises : [],
+    questions: includeGraph ? data.questions : [],
+    wikiPages: data.wikiPages.map((page) => ({
+      ...page,
+      content: includeWikiContent ? page.content : ''
+    })),
+    wikiGraphNodes: includeGraph ? data.wikiGraphNodes : [],
+    wikiGraphEdges: includeGraph ? data.wikiGraphEdges : [],
+    businessPages: includeBusinessPages
+      ? data.businessPages.map((page) => ({
+          ...page,
+          content: includeWikiContent ? page.content : ''
+        }))
+      : [],
+    productAreas: includeBusinessPages ? data.productAreas : [],
+    chordMatrix: includeGraph ? data.chordMatrix : [],
+    chordLabels: includeGraph ? data.chordLabels : [],
+    chordColors: includeGraph ? data.chordColors : []
+  }
+}
+
 function memoryClassBudgets(tokenBudget: number): Record<MemoryClass, number> {
   return {
     rule: Math.floor(tokenBudget * 0.35),
@@ -93,6 +134,27 @@ export function createMCPServer(
     name: 'reporecall',
     version
   })
+
+  const indexAndRegenerateWiki = async (paths?: string[]) => {
+    let index: unknown
+    if (paths && paths.length > 0) {
+      const safePaths = paths.filter((p: string) => isPathSafe(config.projectRoot, p))
+      index = await pipeline.indexChanged(safePaths)
+    } else {
+      index = await pipeline.indexAll()
+    }
+
+    let wiki: unknown = null
+    if (wikiGenerator) {
+      try {
+        wiki = await wikiGenerator.generateFromIndex()
+      } catch (err) {
+        getLogger().warn({ err }, 'Wiki generation after index failed')
+      }
+    }
+
+    return { index, wiki }
+  }
 
   server.registerTool(
     'search_code',
@@ -152,7 +214,7 @@ export function createMCPServer(
   server.registerTool(
     'index_codebase',
     {
-      description: 'Index or re-index the codebase',
+      description: 'Index or re-index the codebase. Also regenerates deterministic wiki/business pages when the wiki layer is enabled.',
       inputSchema: {
         paths: z
           .array(z.string().max(4096))
@@ -164,40 +226,110 @@ export function createMCPServer(
     },
     async ({ paths }) => {
       try {
-        let result: unknown
-        const doIndex = async () => {
-          if (paths && paths.length > 0) {
-            const safePaths = paths.filter((p: string) => isPathSafe(config.projectRoot, p))
-            result = await pipeline.indexChanged(safePaths)
-          } else {
-            result = await pipeline.indexAll()
-          }
-        }
-
-        if (lock) {
-          await lock.withWrite(doIndex)
-        } else {
-          await doIndex()
-        }
-
-        // Generate deterministic wiki pages from index data
-        let wikiResult: unknown
-        if (wikiGenerator) {
-          try {
-            wikiResult = await wikiGenerator.generateFromIndex()
-          } catch (err) {
-            getLogger().warn({ err }, 'Wiki generation after index failed')
-          }
-        }
+        const refreshed = lock
+          ? await lock.withWrite(() => indexAndRegenerateWiki(paths))
+          : await indexAndRegenerateWiki(paths)
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ ...(result as Record<string, unknown>), wiki: wikiResult ?? null })
+              text: JSON.stringify({ ...(refreshed.index as Record<string, unknown>), wiki: refreshed.wiki })
             }
           ]
         }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'refresh_context',
+    {
+      description:
+        'Refresh Reporecall context for external tools: re-index code, regenerate deterministic wiki/business pages when enabled, and return optional updated stats.',
+      inputSchema: {
+        paths: z
+          .array(z.string().max(4096))
+          .max(1000)
+          .optional()
+          .describe('Specific file paths to refresh (omit for full project refresh)'),
+        includeStats: z
+          .boolean()
+          .optional()
+          .describe('Include updated index statistics in the response (default true)')
+      },
+      annotations: { destructiveHint: true }
+    },
+    async ({ paths, includeStats }) => {
+      try {
+        const refreshed = lock
+          ? await lock.withWrite(() => indexAndRegenerateWiki(paths))
+          : await indexAndRegenerateWiki(paths)
+        const stats = includeStats === false
+          ? undefined
+          : {
+              ...metadata.getStats(),
+              lastIndexedAt: metadata.getStat('lastIndexedAt')
+            }
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                index: refreshed.index,
+                wiki: refreshed.wiki,
+                stats: stats ?? null
+              }, null, 2)
+            }
+          ]
+        }
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'get_lens_data',
+    {
+      description:
+        'Return current Reporecall Lens JSON from the existing index. Read-only; call refresh_context first when fresh indexing/wiki generation is required.',
+      inputSchema: {
+        maxCommunities: z.number().int().min(1).max(100).optional().describe('Max communities to include (default 20)'),
+        maxHubs: z.number().int().min(1).max(100).optional().describe('Max hub nodes to include (default 15)'),
+        maxSurprises: z.number().int().min(1).max(100).optional().describe('Max surprise edges to include (default 20)'),
+        includeWikiContent: z.boolean().optional().describe('Include raw wiki/business markdown content (default false)'),
+        includeBusinessPages: z.boolean().optional().describe('Include businessPages[] and productAreas[] (default true)'),
+        includeGraph: z.boolean().optional().describe('Include graph-heavy topology and wiki graph arrays (default true)')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ maxCommunities, maxHubs, maxSurprises, includeWikiContent, includeBusinessPages, includeGraph }) => {
+      try {
+        const doLens = () => {
+          const data = extractDashboardData(metadata, memoryStore ?? null, {
+            projectRoot: config.projectRoot,
+            maxCommunities,
+            maxHubs,
+            maxSurprises
+          })
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  shapeLensData(data, { includeWikiContent, includeBusinessPages, includeGraph }),
+                  null,
+                  2
+                )
+              }
+            ]
+          }
+        }
+        return lock ? await lock.withRead(async () => doLens()) : doLens()
       } catch (err) {
         return errorResult(err)
       }
@@ -1049,7 +1181,7 @@ export function createMCPServer(
               // Check FTS for genuinely similar content — only block if both
               // name overlap AND strong FTS rank indicate a real duplicate.
               // Previous logic blocked on ANY FTS match, causing false positives
-              // (e.g., "DUTO node types" blocked by "Reporecall Benchmark Results").
+              // (e.g., a domain term blocked by an unrelated benchmark result).
               const similar = memoryStore.search(name, 5)
               const nameLower = name.toLowerCase()
               const blocked = similar.find((match) => {
@@ -1420,6 +1552,86 @@ export function createMCPServer(
     }
   );
 
+  // --- Business context tools (registered when memory store is available) ---
+
+  if (memoryStore) {
+    server.registerTool(
+      'list_product_areas',
+      {
+        description:
+          'List product-area aggregates inferred from business wiki pages. Use this for business-facing navigation before drilling into source evidence.',
+        inputSchema: {
+          limit: z.number().int().min(1).max(50).optional().describe('Max product areas to return (default: 20)'),
+          includeUnsafe: z.boolean().optional().describe('Include fallback or low-presentation-quality areas for diagnostics (default: false)')
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ limit, includeUnsafe }) => {
+        try {
+          const doList = () => {
+            const context = buildBusinessContextFromMemoryStore(memoryStore)
+            const productAreas = context.productAreas
+              .filter(area => includeUnsafe || area.presentationSafe)
+              .slice(0, limit ?? 20)
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  productAreas,
+                  count: productAreas.length,
+                  total: context.productAreas.length,
+                  safeTotal: context.productAreas.filter(area => area.presentationSafe).length,
+                  businessPageCount: context.businessPages.length
+                }, null, 2)
+              }]
+            }
+          }
+          return lock ? await lock.withRead(async () => doList()) : doList()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
+    server.registerTool(
+      'business_context_query',
+      {
+        description:
+          'Find product areas and business capability pages relevant to a query. Returns business-facing context plus supporting files and symbols.',
+        inputSchema: {
+          query: z.string().min(1).describe('Business or feature query'),
+          limit: z.number().int().min(1).max(20).optional().describe('Max product areas and pages to return (default: 5)')
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true }
+      },
+      async ({ query, limit }) => {
+        try {
+          const doQuery = () => {
+            const context = buildBusinessContextFromMemoryStore(memoryStore)
+            const result = queryBusinessContext(query, context, limit ?? 5)
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  query,
+                  productAreas: result.productAreas,
+                  businessPages: result.businessPages,
+                  productAreaCount: result.productAreas.length,
+                  businessPageCount: result.businessPages.length,
+                  totalProductAreas: context.productAreas.length,
+                  totalBusinessPages: context.businessPages.length
+                }, null, 2)
+              }]
+            }
+          }
+          return lock ? await lock.withRead(async () => doQuery()) : doQuery()
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+  }
+
   // --- Wiki tools (registered when memory store is available) ---
 
   if (memoryStore && memorySearch && memoryIndexer) {
@@ -1472,7 +1684,18 @@ export function createMCPServer(
           if (name) {
             const page = memoryStore.getByName(name)
             if (!page || page.type !== 'wiki') {
-              return { content: [{ type: 'text' as const, text: `Wiki page "${name}" not found` }] }
+              const suggestions = suggestWikiPages(memoryStore, name, 5)
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    status: 'not_found',
+                    name,
+                    message: `Wiki page "${name}" was not found. It may have been renamed, merged, or removed during wiki regeneration.`,
+                    suggestions
+                  }, null, 2)
+                }]
+              }
             }
             const links = memoryStore.getWikiLinks(name)
             const backlinks = memoryStore.getWikiBacklinks(name)

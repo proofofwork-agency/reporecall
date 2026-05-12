@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { handlePromptContext, handlePromptContextDetailed } from "../../src/hooks/prompt-context.js";
 import type { AssembledContext } from "../../src/search/types.js";
 import type { SeedResult } from "../../src/search/seed.js";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 function makeAssembledContext(text = "## context", tokenCount = 50): AssembledContext {
   return {
@@ -45,6 +48,50 @@ function makeConfig(overrides?: Partial<any>): any {
   };
 }
 
+function makeBusinessMemoryStore(): any {
+  return {
+    getByType: (type: string) => {
+      if (type !== "wiki") return [];
+      return [
+        {
+          name: "business-user-authentication",
+          description: "Business capability view",
+          summary: "User Authentication grants protected access.",
+          content: `## Capability
+User Authentication
+
+## Actor
+Product user
+
+## Trigger
+User starts login or resumes a session.
+
+## Business terms
+- User
+- Session
+
+## User-visible actions
+- Sign in and access protected product areas.
+
+## Business outcome
+The product grants protected access.
+
+## Business / Data Concepts
+- User
+- Session
+
+## External systems
+- Identity provider`,
+          filePath: "/tmp/test/.memory/wiki/business-user-authentication.md",
+          relatedFiles: ["src/auth.ts"],
+          relatedSymbols: ["useAuth"],
+          confidence: 0.88,
+        },
+      ];
+    },
+  };
+}
+
 describe("handlePromptContext — route integration", () => {
   it("adds advisory metadata for strong focused context", async () => {
     const result = await handlePromptContextDetailed(
@@ -84,6 +131,77 @@ describe("handlePromptContext — route integration", () => {
     expect(searchCalled).toBe(true);
     expect(result).not.toBeNull();
     expect(result!.text).toContain("lookup context");
+  });
+
+  it("lookup mode does not inject product area evidence", async () => {
+    const result = await handlePromptContextDetailed(
+      "what is the main function",
+      makeSearch({
+        searchWithContext: async () => makeAssembledContext("lookup context", 40),
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "lookup",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      makeBusinessMemoryStore()
+    );
+
+    expect(result.context?.text).toContain("lookup context");
+    expect(result.context?.text).not.toContain("## Product area evidence");
+    expect(result.productAreaTokenCount).toBe(0);
+    expect(result.productAreasUsed).toEqual([]);
+  });
+
+  it("trace mode injects compact product area evidence from optional memory store", async () => {
+    const result = await handlePromptContextDetailed(
+      "trace authentication session flow",
+      makeSearch({
+        searchWithContext: async () => makeAssembledContext("code context", 40),
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "trace",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      makeBusinessMemoryStore()
+    );
+
+    expect(result.context?.text).toContain("## Product area evidence");
+    expect(result.context?.text).toContain("Product Area: Authentication");
+    expect(result.productAreasUsed?.[0]?.name).toBe("Product Area: Authentication");
+    expect(result.businessPagesUsed?.[0]?.name).toBe("business-user-authentication");
+  });
+
+  it("omits product area evidence when it would exceed the context budget", async () => {
+    const result = await handlePromptContextDetailed(
+      "trace authentication session flow",
+      makeSearch({
+        searchWithContext: async () => makeAssembledContext("code context", 18),
+      }),
+      makeConfig({ contextBudget: 20 }),
+      undefined,
+      undefined,
+      "trace",
+      undefined,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      makeBusinessMemoryStore()
+    );
+
+    expect(result.context?.text).not.toContain("## Product area evidence");
+    expect(result.productAreaTokenCount).toBe(0);
+    expect(result.productAreasUsed).toEqual([]);
   });
 
   it("undefined route falls back to R0 behavior", async () => {
@@ -703,5 +821,320 @@ describe("handlePromptContext — route integration", () => {
     expect(result.context?.text).toContain("src/hooks/useAuth.tsx");
     expect(result.context?.text).not.toContain("src/pages/Auth.tsx");
     expect(result.context?.text).not.toContain("src/pages/AuthCallback.tsx");
+  });
+
+  it("does not inject business wiki pages into prompt context by default", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "reporecall-business-wiki-"));
+    try {
+      const businessFile = join(tempDir, "business-auth.md");
+      writeFileSync(businessFile, `---
+name: business-auth
+description: Business auth page
+type: wiki
+pageType: business
+---
+
+## Capability
+User Authentication
+`, "utf-8");
+
+      const communityFile = join(tempDir, "community-auth.md");
+      writeFileSync(communityFile, `---
+name: community-auth
+description: Community auth page
+type: wiki
+pageType: community
+---
+
+## Community
+Auth flow
+`, "utf-8");
+
+      const memorySearch: any = {
+        search: vi.fn(async () => [
+          {
+            id: "biz",
+            score: 1,
+            name: "business-auth",
+            description: "Business auth page",
+            type: "wiki",
+            content: "## Capability\nUser Authentication",
+            filePath: businessFile,
+            indexedAt: new Date().toISOString(),
+            fileMtime: new Date().toISOString(),
+            accessCount: 0,
+            lastAccessed: "",
+            importance: 1,
+            tags: "",
+          },
+          {
+            id: "community",
+            score: 0.9,
+            name: "community-auth",
+            description: "Community auth page",
+            type: "wiki",
+            content: "## Community\nAuth flow",
+            filePath: communityFile,
+            indexedAt: new Date().toISOString(),
+            fileMtime: new Date().toISOString(),
+            accessCount: 0,
+            lastAccessed: "",
+            importance: 1,
+            tags: "",
+          },
+        ]),
+      };
+
+      const result = await handlePromptContextDetailed(
+        "show auth",
+        makeSearch({
+          searchWithContext: async () => makeAssembledContext("## src/auth.ts\nfunction auth() {}", 40),
+        }),
+        makeConfig({
+          memory: true,
+          memoryBudget: 0,
+          wikiBudget: 200,
+          wikiMaxPages: 3,
+          memoryCodeFloorRatio: 0.8,
+        }),
+        undefined,
+        undefined,
+        "lookup",
+        undefined,
+        undefined,
+        undefined,
+        100,
+        memorySearch
+      );
+
+      expect(result.context?.text).toContain("community-auth");
+      expect(result.context?.text).not.toContain("business-auth");
+      expect(result.wikiPageNames).toEqual(["community-auth"]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses business wiki related files as evidence for architecture queries", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "reporecall-business-wiki-evidence-"));
+    try {
+      const businessFile = join(tempDir, "business-auth.md");
+      writeFileSync(businessFile, `---
+name: business-auth
+description: Business auth page
+type: wiki
+pageType: business
+---
+
+## Capability
+User Authentication
+`, "utf-8");
+
+      const timestamp = new Date().toISOString();
+      const useAuthChunk = {
+        id: "use-auth",
+        filePath: "src/hooks/useAuth.tsx",
+        name: "useAuth",
+        kind: "function_declaration",
+        startLine: 1,
+        endLine: 20,
+        content: "export function useAuth() { return supabase.auth.getSession(); }",
+        language: "typescript",
+        indexedAt: timestamp,
+        isExported: true,
+      };
+      const metadata: any = {
+        findChunksByFilePath: (filePath: string) => filePath === "src/hooks/useAuth.tsx" ? [useAuthChunk] : [],
+        getAllChunks: () => [useAuthChunk],
+        getImportsForFile: () => [],
+        findImporterFiles: () => [],
+        findCallers: () => [],
+        findCallees: () => [],
+        findCalleesForChunk: () => [],
+        getAllCommunities: () => [],
+        getGodNodes: () => [],
+        getTopSurprises: () => [],
+      };
+      const memorySearch: any = {
+        search: vi.fn(async () => [
+          {
+            id: "biz",
+            score: 1,
+            name: "business-auth",
+            description: "Business auth page",
+            type: "wiki",
+            content: "## Capability\nUser Authentication",
+            filePath: businessFile,
+            relatedFiles: ["src/hooks/useAuth.tsx"],
+            indexedAt: timestamp,
+            fileMtime: timestamp,
+            accessCount: 0,
+            lastAccessed: "",
+            importance: 1,
+            tags: "",
+          },
+        ]),
+      };
+
+      const result = await handlePromptContextDetailed(
+        "which files implement the authentication flow",
+        makeSearch({
+          searchWithContext: async () => makeAssembledContext("## src/App.tsx\nfunction App() {}", 40),
+        }),
+        makeConfig({
+          memory: true,
+          memoryBudget: 0,
+          wikiBudget: 200,
+          wikiMaxPages: 3,
+          memoryCodeFloorRatio: 0.8,
+        }),
+        undefined,
+        undefined,
+        "architecture",
+        metadata,
+        undefined,
+        undefined,
+        100,
+        memorySearch
+      );
+
+      expect(result.context?.text).not.toContain("business-auth");
+      expect(result.selectedFiles?.some((file) => file.filePath === "src/hooks/useAuth.tsx")).toBe(true);
+      expect(result.selectedFiles?.find((file) => file.filePath === "src/hooks/useAuth.tsx")?.selectionSource).toBe("wiki_capability");
+      expect(result.wikiPagesUsed).toEqual(["business-auth"]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates generic capability evidence only for broad inventory-style queries", async () => {
+    const timestamp = new Date().toISOString();
+    const riskChunk = {
+      id: "risk-service",
+      filePath: "src/modules/risk-scoring/risk-scoring.service.ts",
+      name: "RiskScoringService",
+      kind: "class_declaration",
+      startLine: 1,
+      endLine: 30,
+      content: "export class RiskScoringService { scoreRisk() {} }",
+      language: "typescript",
+      indexedAt: timestamp,
+      isExported: true,
+    };
+    const laneChunk = {
+      id: "lane-assigner",
+      filePath: "src/modules/risk-scoring/lane-assigner.ts",
+      name: "LaneAssigner",
+      kind: "class_declaration",
+      startLine: 1,
+      endLine: 30,
+      content: "export class LaneAssigner { assignLane() {} }",
+      language: "typescript",
+      indexedAt: timestamp,
+      isExported: true,
+    };
+    const unrelatedChunk = {
+      id: "main",
+      filePath: "src/app.ts",
+      name: "main",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 5,
+      content: "function main() {}",
+      language: "typescript",
+      score: 0.85,
+    };
+    const metadata: any = {
+      findChunksByFilePath: (filePath: string) => [riskChunk, laneChunk].filter((chunk) => chunk.filePath === filePath),
+      getAllChunks: () => [riskChunk, laneChunk],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findCalleesForChunk: () => [],
+      getAllCommunities: () => [],
+      getGodNodes: () => [],
+      getTopSurprises: () => [],
+    };
+    const context: AssembledContext = {
+      text: "## src/app.ts\nfunction main() {}",
+      tokenCount: 50,
+      chunks: [unrelatedChunk],
+    };
+
+    const broadResult = await handlePromptContextDetailed(
+      "which files implement risk scoring and lane assignment",
+      makeSearch({ searchWithContext: async () => context }),
+      makeConfig({ capabilityEvidence: true, genericCapabilityHydration: true }),
+      undefined,
+      undefined,
+      "architecture",
+      metadata
+    );
+
+    expect(broadResult.genericCapabilityHydrated).toBe(true);
+    expect(broadResult.context?.chunks.map((chunk) => chunk.filePath)).toEqual(expect.arrayContaining([
+      "src/modules/risk-scoring/risk-scoring.service.ts",
+      "src/modules/risk-scoring/lane-assigner.ts",
+    ]));
+
+    const traceResult = await handlePromptContextDetailed(
+      "trace how risk scoring works",
+      makeSearch({ searchWithContext: async () => context }),
+      makeConfig({ capabilityEvidence: true, genericCapabilityHydration: true }),
+      undefined,
+      undefined,
+      "trace",
+      metadata
+    );
+
+    expect(traceResult.genericCapabilityHydrated).toBe(false);
+    expect(traceResult.context?.chunks.map((chunk) => chunk.filePath)).not.toContain(
+      "src/modules/risk-scoring/risk-scoring.service.ts"
+    );
+  });
+
+  it("respects the generic capability hydration config flag", async () => {
+    const timestamp = new Date().toISOString();
+    const serviceChunk = {
+      id: "report-service",
+      filePath: "src/modules/reporting/report.service.ts",
+      name: "ReportService",
+      kind: "class_declaration",
+      startLine: 1,
+      endLine: 30,
+      content: "export class ReportService { buildReport() {} }",
+      language: "typescript",
+      indexedAt: timestamp,
+      isExported: true,
+    };
+    const metadata: any = {
+      findChunksByFilePath: (filePath: string) => filePath === serviceChunk.filePath ? [serviceChunk] : [],
+      getAllChunks: () => [serviceChunk],
+      getImportsForFile: () => [],
+      findImporterFiles: () => [],
+      findCallers: () => [],
+      findCallees: () => [],
+      findCalleesForChunk: () => [],
+      getAllCommunities: () => [],
+      getGodNodes: () => [],
+      getTopSurprises: () => [],
+    };
+
+    const result = await handlePromptContextDetailed(
+      "which files implement reporting",
+      makeSearch({
+        searchWithContext: async () => makeAssembledContext("## src/app.ts\nfunction main() {}", 40),
+      }),
+      makeConfig({ capabilityEvidence: true, genericCapabilityHydration: false }),
+      undefined,
+      undefined,
+      "architecture",
+      metadata
+    );
+
+    expect(result.genericCapabilityHydrationEnabled).toBe(false);
+    expect(result.genericCapabilityHydrated).toBe(false);
+    expect(result.context?.chunks.map((chunk) => chunk.filePath)).not.toContain(serviceChunk.filePath);
   });
 });

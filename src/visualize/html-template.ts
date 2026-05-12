@@ -11,6 +11,9 @@ import type { DashboardData } from "./types.js";
 
 export function generateHTML(data: DashboardData): string {
   const dataJSON = JSON.stringify(data).replace(/<\/script>/gi, "<\\/script>");
+  const graphNotice = data.meta.graphDetails && !data.meta.graphDetails.included
+    ? `<div class="legend-box graph-warning"><strong>Graph details skipped</strong> — Lens skipped graph-heavy chunk and call-edge loading because this index has ${data.meta.graphDetails.totalChunks} symbols and the graph cap is ${data.meta.graphDetails.maxGraphChunks}. Core stats, wiki, and business context remain available.</div>`
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -40,6 +43,8 @@ ${styles()}
     <button class="tab" data-tab="hubs">Hubs</button>
     <button class="tab" data-tab="surprises">Surprises</button>
     <button class="tab" data-tab="wiki">Wiki</button>
+    <button class="tab" data-tab="product-areas">Product Areas</button>
+    <button class="tab" data-tab="business">Business</button>
   </nav>
 
   <main>
@@ -47,6 +52,7 @@ ${styles()}
       <div class="legend-box">
         <strong>Overview</strong> — Bird's-eye view of your codebase structure. <strong>Symbols</strong> = functions, classes, and methods extracted from your code via AST parsing. <strong>Communities</strong> = clusters of tightly-coupled symbols detected by Louvain algorithm on the call graph. <strong>Call Edges</strong> = static function calls found in source. <strong>Hub Nodes</strong> = the most-connected symbols (changing these has the widest impact). <strong>Surprises</strong> = unexpected connections between distant modules. <strong>Wiki Pages</strong> = auto-generated documentation from the topology.
       </div>
+      ${graphNotice}
       <div class="stats-row">
         <div class="stat-card"><div class="stat-value">${data.meta.totalSymbols}</div><div class="stat-label">Symbols</div></div>
         <div class="stat-card"><div class="stat-value">${data.meta.totalFiles}</div><div class="stat-label">Files</div></div>
@@ -55,6 +61,8 @@ ${styles()}
         <div class="stat-card"><div class="stat-value">${data.meta.hubCount}</div><div class="stat-label">Hub Nodes</div></div>
         <div class="stat-card"><div class="stat-value">${data.meta.surpriseCount}</div><div class="stat-label">Surprises</div></div>
         <div class="stat-card"><div class="stat-value">${data.meta.wikiPageCount}</div><div class="stat-label">Wiki Pages</div></div>
+        <div class="stat-card"><div class="stat-value">${data.meta.productAreaCount}</div><div class="stat-label">Product Areas</div></div>
+        <div class="stat-card"><div class="stat-value">${data.meta.businessPageCount}</div><div class="stat-label">Business Pages</div></div>
       </div>
 
       <div class="overview-grid">
@@ -132,6 +140,22 @@ ${styles()}
           </div>
         </div>
       </div>
+    </section>
+
+    <section id="tab-product-areas" class="tab-content">
+      <h2>Product Areas <span class="count">(${data.productAreas.length})</span></h2>
+      <div class="legend-box">
+        <strong>What are product areas?</strong> Business-facing groups over generated business pages. They give planning tools and non-code users a higher-level entry point before drilling into capability pages and supporting files.
+      </div>
+      <div id="product-areas-list"></div>
+    </section>
+
+    <section id="tab-business" class="tab-content">
+      <h2>Business Capabilities <span class="count">(${data.businessPages.length})</span></h2>
+      <div class="legend-box">
+        <strong>What are business pages?</strong> Product-facing capability views generated from code evidence. They summarize actors, triggers, decisions, outcomes, data concepts, external systems, and supporting files. They are useful for planning and dashboard tools, but the source code remains the evidence of record.
+      </div>
+      <div id="business-list"></div>
     </section>
   </main>
 </div>
@@ -442,6 +466,268 @@ function renderWikiNav() {
   });
 }
 
+function renderBusinessPages() {
+  var container = document.getElementById('business-list');
+  if (!container) return;
+  if (!DATA.businessPages.length) {
+    var empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = 'No business capability pages generated for this index.';
+    container.appendChild(empty);
+    return;
+  }
+  DATA.businessPages.forEach(function(page) {
+    var card = document.createElement('div');
+    card.className = 'card business-card';
+    card.dataset.searchable = [
+      page.capability,
+      page.displayName,
+      page.summary,
+      page.displaySummary,
+      page.actor,
+      page.trigger,
+      page.businessOutcome,
+      page.businessTerms.join(' '),
+      page.userActions.join(' '),
+      page.dataConcepts.join(' '),
+      page.externalSystems.join(' '),
+      page.supportingFiles.join(' ')
+    ].join(' ');
+
+    var header = document.createElement('div');
+    header.className = 'card-header';
+    var titleDiv = document.createElement('div');
+    titleDiv.className = 'card-title';
+    var h3 = document.createElement('h3');
+    h3.textContent = page.displayName || page.capability || page.name;
+    titleDiv.appendChild(h3);
+    var confidence = document.createElement('span');
+    confidence.className = 'badge';
+    confidence.textContent = (page.confidenceLabel || 'unknown') + ' confidence';
+    titleDiv.appendChild(confidence);
+    var filesBadge = document.createElement('span');
+    filesBadge.className = 'badge';
+    filesBadge.textContent = page.supportingFiles.length + ' files';
+    titleDiv.appendChild(filesBadge);
+    var wikiBadge = document.createElement('span');
+    wikiBadge.className = 'badge badge-wiki';
+    wikiBadge.style.cursor = 'pointer';
+    wikiBadge.textContent = 'wiki';
+    wikiBadge.addEventListener('click', function(e) {
+      e.stopPropagation();
+      showWikiPage(page.name);
+    });
+    titleDiv.appendChild(wikiBadge);
+    header.appendChild(titleDiv);
+    var icon = document.createElement('span');
+    icon.className = 'expand-icon';
+    icon.textContent = '\\u25B8';
+    header.appendChild(icon);
+    header.addEventListener('click', function() { toggleCard(card); });
+    card.appendChild(header);
+
+    var body = document.createElement('div');
+    body.className = 'card-body collapsed';
+    var summary = document.createElement('p');
+    summary.className = 'business-summary';
+    summary.textContent = page.displaySummary || page.summary || page.description;
+    body.appendChild(summary);
+    body.appendChild(buildBusinessField('Actor', page.actor));
+    body.appendChild(buildBusinessField('Trigger', page.trigger));
+    body.appendChild(buildBusinessField('Outcome', page.businessOutcome));
+    body.appendChild(buildBusinessList('User Actions', page.userActions));
+    body.appendChild(buildBusinessList('Decision Points', page.decisionPoints));
+    body.appendChild(buildBusinessTags('Business Terms', page.businessTerms));
+    body.appendChild(buildBusinessTags('Data Concepts', page.dataConcepts));
+    body.appendChild(buildBusinessTags('External Systems', page.externalSystems));
+    body.appendChild(buildBusinessFiles(page.supportingFiles));
+    card.appendChild(body);
+    container.appendChild(card);
+  });
+}
+
+function renderProductAreas() {
+  var container = document.getElementById('product-areas-list');
+  if (!container) return;
+  if (!DATA.productAreas.length) {
+    var empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = 'No product areas generated for this index.';
+    container.appendChild(empty);
+    return;
+  }
+  DATA.productAreas.forEach(function(area) {
+    var card = document.createElement('div');
+    card.className = 'card product-area-card';
+    card.dataset.searchable = [
+      area.name,
+      area.displayName,
+      area.summary,
+      area.displaySummary,
+      area.businessTerms.join(' '),
+      area.capabilities.join(' '),
+      area.businessPages.join(' '),
+      area.supportingFiles.join(' ')
+    ].join(' ');
+
+    var header = document.createElement('div');
+    header.className = 'card-header';
+    var titleDiv = document.createElement('div');
+    titleDiv.className = 'card-title';
+    var h3 = document.createElement('h3');
+    h3.textContent = area.displayName || area.name;
+    titleDiv.appendChild(h3);
+    var confidence = document.createElement('span');
+    confidence.className = 'badge';
+    confidence.textContent = area.confidenceLabel + ' confidence';
+    titleDiv.appendChild(confidence);
+    var kind = document.createElement('span');
+    kind.className = 'badge';
+    kind.textContent = (area.areaKind || 'fixed') + ' area';
+    titleDiv.appendChild(kind);
+    var pages = document.createElement('span');
+    pages.className = 'badge';
+    pages.textContent = area.businessPages.length + ' pages';
+    titleDiv.appendChild(pages);
+    header.appendChild(titleDiv);
+    var icon = document.createElement('span');
+    icon.className = 'expand-icon';
+    icon.textContent = '\\u25B8';
+    header.appendChild(icon);
+    header.addEventListener('click', function() { toggleCard(card); });
+    card.appendChild(header);
+
+    var body = document.createElement('div');
+    body.className = 'card-body collapsed';
+    var summary = document.createElement('p');
+    summary.className = 'business-summary';
+    summary.textContent = area.displaySummary || area.summary;
+    body.appendChild(summary);
+    body.appendChild(buildBusinessTags('Business Terms', area.businessTerms));
+    body.appendChild(buildBusinessList('Capabilities', area.capabilities));
+    body.appendChild(buildProductAreaPages(area.businessPages));
+    body.appendChild(buildBusinessFiles(area.supportingFiles));
+    card.appendChild(body);
+    container.appendChild(card);
+  });
+}
+
+function buildProductAreaPages(pages) {
+  var section = document.createElement('div');
+  section.className = 'business-section';
+  var h = document.createElement('h4');
+  h.textContent = 'Business Pages';
+  section.appendChild(h);
+  if (!pages.length) {
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'None found';
+    section.appendChild(p);
+    return section;
+  }
+  pages.forEach(function(pageName) {
+    var tag = document.createElement('span');
+    tag.className = 'badge badge-wiki';
+    tag.style.cursor = 'pointer';
+    tag.textContent = pageName;
+    tag.addEventListener('click', function() { showWikiPage(pageName); });
+    section.appendChild(tag);
+    section.appendChild(document.createTextNode(' '));
+  });
+  return section;
+}
+
+function buildBusinessField(label, value) {
+  var section = document.createElement('div');
+  section.className = 'business-section';
+  var h = document.createElement('h4');
+  h.textContent = label;
+  section.appendChild(h);
+  var p = document.createElement('p');
+  p.textContent = value || 'None found';
+  section.appendChild(p);
+  return section;
+}
+
+function buildBusinessList(label, items) {
+  var section = document.createElement('div');
+  section.className = 'business-section';
+  var h = document.createElement('h4');
+  h.textContent = label;
+  section.appendChild(h);
+  if (!items.length) {
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'None found';
+    section.appendChild(p);
+    return section;
+  }
+  var ul = document.createElement('ul');
+  ul.className = 'business-list';
+  items.forEach(function(item) {
+    var li = document.createElement('li');
+    li.textContent = item;
+    ul.appendChild(li);
+  });
+  section.appendChild(ul);
+  return section;
+}
+
+function buildBusinessTags(label, items) {
+  var section = document.createElement('div');
+  section.className = 'business-section';
+  var h = document.createElement('h4');
+  h.textContent = label;
+  section.appendChild(h);
+  if (!items.length) {
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'None found';
+    section.appendChild(p);
+    return section;
+  }
+  items.forEach(function(item) {
+    var tag = document.createElement('span');
+    tag.className = 'reason-tag';
+    tag.textContent = item;
+    section.appendChild(tag);
+    section.appendChild(document.createTextNode(' '));
+  });
+  return section;
+}
+
+function buildBusinessFiles(files) {
+  var section = document.createElement('div');
+  section.className = 'business-section';
+  var h = document.createElement('h4');
+  h.textContent = 'Supporting Files';
+  section.appendChild(h);
+  if (!files.length) {
+    var p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'None found';
+    section.appendChild(p);
+    return section;
+  }
+  var ul = document.createElement('ul');
+  ul.className = 'call-list';
+  files.slice(0, 12).forEach(function(file) {
+    var li = document.createElement('li');
+    var code = document.createElement('code');
+    code.textContent = file;
+    li.appendChild(code);
+    ul.appendChild(li);
+  });
+  if (files.length > 12) {
+    var more = document.createElement('li');
+    more.className = 'muted';
+    more.textContent = '...and ' + (files.length - 12) + ' more';
+    ul.appendChild(more);
+  }
+  section.appendChild(ul);
+  return section;
+}
+
 function showWikiPage(name) {
   switchTab('wiki');
   var page = DATA.wikiPages.find(function(p) { return p.name === name; });
@@ -540,7 +826,7 @@ function shortFile(f) {
   return parts.length > 2 ? '\\u2026/' + parts.slice(-2).join('/') : f;
 }
 
-renderChord(); renderTopHubs(); renderTopSurprises(); renderCommunities(); renderHubs(); renderSurprises(); renderWikiNav();
+renderChord(); renderTopHubs(); renderTopSurprises(); renderCommunities(); renderHubs(); renderSurprises(); renderWikiNav(); renderProductAreas(); renderBusinessPages();
 <\/script>`;
 }
 
@@ -629,6 +915,17 @@ header h1 { font-size: 20px; font-weight: 600; color: #fff; }
 .question-type { display: inline-block; padding: 2px 8px; background: #2a2a4e; border-radius: 4px; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 6px; }
 .question-text { font-size: 13px; color: #e0e0e0; margin-bottom: 4px; }
 .question-why { font-size: 12px; color: #666; }
+.business-card .card-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.business-card .card-body.collapsed { display: none; }
+.product-area-card .card-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.product-area-card .card-body.collapsed { display: none; }
+@media (max-width: 800px) { .business-card .card-body { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .product-area-card .card-body { grid-template-columns: 1fr; } }
+.business-summary { grid-column: 1 / -1; color: #ccc; font-size: 13px; line-height: 1.6; padding-bottom: 4px; border-bottom: 1px solid #2a2a4e; }
+.business-section h4 { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.business-section p { font-size: 13px; color: #ccc; line-height: 1.5; }
+.business-list { padding-left: 18px; font-size: 13px; color: #ccc; line-height: 1.5; }
+.muted { color: #666; font-style: italic; }
 .wiki-layout { display: grid; grid-template-columns: 240px 1fr; gap: 0; min-height: 500px; }
 @media (max-width: 700px) { .wiki-layout { grid-template-columns: 1fr; } }
 .wiki-sidebar { background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 8px 0 0 8px; padding: 16px; overflow-y: auto; max-height: 80vh; }
@@ -654,6 +951,7 @@ header h1 { font-size: 20px; font-weight: 600; color: #fff; }
 .legend-box { background: #141428; border: 1px solid #2a2a4e; border-left: 3px solid #4E79A7; border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; font-size: 12px; line-height: 1.7; color: #999; }
 .legend-box strong { color: #ccc; }
 .legend-box em { color: #7ab8e0; font-style: normal; }
+.graph-warning { border-left-color: #EDC948; }
 .badge-inline { display: inline-block; padding: 1px 6px; border: 1px solid #3a3a5e; border-radius: 3px; font-size: 10px; vertical-align: middle; }
 .badge-wiki-inline { background: #1a2a3e; border-color: #3a5a7e; color: #7ab8e0; }
 .empty-state { color: #555; font-style: italic; text-align: center; padding: 32px; }

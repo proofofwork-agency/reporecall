@@ -9,7 +9,7 @@ import type { SearchResult } from "./types.js";
 import type { SeedResult, SeedCandidate } from "./seed.js";
 import type { StoredChunk } from "../storage/types.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
-import { isTestFile } from "./utils.js";
+import { GENERIC_BROAD_TERMS, GENERIC_QUERY_ACTION_TERMS, isTestFile, STOP_WORDS } from "./utils.js";
 import { resolveTargetsForQuery } from "./targets.js";
 
 // ---------------------------------------------------------------------------
@@ -40,18 +40,60 @@ function isExactSeed(seed: SeedCandidate): boolean {
   return seed.reason === "explicit_target" || seed.reason === "resolved_target";
 }
 
+/**
+ * Extract non-generic query terms used to verify that a seed actually
+ * matches the user's query. Splits on whitespace, lowercases, drops short
+ * tokens, stop words, generic broad nouns ("flow", "service"...), and
+ * generic action verbs ("show", "inspect"...).
+ */
+function extractQueryAnchors(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9_-]+/)
+    .filter((t) =>
+      t.length >= 3
+      && !STOP_WORDS.has(t)
+      && !GENERIC_BROAD_TERMS.has(t)
+      && !GENERIC_QUERY_ACTION_TERMS.has(t)
+    );
+}
+
+/**
+ * A seed survives only if ≥2 non-generic query anchors appear in its
+ * filePath or name. Short queries (fewer than 2 anchors) bypass the check
+ * — the existing target-resolver heuristics are the only thing keeping
+ * a single-symbol lookup from over-matching, and tightening further would
+ * regress those.
+ */
+function seedMatchesQueryAnchors(seed: SeedCandidate, query: string): boolean {
+  const anchors = extractQueryAnchors(query);
+  if (anchors.length < 2) return true;
+  const haystack = `${seed.filePath} ${seed.name ?? ""}`.toLowerCase();
+  let matched = 0;
+  for (const anchor of anchors) {
+    if (haystack.includes(anchor)) {
+      matched += 1;
+      if (matched >= 2) return true;
+    }
+  }
+  return false;
+}
+
 function selectPrimarySeed(
   seedResult: SeedResult,
   exactSeeds: SeedCandidate[],
+  query: string,
 ): SeedCandidate | null {
   if (
     seedResult.bestSeed
     && isExactSeed(seedResult.bestSeed)
     && !isTestFile(seedResult.bestSeed.filePath)
+    && seedMatchesQueryAnchors(seedResult.bestSeed, query)
   ) {
     return seedResult.bestSeed;
   }
-  return exactSeeds[0] ?? null;
+  const fallback = exactSeeds.find((seed) => seedMatchesQueryAnchors(seed, query));
+  return fallback ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +123,7 @@ export function buildFocusedExactResults(
     .slice(0, 6);
   if (exactSeeds.length === 0) return null;
 
-  const primarySeed = selectPrimarySeed(seedResult, exactSeeds);
+  const primarySeed = selectPrimarySeed(seedResult, exactSeeds, query);
   if (!primarySeed) return null;
 
   const seenChunkIds = new Set<string>();

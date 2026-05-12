@@ -178,6 +178,40 @@ describe("pipeline streaming windows", () => {
       pipeline.close();
     }
   }, 30000);
+
+  it("skips topology analysis when the indexed chunk count exceeds the configured cap", async () => {
+    writeFileSync(
+      resolve(TEST_PROJECT, "graph.ts"),
+      `
+export function stepOne() { return stepTwo(); }
+export function stepTwo() { return stepThree(); }
+export function stepThree() { return stepFour(); }
+export function stepFour() { return stepFive(); }
+export function stepFive() { return stepSix(); }
+export function stepSix() { return 6; }
+`
+    );
+
+    const pipeline = new IndexingPipeline({
+      ...makeConfig(),
+      embeddingProvider: "keyword",
+      topologyMaxChunks: 1,
+    });
+
+    try {
+      const result = await pipeline.indexAll();
+      expect(result.chunksCreated).toBeGreaterThan(1);
+      const totalChunks = pipeline.getMetadataStore().getStats().totalChunks;
+      expect(totalChunks).toBeGreaterThan(1);
+      expect(pipeline.getMetadataStore().getAllCommunities(10)).toEqual([]);
+      expect(pipeline.getMetadataStore().getStat("topologyLastStatus")).toBe("skipped");
+      expect(pipeline.getMetadataStore().getStat("topologyLastReason")).toBe("too_many_chunks");
+      expect(pipeline.getMetadataStore().getStat("topologyLastTotalChunks")).toBe(String(totalChunks));
+      expect(pipeline.getMetadataStore().getStat("topologyLastMaxChunks")).toBe("1");
+    } finally {
+      pipeline.close();
+    }
+  }, 30000);
 });
 
 describe("FTS store", () => {

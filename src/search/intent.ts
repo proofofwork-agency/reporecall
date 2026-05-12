@@ -74,7 +74,7 @@ const NAVIGATION_PATTERNS: RegExp[] = [
 const WORKFLOW_NOUN_RE = /\b(flow|workflow|lifecycle|pipeline|journey|request flow)\b/;
 const CONCEPT_FAMILY_RE =
   /\b(auth|authentication|authorization|login|signin|signup|signout|session|oauth|token|credential|billing|payment|checkout|subscription|invoice|refund|upload|storage|media|file|bucket|generation|generate|render|image|queue|worker|job|webhook|routing|route|router|redirect|callback|permissions?|role|policy|search|retrieval|ranking|indexing|daemon|server|hook|hooks|logging|trace|audit)\b/;
-const FILE_INVENTORY_RE = /\bwhich\s+files?\b|\ball\s+(?:the\s+)?files?\b/;
+const FILE_INVENTORY_RE = /\b(?:which|what)\s+files?\b|\ball\s+(?:the\s+)?files?\b/;
 const WHOLE_SYSTEM_SCOPE_RE = /\b(full|entire|complete|end-to-end|across)\b|\bevery\s+step\b|\bfrom\s+.+\s+to\s+.+\b/;
 const CROSS_CUTTING_EDIT_RE = /\b(add|instrument|trace|audit|update|change|logging?)\b/;
 const WORKFLOW_LIFECYCLE_RE = /\b(save|saving|saved|publish|publishing|published|serialize|serialization|share|sharing)\b/;
@@ -106,7 +106,7 @@ const CHANGE_SCOPE_RE =
   /\b(every\s+step|across|throughout|full|entire|complete|all\s+files|all\s+steps)\b/i;
 const IMPLEMENT_WHERE_RE = /\bwhere\s+should\s+i\s+implement\b/i;
 const ARCHITECTURE_RE =
-  /\b(which\s+files?\s+implement|which\s+files?\s+handle|all\s+files?\s+involved|end-to-end|across|architecture|design|structure|overview|full\s+flow|complete\s+workflow|entire\s+flow)\b/i;
+  /\b(?:(?:which|what)\s+files?\s+(?:implement|handle|cover|change|modify|edit|update|touch)|all\s+files?\s+involved|end-to-end|across|architecture|design|structure|overview|full\s+flow|complete\s+workflow|entire\s+flow)\b/i;
 
 /**
  * Classify a user query into a {@link QueryIntent}.

@@ -83,6 +83,14 @@ export interface MemoryConfig {
   wikiBudget: number;
   /** Max wiki pages to inject per prompt (default 3) */
   wikiMaxPages: number;
+  /** Enable capability evidence selection for trace/architecture/change routes */
+  capabilityEvidence: boolean;
+  /** Hydrate generic capability evidence into prompt context for broad inventory queries */
+  genericCapabilityHydration: boolean;
+  /** Enable topology analysis after indexing */
+  topologyEnabled?: boolean;
+  /** Skip topology graph construction above this indexed chunk count */
+  topologyMaxChunks?: number;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -157,6 +165,10 @@ const UserConfigSchema = z.object({
   memoryWorkingHistoryLimit: z.number().int().min(1).optional(),
   wikiBudget: z.number().min(0).optional(),
   wikiMaxPages: z.number().int().min(1).max(10).optional(),
+  capabilityEvidence: z.boolean().optional(),
+  genericCapabilityHydration: z.boolean().optional(),
+  topologyEnabled: z.boolean().optional(),
+  topologyMaxChunks: z.number().int().min(100).optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -179,6 +191,11 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     "node_modules", ".git", ".memory", "dist", "build", "target",
     "__pycache__", ".next", ".nuxt", "vendor", "coverage",
     "*.min.js", "*.min.css", "*.map", "*.lock", "package-lock.json",
+    // Assistant/client integration artifacts are instructions and local config,
+    // not code evidence. Keep them out of search results by default.
+    "AGENTS.md", "CLAUDE.md", "GEMINI.md", "REPORECALL.md", ".mcp.json",
+    ".codex", ".codex/**", ".claude", ".claude/**", ".agents", ".agents/**",
+    ".cursor", ".cursor/**", ".continue", ".continue/**", ".playwright-mcp", ".playwright-mcp/**",
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
@@ -236,6 +253,10 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   memoryWorkingHistoryLimit: 1,
   wikiBudget: 400,
   wikiMaxPages: 3,
+  capabilityEvidence: true,
+  genericCapabilityHydration: true,
+  topologyEnabled: true,
+  topologyMaxChunks: 50_000,
   factExtractors: [],
   conceptBundles: [
     {

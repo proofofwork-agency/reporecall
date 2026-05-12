@@ -169,13 +169,60 @@ export class IndexingPipeline {
   private lastTopologyAt = 0;
   private readonly TOPOLOGY_COOLDOWN_MS = 30_000;
 
+  private recordTopologyStatus(
+    status: "computed" | "skipped" | "failed",
+    reason: string,
+    details: Record<string, string | number> = {}
+  ): void {
+    this.metadata.setStat("topologyLastStatus", status);
+    this.metadata.setStat("topologyLastReason", reason);
+    this.metadata.setStat("topologyLastAt", new Date().toISOString());
+    for (const [key, value] of Object.entries(details)) {
+      this.metadata.setStat(`topologyLast${key[0]!.toUpperCase()}${key.slice(1)}`, String(value));
+    }
+  }
+
   private computeTopologyAnalysis(log: ReturnType<typeof getLogger>): void {
+    if (this.config.topologyEnabled === false) {
+      this.recordTopologyStatus("skipped", "disabled");
+      return;
+    }
     const now = Date.now();
     if (now - this.lastTopologyAt < this.TOPOLOGY_COOLDOWN_MS) return;
     this.lastTopologyAt = now;
     try {
+      const stats = this.metadata.getStats();
+      const maxChunks = this.config.topologyMaxChunks ?? 50_000;
+      if (stats.totalChunks > maxChunks) {
+        this.recordTopologyStatus("skipped", "too_many_chunks", {
+          totalChunks: stats.totalChunks,
+          maxChunks,
+        });
+        log.warn({
+          totalChunks: stats.totalChunks,
+          topologyMaxChunks: maxChunks,
+        }, "Skipping topology analysis for large index");
+        return;
+      }
+      if (this.getHeapUsedBytes() >= this.getHeapSoftLimitBytes() * 0.92) {
+        this.recordTopologyStatus("skipped", "memory_pressure", {
+          heapUsedMb: Math.round(this.getHeapUsedBytes() / 1024 / 1024),
+          heapSoftLimitMb: Math.round(this.getHeapSoftLimitBytes() / 1024 / 1024),
+        });
+        log.warn({
+          heapUsedMb: Math.round(this.getHeapUsedBytes() / 1024 / 1024),
+          heapSoftLimitMb: Math.round(this.getHeapSoftLimitBytes() / 1024 / 1024),
+        }, "Skipping topology analysis under memory pressure");
+        return;
+      }
       const graph = buildAdjacencyGraph(this.metadata);
-      if (graph.nodeCount < 5 || graph.edgeCount < 3) return;
+      if (graph.nodeCount < 5 || graph.edgeCount < 3) {
+        this.recordTopologyStatus("skipped", "insufficient_graph", {
+          nodeCount: graph.nodeCount,
+          edgeCount: graph.edgeCount,
+        });
+        return;
+      }
 
       const communities = detectCommunities(graph);
       const godNodes = findGodNodes(graph, communities);
@@ -202,8 +249,14 @@ export class IndexingPipeline {
       };
 
       this.metadata.replaceTopology(snapshot);
+      this.recordTopologyStatus("computed", "ok", {
+        nodeCount: graph.nodeCount,
+        edgeCount: graph.edgeCount,
+        communities: communities.communities.size,
+      });
       log.info(`Topology: ${communities.communities.size} communities, ${godNodes.length} hubs, ${surprises.length} surprises`);
     } catch (err) {
+      this.recordTopologyStatus("failed", "error");
       log.warn(`Topology analysis failed: ${err}`);
     }
   }
@@ -460,7 +513,6 @@ export class IndexingPipeline {
     counters.chunksCreated += result.chunksCreated;
     for (const filePath of result.filePaths) successfulFiles.add(filePath);
     window.length = 0;
-    this.rebuildTargetCatalog();
   }
 
   async indexAll(
@@ -531,9 +583,7 @@ export class IndexingPipeline {
 
     if (toDelete.length > 0) {
       const deletedPaths = toDelete.map((entry) => entry.path);
-      for (const deletedPath of deletedPaths) {
-        this.metadata.removeFile(deletedPath);
-      }
+      this.metadata.removeFiles(deletedPaths);
       this.fts.bulkRemoveByFiles(deletedPaths);
       await this.vectors.removeByFiles(deletedPaths);
     }
@@ -721,12 +771,14 @@ export class IndexingPipeline {
         log.warn(`Path traversal blocked in removeFiles: ${relPath}`);
         continue;
       }
-      this.metadata.removeFile(relPath);
-      this.fts.removeByFile(relPath);
-      this.merkle.removeFile(relPath);
       safePaths.push(relPath);
     }
     if (safePaths.length > 0) {
+      this.metadata.removeFiles(safePaths);
+      this.fts.bulkRemoveByFiles(safePaths);
+      for (const relPath of safePaths) {
+        this.merkle.removeFile(relPath);
+      }
       await this.vectors.removeByFiles(safePaths);
       this.rebuildTargetCatalog();
     }

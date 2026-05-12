@@ -251,7 +251,7 @@ describe("architecture deep route", () => {
     }
   });
 
-  it("handlePromptContext returns context for architecture", async () => {
+  it("handlePromptContext returns source context for architecture", async () => {
     const result = await handlePromptContext(
       "how does the architecture handle requests?",
       search,
@@ -264,7 +264,7 @@ describe("architecture deep route", () => {
     );
     expect(result).not.toBeNull();
     expect(result!.text).toContain("Relevant codebase context");
-    expect(result!.text).toContain("Reporecall MCP tools");
+    expect(result!.text).toContain("handleRequest");
   });
 });
 

@@ -14,6 +14,7 @@ export interface AssembledWikiContext {
   tokenCount: number;
   pageCount: number;
   pageNames: string[];
+  pages?: MemorySearchResult[];
 }
 
 /**
@@ -42,7 +43,7 @@ export function assembleWikiContext(
 
     if (isTop && result.content) {
       // Extract first section (## Overview or first paragraph)
-      const overviewMatch = result.content.match(/^## (?:Overview|Community|Hub Node|Surprising)[^\n]*\n([\s\S]*?)(?=\n## |$)/);
+      const overviewMatch = result.content.match(/^## (?:Overview|Community|Hub Node|Surprising|Capability|Business)[^\n]*\n([\s\S]*?)(?=\n## |$)/);
       const overview = overviewMatch
         ? overviewMatch[0].trim()
         : result.content.split("\n\n").slice(0, 2).join("\n\n").trim();
@@ -74,5 +75,6 @@ export function assembleWikiContext(
     tokenCount: countTokens(text),
     pageCount: included.length,
     pageNames: included,
+    pages: results.slice(0, included.length),
   };
 }

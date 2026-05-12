@@ -15,10 +15,10 @@ const VALID_SOURCE_KINDS = new Set<MemorySourceKind>([
   "reporecall_local",
   "generated",
 ]);
-const VALID_PAGE_TYPES = new Set<WikiPageType>(["community", "hub", "module", "flow", "exploration"]);
+const VALID_PAGE_TYPES = new Set<WikiPageType>(["community", "hub", "module", "flow", "exploration", "business"]);
 const VALID_SOURCE_LAYERS = new Set<WikiSourceLayer>(["deterministic", "llm-enriched"]);
 
-export type WikiPageType = "community" | "hub" | "module" | "flow" | "exploration";
+export type WikiPageType = "community" | "hub" | "module" | "flow" | "exploration" | "business";
 export type WikiSourceLayer = "deterministic" | "llm-enriched";
 
 export interface ParsedMemory {

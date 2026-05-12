@@ -208,6 +208,14 @@ export class RetrievalPipeline {
     const expandedTerms = expandQueryTerms(query);
     const broadQuery = intent.queryMode === "architecture" || intent.queryMode === "change";
 
+    // For architecture/change queries, drop test/spec/benchmark chunks entirely
+    // — the multiplicative testPenaltyFactor leaves them visible in dense
+    // clusters and pollutes inventory-style answers. Caller can still surface
+    // tests by mentioning them explicitly in the query.
+    const queryMentionsTests = /\b(test|tests|spec|e2e|fixture|mock)\b/i.test(query);
+    const testFileMode: "penalty" | "exclude" =
+      broadQuery && !queryMentionsTests ? "exclude" : "penalty";
+
     return reciprocalRankFusion(vectorResults, keywordResults, {
       vectorWeight: weights.vectorWeight,
       keywordWeight: weights.keywordWeight,
@@ -220,6 +228,7 @@ export class RetrievalPipeline {
       codeBoostFactor: this.config.codeBoostFactor,
       chunkNames: maps.chunkNames,
       testPenaltyFactor: this.config.testPenaltyFactor,
+      testFileMode,
       anonymousPenaltyFactor: this.config.anonymousPenaltyFactor,
       queryTerms,
       expandedQueryTerms: expandedTerms,

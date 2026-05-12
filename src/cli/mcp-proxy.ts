@@ -21,6 +21,21 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
+import { createRequire } from 'module'
+
+const requireFromHere = createRequire(import.meta.url)
+
+function loadPackageVersion(): string {
+  try {
+    return requireFromHere('../../package.json').version
+  } catch {
+    try {
+      return requireFromHere('../package.json').version
+    } catch {
+      return 'unknown'
+    }
+  }
+}
 
 interface ProxyConfig {
   port: number
@@ -87,7 +102,7 @@ async function callDaemon(
 export function createProxyMCPServer(config: ProxyConfig): McpServer {
   const server = new McpServer({
     name: 'reporecall-proxy',
-    version: '1.0.0',
+    version: loadPackageVersion(),
   })
 
   // Helper to register a proxy tool that forwards to the daemon

@@ -63,6 +63,15 @@ function makeMockMetadata(overrides?: Partial<any>): any {
     setStat: () => {},
     getConventions: () => null,
     getLatencyPercentiles: () => ({ avg: 12, p50: 10, p95: 25, count: 100 }),
+    getAllChunks: () => [],
+    getAllResolvedCallEdges: () => [],
+    getAllCommunities: () => [],
+    getGodNodes: () => [],
+    getTopSurprises: () => [],
+    getSuggestedQuestions: () => [],
+    getCommunityForChunk: () => undefined,
+    findCallers: () => [],
+    findCallees: () => [],
     close: () => {},
     ...overrides,
   };
@@ -101,12 +110,106 @@ function makeConfig(): any {
   };
 }
 
+function makeMockMemoryStore(): any {
+  return {
+    getWikiLinks: () => [],
+    getWikiBacklinks: () => [],
+    getByName: () => undefined,
+    getByType: (type: string) => {
+      if (type !== "wiki") return [];
+      return [
+        {
+          id: "wiki-auth",
+          name: "business-user-authentication",
+          type: "wiki",
+          description: "Business capability view",
+          summary: "User Authentication grants protected access.",
+          content: `## Capability
+User Authentication
+
+## Actor
+Product user
+
+## Trigger
+User starts login or resumes a session.
+
+## Business terms
+- User
+- Session
+
+## User-visible actions
+- Sign in and access protected product areas.
+
+## Business outcome
+The product grants protected access.
+
+## Business / Data Concepts
+- User
+- Session
+
+## External systems
+- Identity provider`,
+          filePath: "/tmp/test-mcp/.memory/wiki/business-user-authentication.md",
+          relatedFiles: ["src/auth.ts"],
+          relatedSymbols: ["useAuth"],
+          confidence: 0.88,
+        },
+        {
+          id: "wiki-upload",
+          name: "business-media-upload",
+          type: "wiki",
+          description: "Business capability view",
+          summary: "Media Upload accepts files.",
+          content: `## Capability
+Media Upload
+
+## Actor
+Product user
+
+## Trigger
+User adds a file.
+
+## Business terms
+- Upload
+- File
+
+## User-visible actions
+- Upload a file.
+
+## Business outcome
+The product stores incoming media.
+
+## Business / Data Concepts
+- File
+- Storage
+
+## External systems
+- Object storage`,
+          filePath: "/tmp/test-mcp/.memory/wiki/business-media-upload.md",
+          relatedFiles: ["src/upload.ts"],
+          relatedSymbols: ["uploadFile"],
+          confidence: 0.8,
+        },
+      ];
+    },
+  };
+}
+
 // Capture tool handlers by monkey-patching McpServer.registerTool during server creation
 async function captureToolHandlers(
   search: any,
   pipeline: any,
   metadata: any,
-  config: any
+  config: any,
+  deps: {
+    lock?: any;
+    memorySearch?: any;
+    memoryIndexer?: any;
+    memoryStore?: any;
+    memoryRuntime?: any;
+    wikiGenerator?: any;
+    wikiAutoCapture?: any;
+  } = {}
 ): Promise<Map<string, (args: any) => Promise<any>>> {
   const handlers = new Map<string, (args: any) => Promise<any>>();
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
@@ -123,7 +226,19 @@ async function captureToolHandlers(
   } as any;
 
   try {
-    createMCPServer(search, pipeline, metadata, config);
+    createMCPServer(
+      search,
+      pipeline,
+      metadata,
+      config,
+      deps.lock,
+      deps.memorySearch,
+      deps.memoryIndexer,
+      deps.memoryStore,
+      deps.memoryRuntime,
+      deps.wikiGenerator,
+      deps.wikiAutoCapture
+    );
   } finally {
     McpServer.prototype.registerTool = OriginalRegisterTool;
   }
@@ -201,6 +316,76 @@ describe("MCP server tools (3G)", () => {
     expect(capturedPaths).toEqual(["src/server.ts", "src/app.ts"]);
   });
 
+  it("refresh_context re-indexes and regenerates wiki pages for external tools", async () => {
+    let indexAllCalled = false;
+    let wikiGenerated = false;
+    const pipeline = makeMockPipeline({
+      indexAll: async () => {
+        indexAllCalled = true;
+        return { filesProcessed: 3, chunksCreated: 9 };
+      },
+    });
+    const wikiGenerator = {
+      generateFromIndex: async () => {
+        wikiGenerated = true;
+        return { pagesWritten: 4, businessPages: 2 };
+      },
+    };
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      pipeline,
+      makeMockMetadata(),
+      makeConfig(),
+      { wikiGenerator }
+    );
+    const handler = handlers.get("refresh_context");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({});
+    expect(indexAllCalled).toBe(true);
+    expect(wikiGenerated).toBe(true);
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.index.filesProcessed).toBe(3);
+    expect(parsed.wiki.pagesWritten).toBe(4);
+    expect(parsed.stats.totalFiles).toBe(5);
+  });
+
+  it("get_lens_data returns bounded Lens JSON without triggering indexing", async () => {
+    let indexAllCalled = false;
+    const pipeline = makeMockPipeline({
+      indexAll: async () => {
+        indexAllCalled = true;
+        return { filesProcessed: 1, chunksCreated: 1 };
+      },
+    });
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      pipeline,
+      makeMockMetadata(),
+      makeConfig(),
+      { memoryStore: makeMockMemoryStore() }
+    );
+    const handler = handlers.get("get_lens_data");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({
+      includeWikiContent: false,
+      includeBusinessPages: false,
+      includeGraph: false,
+    });
+
+    expect(indexAllCalled).toBe(false);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.meta.projectName).toBe("test-mcp");
+    expect(parsed.wikiPages[0].content).toBe("");
+    expect(parsed.businessPages).toEqual([]);
+    expect(parsed.productAreas).toEqual([]);
+    expect(parsed.communities).toEqual([]);
+    expect(parsed.wikiGraphNodes).toEqual([]);
+  });
+
   it("get_stats returns statistics, conventions, and latency", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
@@ -220,6 +405,156 @@ describe("MCP server tools (3G)", () => {
     expect(parsed).toHaveProperty("latency");
     expect(parsed.totalFiles).toBe(5);
     expect(parsed.totalChunks).toBe(22);
+  });
+
+  it("list_product_areas returns business-facing aggregates from wiki memory", async () => {
+    const memoryStore = makeMockMemoryStore();
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig(),
+      { memoryStore }
+    );
+    const handler = handlers.get("list_product_areas");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ limit: 10 });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.count).toBeGreaterThan(0);
+    expect(parsed.businessPageCount).toBe(2);
+    expect(parsed.productAreas.map((area: any) => area.name)).toContain("Product Area: Authentication");
+  });
+
+  it("list_product_areas hides unsafe fallback areas unless diagnostics are requested", async () => {
+    const base = makeMockMemoryStore();
+    const memoryStore = {
+      ...base,
+      getByType: (type: string) => [
+        ...base.getByType(type),
+        {
+          id: "wiki-technical-helper",
+          name: "business-shared-retry-helper",
+          type: "wiki",
+          description: "Business capability view",
+          summary: "Backend helper coordinates retry work.",
+          content: `## Capability
+Backend: WithRetry, ProcessRequest
+
+## Actor
+Product user
+
+## Trigger
+A request enters this capability.
+
+## Business outcome
+The product completes the capability.`,
+          filePath: "/tmp/test-mcp/.memory/wiki/business-shared-retry-helper.md",
+          relatedFiles: ["src/retry.ts"],
+          relatedSymbols: ["WithRetry", "ProcessRequest"],
+          confidence: 0.61,
+        },
+      ],
+    };
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig(),
+      { memoryStore }
+    );
+    const handler = handlers.get("list_product_areas");
+    expect(handler).toBeDefined();
+
+    const safeResult = await handler!({ limit: 20 });
+    const safeParsed = JSON.parse(safeResult.content[0].text);
+    expect(safeParsed.productAreas.every((area: any) => area.presentationSafe)).toBe(true);
+    expect(safeParsed.safeTotal).toBe(safeParsed.count);
+
+    const diagnosticResult = await handler!({ limit: 20, includeUnsafe: true });
+    const diagnosticParsed = JSON.parse(diagnosticResult.content[0].text);
+    expect(diagnosticParsed.productAreas.some((area: any) => area.presentationSafe === false)).toBe(true);
+  });
+
+  it("business_context_query returns matching product areas and pages", async () => {
+    const memoryStore = makeMockMemoryStore();
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig(),
+      { memoryStore }
+    );
+    const handler = handlers.get("business_context_query");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ query: "authentication session login", limit: 3 });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.query).toBe("authentication session login");
+    expect(parsed.productAreas[0].name).toBe("Product Area: Authentication");
+    expect(parsed.businessPages[0].name).toBe("business-user-authentication");
+    expect(parsed.businessPages[0].supportingFiles).toContain("src/auth.ts");
+  });
+
+  it("wiki_read returns replacement suggestions for stale generated slugs", async () => {
+    const base = makeMockMemoryStore();
+    const memoryStore = {
+      ...base,
+      getByName: () => undefined,
+      getByType: (type: string) => {
+        if (type !== "wiki") return [];
+        return [
+          {
+            id: "wiki-area",
+            name: "product-area-analytics",
+            type: "wiki",
+            description: "Analytics groups dashboard reporting capabilities.",
+            summary: "Analytics covers dashboard reporting and metric review.",
+            content: "Dashboard charts and reports help users review metrics.",
+            filePath: "/tmp/test-mcp/.memory/wiki/product-area-analytics.md",
+            relatedFiles: [],
+            relatedSymbols: [],
+            confidence: 0.86,
+          },
+          {
+            id: "wiki-upload",
+            name: "business-upload",
+            type: "wiki",
+            description: "Upload accepts files.",
+            summary: "Upload accepts incoming files.",
+            content: "File intake and storage.",
+            filePath: "/tmp/test-mcp/.memory/wiki/business-upload.md",
+            relatedFiles: [],
+            relatedSymbols: [],
+            confidence: 0.8,
+          },
+        ];
+      },
+    };
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig(),
+      {
+        memoryStore,
+        memorySearch: { search: async () => [] },
+        memoryIndexer: { getWritableDirs: () => ["/tmp/test-mcp/.memory"] },
+      }
+    );
+    const handler = handlers.get("wiki_read");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ name: "business-analytics-dashboard" });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.status).toBe("not_found");
+    expect(parsed.suggestions[0].name).toBe("product-area-analytics");
+    expect(parsed.suggestions[0].matchedTerms).toContain("dashboard");
   });
 
   it("clear_index with confirm=false returns abort message", async () => {

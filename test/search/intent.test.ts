@@ -46,13 +46,19 @@ describe("classifyIntent", () => {
     expectMode("where should I implement audit logging across the billing flow?", "change");
   });
 
+  it("recognizes 'what files' inventory prompts as change or architecture", () => {
+    expectMode("what files would I need to change to add another query mode?", "change");
+    expectMode("what files implement the indexer pipeline?", "architecture");
+    expectMode("what files do I need to touch to add a new hook?", "change");
+  });
+
   it("classifies orchestration traces that use 'how are' phrasing", () => {
     expectMode("how are generation jobs fetched and polled?", "trace");
   });
 
   it("classifies plural bug terms as bug mode", () => {
-    expectMode("bugs in duto cli", "bug");
-    expectMode("duto cli bugs", "bug");
+    expectMode("bugs in project cli", "bug");
+    expectMode("project cli bugs", "bug");
     expectMode("are there any issues with the auth flow", "bug");
     expectMode("what problems does the parser have", "bug");
   });

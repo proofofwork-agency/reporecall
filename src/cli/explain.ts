@@ -12,6 +12,13 @@ import { classifyIntent, type QueryMode } from '../search/intent.js'
 import { resolveSeeds, type SeedResult } from '../search/seed.js'
 import type { MemorySearch } from '../memory/search.js'
 import type { MemoryClass, MemoryRoute } from '../memory/types.js'
+import {
+  buildBusinessContextFromMemoryStore,
+  queryBusinessContext,
+  type BusinessContextPage,
+  type ProductAreaContext,
+} from '../business/product-areas.js'
+import type { MemoryStore } from '../storage/memory-store.js'
 import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
 
 function formatQueryMode(queryMode: QueryMode): string {
@@ -71,6 +78,8 @@ export interface ExplainResult {
   memoriesInjected?: number
   memoryNames?: string[]
   memoryRoute?: MemoryRoute
+  productAreasUsed: ProductAreaContext[]
+  businessPagesUsed: BusinessContextPage[]
   memoryDropped?: Array<{
     name: string
     class: MemoryClass
@@ -99,7 +108,8 @@ export async function resolveExplainResult(
     IndexingPipeline,
     'getMetadataStore' | 'getFTSStore' | 'getEmbedder' | 'getVectorStore'
   >,
-  memorySearchInstance?: MemorySearch
+  memorySearchInstance?: MemorySearch,
+  memoryStore?: MemoryStore
 ): Promise<ExplainResult> {
   const sanitized = sanitizeQuery(query)
 
@@ -119,6 +129,8 @@ export async function resolveExplainResult(
       seedCandidates: [],
       tokensInjected: 0,
       chunksInjected: 0,
+      productAreasUsed: [],
+      businessPagesUsed: [],
       chunks: [],
     }
   }
@@ -151,6 +163,8 @@ export async function resolveExplainResult(
       seedCandidates: [],
       tokensInjected: 0,
       chunksInjected: 0,
+      productAreasUsed: [],
+      businessPagesUsed: [],
       chunks: [],
     }
   }
@@ -166,10 +180,14 @@ export async function resolveExplainResult(
     fts,
     undefined,
     metadata.getStats().totalChunks,
-    memorySearchInstance
+    memorySearchInstance,
+    memoryStore
   )
   queryMode = promptContext.resolvedQueryMode
   const context = promptContext.context
+  const businessContext = memoryStore && shouldExplainBusinessContext(sanitized, queryMode)
+    ? queryBusinessContext(sanitized, buildBusinessContextFromMemoryStore(memoryStore), 3)
+    : { productAreas: [], businessPages: [] }
   const broadSelection = search.getLastBroadSelectionDiagnostics()
   const bugSelection = search.getLastBugSelectionDiagnostics()
 
@@ -231,6 +249,12 @@ export async function resolveExplainResult(
     memoriesInjected: promptContext.memoryCount,
     memoryNames: promptContext.memoryNames,
     memoryRoute: promptContext.memoryRoute,
+    productAreasUsed: promptContext.productAreasUsed?.length
+      ? promptContext.productAreasUsed
+      : businessContext.productAreas,
+    businessPagesUsed: promptContext.businessPagesUsed?.length
+      ? promptContext.businessPagesUsed
+      : businessContext.businessPages,
     memoryDropped: promptContext.memoryDropped,
     memoryBudget: promptContext.memoryBudget,
     chunks:
@@ -242,6 +266,14 @@ export async function resolveExplainResult(
         score: Number(chunk.score.toFixed(3)),
       })) ?? [],
   }
+}
+
+function shouldExplainBusinessContext(query: string, queryMode: QueryMode): boolean {
+  if (queryMode === 'lookup' || queryMode === 'skip' || queryMode === 'bug') return false;
+  return queryMode === 'trace'
+    || queryMode === 'architecture'
+    || queryMode === 'change'
+    || /\b(product area|business|capabilit(?:y|ies)|feature|workflow|which files|implement)\b/i.test(query);
 }
 
 export function explainCommand(): Command {
@@ -272,21 +304,21 @@ export function explainCommand(): Command {
 
       // Set up memory search if memory index exists and memory is enabled
       let memorySearchInstance: MemorySearch | undefined
-      let memStore: { close(): void } | undefined
+      let memStore: MemoryStore | undefined
       const memoryDataDir = resolve(config.dataDir, 'memory-index')
       if (config.memory && existsSync(resolve(memoryDataDir, 'memories.db'))) {
         try {
           const { MemoryStore } = await import('../storage/memory-store.js')
           const { MemorySearch: MemorySearchClass } = await import('../memory/search.js')
           memStore = new MemoryStore(memoryDataDir)
-          memorySearchInstance = new MemorySearchClass(memStore as InstanceType<typeof MemoryStore>)
+          memorySearchInstance = new MemorySearchClass(memStore)
         } catch {
           // Memory search unavailable — continue without it
         }
       }
 
       try {
-        const result = await resolveExplainResult(query, config, pipeline, memorySearchInstance)
+        const result = await resolveExplainResult(query, config, pipeline, memorySearchInstance, memStore)
 
         if (options.json) {
           console.log(JSON.stringify(result, null, 2))
@@ -322,6 +354,9 @@ export function explainCommand(): Command {
         }
         if (result.executionSurface) {
           console.log(`Surface:        ${result.executionSurface}`)
+        }
+        if (result.productAreasUsed.length > 0) {
+          console.log(`Product areas:  ${result.productAreasUsed.map((area) => area.name).join(', ')}`)
         }
         if (result.memoriesInjected && result.memoriesInjected > 0) {
           console.log(`Memory tokens:  ${(result.memoryTokensInjected ?? 0).toLocaleString()}`)

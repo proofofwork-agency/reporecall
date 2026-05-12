@@ -1,19 +1,19 @@
 # Reporecall
 
 ```text
-██████╗ ███████╗██████╗  ██████╗ ██████╗ ███████╗ ██████╗ █████╗ ██╗     ██╗
-██╔══██╗██╔════╝██╔══██╗██╔═══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗██║     ██║
-██████╔╝█████╗  ██████╔╝██║   ██║██████╔╝█████╗  ██║     ███████║██║     ██║
-██╔══██╗██╔══╝  ██╔═══╝ ██║   ██║██╔══██╗██╔══╝  ██║     ██╔══██║██║     ██║
-██║  ██║███████╗██║     ╚██████╔╝██║  ██║███████╗╚██████╗██║  ██║███████╗███████╗
-╚═╝  ╚═╝╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝
+ ____                                    _ _
+|  _ \ ___ _ __   ___  _ __ ___  ___ __ _| | |
+| |_) / _ \ '_ \ / _ \| '__/ _ \/ __/ _` | | |
+|  _ <  __/ |_) | (_) | | |  __/ (_| (_| | | |
+|_| \_\___| .__/ \___/|_|  \___|\___\__,_|_|_|
+          |_|
 ```
 
-Local codebase memory, auto-generated wiki, and an interactive architecture dashboard — for Claude Code and MCP.
+Local codebase memory, intent-routed retrieval, generated wiki pages, and an architecture lens for Claude Code, Codex, and MCP-compatible coding agents.
 
-Reporecall indexes your repository locally, classifies each query by intent, and injects focused code context, **auto-generated wiki pages**, and persistent memory before Claude answers. Then it gives you a **self-contained HTML dashboard** to see the whole picture at a glance. No cloud, no embeddings API, everything stays on your machine.
+Reporecall indexes a repository locally, classifies codebase questions by intent, and returns focused source context through Claude Code hooks, MCP tools, and CLI commands. Codex and other agent clients can use Reporecall through the MCP server or direct CLI commands. Reporecall also generates deterministic wiki pages and a `lens --json` export that other tools can consume without depending on Reporecall internals.
 
----
+No cloud embeddings API is required. The default keyword provider uses local SQLite/FTS indexes; optional semantic backends can be configured separately.
 
 ## Quick Start
 
@@ -38,555 +38,368 @@ One command, one HTML file, your whole codebase at a glance:
 reporecall lens --serve --open
 ```
 
-A five-tab dark-themed dashboard built from your pre-computed index:
+`reporecall init` only writes project configuration, Claude hook settings, MCP config, and memory directories. It does not index code.
 
-- **Overview** — project stats, a D3 chord diagram of inter-community call flows, top hubs, top surprises
-- **Communities** — expandable Louvain cluster cards with member tables, cohesion scores, cross-community bar charts
-- **Hubs** — the structural load-bearing walls of your codebase, each with caller/callee lists and wiki mentions
-- **Surprises** — a sortable table of unexpected cross-boundary connections with reasons and investigation questions
-- **Wiki** — a full browser for auto-generated wiki pages with interlinks, backlinks, and related symbols
+`reporecall serve` runs an initial incremental index on startup, generates wiki pages from the resulting index, and then keeps the index fresh through the file watcher. If you want a one-off foreground index without starting the daemon, run `reporecall index` — it indexes the codebase and generates the same deterministic wiki/business pages before exiting (pass `--no-wiki` to skip).
 
-Every tab includes an inline legend explaining how to read it. The HTML is fully self-contained (inline CSS, inline JSON data, D3 from CDN) — email it, host it on S3, drop it in a PR comment, or serve it locally with `--serve` for a clickable localhost URL.
+Common direct commands:
 
-### Wiki — a living, auto-generated knowledge base
+```bash
+reporecall explain "which files implement authentication?"
+reporecall search "checkout session"
+reporecall mcp --project .
+reporecall lens --json
+```
 
-Inspired by [Andrej Karpathy's LLM Wiki](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-knowledge-base-claude-code) concept — but built for you, from your code, automatically.
+## What Reporecall Provides
 
-- **Zero authoring required.** Wiki pages are generated from topology: one page per community, one per hub, one per surprise cluster, plus flow traces.
-- **Always fresh.** Pages regenerate on every index, on daemon startup, and on `reporecall lens`. A `sourceCommit` guard skips unchanged pages so regeneration is cheap.
-- **Injected, not searched.** Relevant wiki pages are injected directly into Claude Code prompts within a configurable token budget — no manual `wiki_read` needed.
-- **Linked and navigable.** Pages reference each other with `[[slug]]` interlinks; backlinks are tracked automatically. Browse them in the lens Wiki tab or via the `wiki_*` MCP tools.
-- **Measured.** On a 1,140-file production codebase, wiki injection shows **100% precision** with 50% hit rate — when it fires, it's right.
+- **Intent-routed retrieval** for `lookup`, `trace`, `bug`, `architecture`, `change`, and `skip` prompts.
+- **Capability evidence selection** that uses code matches, wiki capability pages, related files, imports, call neighbors, and mandatory flow hints to recommend concrete files.
+- **Generated and stored wiki pages** for communities, hubs, cross-module surprises, captured flows or explorations, and business capability views.
+- **Business context export and query APIs** through `reporecall lens --json`, `reporecall explain --json`, and MCP business-context tools.
+- **Agent context** for Claude Code hooks, Codex through MCP/CLI, and other local coding agents.
+- **MCP tools** for code search, call graphs, business context, topology, wiki, memory, and index management.
+- **Architecture lens** as a portable HTML dashboard plus structured JSON.
 
-### Intent-routed retrieval
+## How Agents Use It
 
-Every prompt is classified locally into one of six modes — `lookup`, `trace`, `bug`, `architecture`, `change`, or `skip` — and routed to a tailored retrieval strategy. No LLM cost, no latency, no cloud calls.
+Reporecall has three integration surfaces: automatic Claude Code hooks, MCP/CLI access for Codex and other coding agents, and structured exports for external tools.
 
----
+### Claude Code
 
-## What else is in the box
+`reporecall init` wires Reporecall directly into Claude Code:
 
-- **Multi-signal search** — FTS keywords, vector similarity, AST metadata, semantic features, imports, call graphs
-- **Topology analysis** — Louvain community detection, hub identification, surprise scoring, investigation suggestions
-- **Bug localization** — dedicated pipeline with subject profiling, contradiction pruning, graph expansion
-- **Persistent memory** — rules, facts, episodes, and working context across sessions
-- **Delivery modes** — `code_context` (focused chunks) or `summary_only` (structured fallback when confidence is low)
-- **Hook guidance** — context strength, execution surface, missing evidence, recommended next reads
-- **Streaming indexer** — bounded file windows, adaptive embedding batches, lower peak heap
-- **SQLite ABI self-repair** — detects native module mismatch and attempts automatic rebuild
-- **MCP server** — 26 tools for code search, call graphs, topology, memory, and wiki
+- creates `.memory/config.json` and `.memoryignore`;
+- creates `.claude/settings.json` hook entries;
+- adds a Reporecall section to `CLAUDE.md`;
+- creates `.mcp.json` with a `reporecall` MCP server entry.
 
----
+When `reporecall serve` is running, Claude Code hooks call the local daemon:
+
+| Hook | What Reporecall returns |
+| --- | --- |
+| `SessionStart` | Project guidance and memory instructions. |
+| `UserPromptSubmit` | Relevant codebase context for the current prompt. |
+
+The injected prompt context can include selected files, symbols, call graph evidence, wiki evidence, compact product-area evidence, memories, confidence, missing evidence, and recommended next reads. Claude should answer from that injected context first, then use MCP tools or normal file tools only for gaps.
+
+### Codex
+
+Codex uses Reporecall through the open MCP and CLI surfaces rather than Claude Code hooks.
+
+Use MCP for interactive agent work:
+
+```bash
+reporecall mcp --project .
+```
+
+Use CLI commands for scriptable context:
+
+```bash
+reporecall explain --json "which files implement billing?"
+reporecall search "billing controller"
+reporecall lens --json
+```
+
+In Codex, the MCP tools are the main live interface for code search, flow navigation, business context, wiki reads, memory reads/writes, topology, and index management. The CLI is useful when an agent or script wants deterministic JSON without maintaining an MCP session.
+
+### Other Tools
+
+External utilities should depend on the public outputs, not Reporecall internals:
+
+| Surface | Best use |
+| --- | --- |
+| MCP server | Live code search, graph navigation, wiki/memory access, and indexing. |
+| `refresh_context` | External-tool refresh entry point: re-index code, regenerate wiki/business pages, and return updated stats. |
+| `get_lens_data` | Read-only MCP export for current Lens JSON, with options to omit raw wiki content or graph-heavy arrays. |
+| `business_context_query` / `list_product_areas` | Business-facing entry points that default to presentation-safe records; `list_product_areas` can include unsafe diagnostics when requested. |
+| `wiki_read` | Read a wiki page by slug; when generated slugs changed after regeneration, returns replacement suggestions instead of a dead-end miss. |
+| `reporecall explain --json` | Per-question retrieval diagnostics, selected files, `productAreasUsed[]`, and `businessPagesUsed[]`. |
+| `reporecall lens --json` | Whole-project topology, wiki graph, and business context export. |
+| `productAreas[]` | Business-facing grouping over related capabilities, with `displayName`, `displaySummary`, and `areaKind`. |
+| `businessPages[]` | Product-language capabilities with `displayName`, `displaySummary`, presentation quality metadata, and separated `technicalEvidence`. |
+
+The business context export is intentionally additive. It gives planning tools, dashboards, and MCP wrappers product-facing language while preserving the core retrieval model as code/wiki/graph evidence.
+
+Technical symbols, classes, and service names stay available as supporting evidence. They should not become the primary product-facing capability label when Reporecall can infer a clearer business phrase.
+
+Use `displayName` and `displaySummary` for business-facing tools, and prefer records where `presentationSafe` is `true`. `displayQuality` and `presentationIssues` tell consumers when a generated label is high-confidence, thin, fallback-derived, or dominated by technical evidence. Use `technicalEvidence.files` and `technicalEvidence.symbols` only when a trusted technical client needs the source evidence behind a page or product area. The older `name`, `capability`, `summary`, `supportingFiles`, and `supportingSymbols` fields remain for compatibility and diagnostics.
+
+Generated business wiki markdown keeps its narrative business-facing as well: the body reports evidence quality and counts, while concrete file and symbol names stay in structured evidence fields for technical clients.
+
+Product areas are not a fixed taxonomy. Reporecall starts with common software-product areas, then can derive additional areas from the repository's own business terms and data concepts. This keeps the layer generic while letting domain language surface when the indexed code and wiki evidence support it.
+
+Each product area includes `areaKind`: `fixed`, `discovered`, or `fallback`. External tools can use this to keep foundational product areas primary while treating repo-derived domain areas as supporting context when appropriate.
+
+External tools can ask Reporecall to refresh itself through MCP. Use `refresh_context` after large file changes or before a planning workflow that needs fresh wiki/product-area context. It runs the same local indexing and deterministic wiki generation path that Reporecall uses for its own Lens and agent context. Then call `get_lens_data` for a read-only Lens JSON export over the current index. `index_codebase` remains available for lower-level indexing workflows and also regenerates wiki pages when the wiki layer is enabled.
 
 ## How It Works
 
-Every user prompt flows through a three-layer pipeline: code retrieval, wiki knowledge, and project memory.
-
 ```mermaid
 flowchart TB
-  User["User Prompt"]
-  Hook["Prompt Hook"]
-  Daemon["Local Daemon"]
-  Intent["Intent Classifier"]
+  Q["User or agent question"]
+  Entry["Hook, CLI, MCP, or JSON command"]
+  Intent["Intent classifier"]
+  Search["Code retrieval"]
+  Wiki["Wiki evidence"]
+  Product["Product area evidence"]
+  Memory["Project memory"]
+  Resolver["Capability evidence resolver"]
+  Selected["Selected context"]
+  Agent["Agent reads selected files first"]
+  Explain["explain --json"]
+  Lens["lens --json / Lens HTML"]
+  BusinessTools["MCP business tools"]
 
-  subgraph Retrieval["Retrieval Pipeline"]
-    Decompose["Query Decomposition"]
-    Resolve["Target Resolution"]
-    FTS["FTS Search"]
-    Vector["Vector Search"]
-    Semantic["Semantic Feature Search"]
-    Graph["Caller / Neighbor Expansion"]
-    Prune["Contradiction Pruning"]
-    Select["Bundle Selection"]
-  end
-
-  subgraph Storage["Local Storage"]
-    Index["Chunk / Target / Feature Indexes"]
-    Topology["Topology Store (Communities, Hubs, Surprises)"]
-    Memory["Memory Store"]
-    Wiki["Wiki Store (Auto-generated Pages)"]
-  end
-
-  User --> Hook
-  Hook --> Daemon
-  Daemon --> Intent
-  Intent --> Decompose
-  Decompose --> Resolve
-  Resolve --> FTS
-  Resolve --> Vector
-  Resolve --> Semantic
-  FTS --> Graph
-  Vector --> Graph
-  Semantic --> Graph
-  Graph --> Prune
-  Prune --> Select
-  Select --> Hook
-  Index --> Resolve
-  Index --> FTS
-  Index --> Vector
-  Index --> Semantic
-  Memory --> Daemon
-  Wiki --> Hook
+  Q --> Entry --> Intent
+  Intent --> Search
+  Intent --> Wiki
+  Wiki --> Product
+  Intent --> Memory
+  Search --> Resolver
+  Wiki --> Resolver
+  Product --> Selected
+  Resolver --> Selected
+  Memory --> Selected
+  Selected --> Agent
+  Selected --> Explain
+  Product --> Lens
+  Wiki --> Lens
+  Product --> BusinessTools
 ```
 
-### Intent classification
+The important rule is file coverage over chunk volume. For trace and architecture questions, Reporecall tries to cover the relevant layers: entry/UI, state or service, controller or edge function, and shared helpers when those layers exist.
 
-Queries are classified locally (no LLM) into one of six modes that determine retrieval strategy:
+## Retrieval Modes
 
-| Mode           | Purpose                                                               |
-| -------------- | --------------------------------------------------------------------- |
-| `lookup`       | Exact symbol, file, endpoint, or module lookup                        |
-| `trace`        | Implementation path - "how does X work", "what calls Y"               |
-| `bug`          | Causal debugging - symptom descriptions, "why does this fail"         |
-| `architecture` | Broad inventory - "which files implement...", "full flow from A to B" |
-| `change`       | Cross-cutting edits - "add logging across the auth flow"              |
-| `skip`         | Meta/chat/non-code prompts                                            |
+| Mode | Use case |
+| --- | --- |
+| `lookup` | Find an exact symbol, file, endpoint, or module. |
+| `trace` | Explain how a flow works or what calls what. |
+| `bug` | Localize likely files for a symptom or failure. |
+| `architecture` | Inventory the files that implement a subsystem. |
+| `change` | Find the places likely affected by a cross-cutting edit. |
+| `skip` | Avoid code retrieval for non-code prompts. |
 
 ```mermaid
 flowchart LR
-  Old["Old: R0 / R1 / R2"] --> Problem1["Prompt shape chosen too early"]
-  Old --> Problem2["Broad prompts over-injected"]
-  Old --> Problem3["Bug reports drifted into lexical noise"]
-  Problem1 --> New["New: Intent-Based Retrieval"]
-  Problem2 --> New
-  Problem3 --> New
-  New --> Lookup["lookup"]
-  New --> Trace["trace"]
-  New --> Bug["bug"]
-  New --> Architecture["architecture"]
-  New --> Change["change"]
-  Bug --> Evidence["Evidence-chain scoring"]
-  Architecture --> Summary["summary_only when weak"]
-  Trace --> Path["seed + graph path reconstruction"]
+  Query["Prompt"]
+  Mode{"Mode"}
+  Lookup["Exact lookup"]
+  Trace["Flow reconstruction"]
+  Bug["Symptom evidence"]
+  Arch["Layer coverage"]
+  Change["Affected surfaces"]
+
+  Query --> Mode
+  Mode --> Lookup
+  Mode --> Trace
+  Mode --> Bug
+  Mode --> Arch
+  Mode --> Change
+  Trace --> Resolver["Capability evidence"]
+  Arch --> Resolver
+  Change --> Resolver
+  Resolver --> Files["Selected files with provenance"]
+  Resolver --> Areas["Product areas used"]
+  Resolver --> Pages["Business pages used"]
 ```
 
-### Memory layer
+## Capability Evidence
 
-Persistent project memory across sessions. Stores feedback rules, project decisions, user preferences, and reference pointers. Memory search uses FTS5 with RRF scoring, recency decay, access frequency penalties, and type-based boosts.
+Capability evidence is generic. It does not encode customer/project names or repository-specific file lists.
 
-### `reporecall lens` flags
+For trace, architecture, and change prompts, Reporecall can:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--project <path>` | auto-detect | Project root path |
-| `--open` | - | Open generated HTML in default browser (or the served URL when combined with `--serve`) |
-| `--serve` | - | Serve the dashboard over HTTP on localhost |
-| `--port <n>` | `7878` | Port for `--serve` |
-| `--output <path>` | `.memory/lens.html` | Custom output path |
-| `--json` | - | Output raw `DashboardData` JSON instead of HTML |
-| `--max-communities <n>` | `20` | Max communities to include |
-| `--max-hubs <n>` | `15` | Max hub nodes to include |
-| `--max-surprises <n>` | `20` | Max surprises to include |
+- use matching wiki capability pages as anchors;
+- hydrate their `relatedFiles` into real code chunks;
+- add import and call neighbors from the graph;
+- keep lookup prompts small and exact;
+- suppress test/spec noise unless the query asks for tests.
 
----
+Returned file records can include:
 
-## CLI
+- `selectionSource`
+- `selectionReason`
+- `wikiPagesUsed`
+- `missingEvidence`
+
+## Business Context Export
+
+Reporecall exposes product-language context in three places:
+
+- `reporecall lens --json` for whole-project `productAreas[]` and `businessPages[]`.
+- `reporecall explain --json` for query-specific `productAreasUsed[]` and `businessPagesUsed[]`.
+- MCP tools `list_product_areas` and `business_context_query` for live agent access.
+
+These surfaces are additive product-language views over code evidence for external tools.
+
+The schema is documented in [docs/business-context-schema.md](docs/business-context-schema.md).
+
+Key fields include:
+
+- `productAreas[]`
+- `displayName`
+- `displaySummary`
+- `areaKind`
+- `displayQuality`
+- `presentationSafe`
+- `presentationIssues`
+- `capability`
+- `actor`
+- `trigger`
+- `businessTerms`
+- `userActions`
+- `decisionPoints`
+- `sideEffects`
+- `businessOutcome`
+- `dataConcepts`
+- `technicalEvidence`
+- `externalSystems`
+- `supportingFiles`
+- `confidenceLabel`
+
+Business context is not fed back into core search as hard-coded rules. Hooks may append a small budgeted product-area evidence section for trace, architecture, and change prompts, but lookup prompts stay small and code retrieval remains grounded in source/wiki/graph evidence. Consumers should treat the business layer as a read-only product map with supporting evidence.
+
+## Lens
 
 ```bash
-reporecall init          # Create .memory/, hooks, MCP config
-reporecall index         # Index the codebase
-reporecall serve         # Start daemon + file watcher
-reporecall lens          # Generate interactive architecture dashboard
-reporecall explain       # Inspect retrieval for a query
-reporecall mcp           # Run as MCP server (stdio)
-reporecall doctor        # Health checks
-reporecall search        # Direct search
-reporecall stats         # Index statistics
-reporecall graph         # Call graph queries
-reporecall conventions   # Detected conventions
+reporecall lens --serve --open
+reporecall lens --json > lens.json
 ```
 
----
+The HTML dashboard shows:
+
+- overview stats;
+- Louvain communities;
+- high-degree hub nodes;
+- surprising cross-module edges;
+- generated wiki pages;
+- product areas that group related business capability pages;
+- business capability pages with product-facing summaries and supporting files.
+
+The JSON export also includes machine-readable wiki graph data, `productAreas[]`, and `businessPages[]` for other tools.
+
+## Comparison
+
+Reporecall is a context layer, not a full AI editor, hosted model, or PR review SaaS. It is designed to improve the context that Claude Code, Codex, MCP clients, and other local coding agents receive.
+
+For a paid/free competitor comparison across context layers, memory/rules, code graph support, business/product context, and local-first behavior, see [docs/reporecall-context-layer-competitor-comparison.md](docs/reporecall-context-layer-competitor-comparison.md).
 
 ## MCP Tools
 
-### Code search & navigation
+Reporecall exposes a local MCP server:
 
-| Tool | Description |
-|------|-------------|
-| `search_code` | Multi-signal code search across the indexed codebase |
-| `find_callers` | Find all callers of a function |
-| `find_callees` | Find all functions called by a function |
-| `get_symbol` | Get full source of a symbol by name |
-| `get_imports` | Get import/dependency graph for a file |
-| `explain_flow` | Trace execution path: callers -> seed -> callees |
-| `build_stack_tree` | Full call hierarchy tree (configurable depth) |
-| `resolve_seed` | Resolve a query to the best matching symbol |
+```bash
+reporecall mcp --project .
+```
 
-### Topology & architecture
+Use this server from Codex or any MCP-compatible client when you want code search, flow navigation, business context, wiki pages, memory, or topology data without relying on Claude Code hooks.
 
-| Tool | Description |
-|------|-------------|
-| `get_communities` | Module clusters with cohesion scores and auto-generated labels |
-| `get_hub_nodes` | Most-connected nodes (architectural hubs) in the call graph |
-| `get_surprises` | Unexpected cross-boundary connections ranked by surprise score |
-| `suggest_investigations` | Auto-generated investigation questions about weak spots |
+Main tool groups:
 
-### Wiki
-
-| Tool | Description |
-|------|-------------|
-| `wiki_query` | Search wiki pages by topic |
-| `wiki_read` | Read a specific wiki page |
-| `wiki_write` | Create or update a wiki page |
-| `wiki_check_staleness` | Find wiki pages that may be outdated |
-
-### Memory
-
-| Tool | Description |
-|------|-------------|
-| `recall_memories` | Retrieve memories relevant to a query |
-| `store_memory` | Save a new memory |
-| `forget_memory` | Remove a memory |
-| `list_memories` | List all stored memories |
-| `explain_memory` | Explain why a memory was returned |
-| `compact_memories` | Merge redundant memories |
-| `clear_working_memory` | Clear ephemeral working memories |
-
-### Index management
-
-| Tool | Description |
-|------|-------------|
-| `index_codebase` | Trigger a full or incremental re-index |
-| `get_stats` | Index statistics (files, symbols, chunks) |
-| `clear_index` | Reset the index |
-
----
+| Group | Tools |
+| --- | --- |
+| Code search | `search_code`, `get_symbol`, `resolve_seed` |
+| Flow/navigation | `find_callers`, `find_callees`, `explain_flow`, `build_stack_tree`, `get_imports` |
+| Business context | `list_product_areas`, `business_context_query` |
+| Topology | `get_communities`, `get_hub_nodes`, `get_surprises`, `suggest_investigations` |
+| Wiki | `wiki_query`, `wiki_read`, `wiki_write`, `wiki_check_staleness` |
+| Memory | `recall_memories`, `store_memory`, `forget_memory`, `list_memories`, `explain_memory`, `compact_memories`, `clear_working_memory` |
+| Index/context lifecycle | `refresh_context`, `get_lens_data`, `index_codebase`, `get_stats`, `clear_index` |
 
 ## Configuration
 
-Configuration lives in `.memory/config.json` in your project root.
+Configuration lives in `.memory/config.json`.
 
 | Key | Default | Description |
-|-----|---------|-------------|
-| `wikiBudget` | `400` | Max tokens for wiki injection per prompt |
-| `wikiMaxPages` | `3` | Max wiki pages injected per prompt |
-| `memoryBudget` | `500` | Max tokens for memory injection per prompt |
-| `shutdownTimeoutMs` | `10000` | Graceful shutdown timeout (1000-60000) |
-| `embeddingProvider` | `"keyword"` | Embedding backend (`keyword` for FTS-only) |
+| --- | --- | --- |
+| `embeddingProvider` | `"keyword"` | Retrieval backend. `keyword` is local FTS-only. |
+| `wikiBudget` | `400` | Max tokens for wiki injection per prompt. |
+| `wikiMaxPages` | `3` | Max wiki pages injected per prompt. |
+| `memoryBudget` | `500` | Max tokens for memory injection per prompt. |
+| `capabilityEvidence` | `true` | Use code/wiki/graph evidence to select related files for trace, architecture, and change prompts. |
+| `genericCapabilityHydration` | `true` | Hydrate broad inventory evidence into prompt context for questions like "which files implement...". |
+| `topologyEnabled` | `true` | Run topology/community analysis after indexing. |
+| `topologyMaxChunks` | `50000` | Skip full topology graph construction above this indexed chunk count. |
+| `shutdownTimeoutMs` | `10000` | Graceful shutdown timeout in milliseconds. |
 
----
+Assistant/client instruction files such as `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `.codex/**`, and `.mcp.json` are ignored by default as code evidence.
 
-## Showcase
+## CLI Reference
 
-Real output from a 1,140-file production codebase.
-
-<details>
-<summary><code>get_communities</code> - Module clusters with cohesion scores</summary>
-
-```json
-[
-  {
-    "id": "c_0",
-    "nodeCount": 305,
-    "cohesion": 0.01,
-    "label": "api: json, getCorsHeaders"
-  },
-  {
-    "id": "c_1",
-    "nodeCount": 283,
-    "cohesion": 0.01,
-    "label": "components: updateNode, runFromNode"
-  },
-  {
-    "id": "c_2",
-    "nodeCount": 252,
-    "cohesion": 0.01,
-    "label": "components: observe, disconnect"
-  },
-  {
-    "id": "c_3",
-    "nodeCount": 227,
-    "cohesion": 0.02,
-    "label": "components+hooks: success, useAuth"
-  },
-  {
-    "id": "c_4",
-    "nodeCount": 220,
-    "cohesion": 0.02,
-    "label": "lib: isArray, updateNodeRun"
-  },
-  {
-    "id": "c_5",
-    "nodeCount": 153,
-    "cohesion": 0.02,
-    "label": "api: assertEquals, sanitizePrompt"
-  },
-  {
-    "id": "c_6",
-    "nodeCount": 132,
-    "cohesion": 0.02,
-    "label": "lib: warn, FloatingActionBar"
-  },
-  {
-    "id": "c_7",
-    "nodeCount": 121,
-    "cohesion": 0.02,
-    "label": "components: render, useTheme"
-  }
-]
+```bash
+reporecall init
+reporecall index
+reporecall serve
+reporecall lens
+reporecall explain "query"
+reporecall search "query"
+reporecall mcp
+reporecall doctor
+reporecall stats
+reporecall graph
+reporecall conventions
 ```
-
-Automatically detects tightly-coupled module clusters using Louvain community detection on the call graph.
-
-</details>
-
-<details>
-<summary><code>get_hub_nodes</code> - Architectural hubs (most-connected functions)</summary>
-
-```
- #  Name              File                                            Edges  Community
- 1  json              api/gateway/index.ts                               135  api
- 2  updateNode        lib/execution/workflow/WorkflowStore.ts            127  components
- 3  isArray           lib/flow/typeGuards.ts                              94  lib
- 4  success           lib/events/eventBus.ts                              70  hooks
- 5  render            components/ErrorBoundary.tsx                        62  components
- 6  asNumber          lib/editor/effects/registry.ts                      55  editor
- 7  runFromNode       lib/execution/workflow/starter.ts                   52  components
- 8  getCorsHeaders    api/_shared/cors.ts                                 50  api
- 9  sanitizePrompt    api/_shared/prompt-sanitizer.ts                     46  api
-10  processStep       lib/flow/graphBuilder/core/router.ts                44  graphBuilder
-```
-
-Identifies functions that would cause the most disruption if changed - the structural load-bearing walls of your codebase.
-
-</details>
-
-<details>
-<summary><code>get_surprises</code> - Unexpected cross-boundary connections</summary>
-
-```
-Score  Source → Target                                           Why
-  7    saveToLibrary → ExtensionCard                             weakly-resolved, crosses backend ↔ UI,
-       (job-completion.ts → card.tsx)                            crosses execution surfaces
-
-  6    transcribe → TranscriptionPanel                           weakly-resolved, crosses services ↔ components
-       (transcription-service.ts → transcription-panel.tsx)
-
-  6    useToast → Toaster                                        crosses hooks ↔ components,
-       (use-toast.ts → toaster.tsx)                              peripheral node reaches hub
-
-  6    getExecutionPathNodeIds → getDownstreamNodeIds            bridges communities 11 → 1,
-       (useWorkflowCost.ts → graphTraversal.ts)                 crosses state ↔ shared execution surfaces
-
-  6    compileSystemPrompt → memo_handler                        weakly-resolved, crosses lib ↔ components
-       (promptTemplates.ts → PromptNode.tsx)
-```
-
-Surfaces connections that shouldn't exist or deserve closer inspection - potential coupling violations, false positives in the graph, or legitimate but non-obvious architectural bridges.
-
-</details>
-
-<details>
-<summary><code>suggest_investigations</code> - Auto-generated investigation questions</summary>
-
-```
-Type              Question
-weak_resolution   What is the exact relationship between RecoveryPollingQueue
-                  and useRecovery? (alias_path across services ↔ hooks)
-
-weak_resolution   What is the exact relationship between useTemplates and
-                  EditorSidebar? (alias_path across hooks ↔ components)
-
-bridge_node       Why does `cn` connect 8 structurally distant communities?
-                  (High betweenness centrality)
-
-bridge_node       Why does `updateNode` connect Inspector, ActionBar,
-                  isArray, and useAuth? (Bridges distant modules)
-
-verify_inferred   Are the 18 weakly-resolved relationships involving `error`
-                  actually correct? (Hub node with alias-resolved edges)
-
-isolated_nodes    What connects defineConfig_handler, SitemapEntry,
-                  generateSitemapXml to the rest of the system?
-                  (5 weakly-connected nodes - possible documentation gaps)
-```
-
-Tells you where to look next - no prompt engineering required.
-
-</details>
-
-<details>
-<summary><code>explain_flow</code> - Trace execution across files</summary>
-
-Query: `handleRetryAction`
-
-```
-Callers (who invokes this):
-  ← handleBatchExecution           (batchProcessor.ts)
-  ← triggerDownstreamNodes         (downstreamTrigger.ts)
-  ← executeNode                    (nodeExecutor.ts)
-
-Seed:
-  ► handleRetryAction              (retryManager.ts:126-196)
-    Extracts retry action, clears downstream execution state,
-    resets node statuses, re-executes from target node
-
-Callees (what this invokes):
-  → getDownstreamNodeIds           (graphTraversal.ts:15-32)
-  → addLog                         (workflowStore.ts:134-139)
-```
-
-Returns the full function source of the seed plus caller/callee code - one MCP call, 899 tokens, 6 files traced.
-
-</details>
-
-<details>
-<summary><code>build_stack_tree</code> - Full call hierarchy</summary>
-
-Query: `runWorkflow` (depth: 2, direction: both)
-
-```
-                 StartNode.tsx (memo_handler)
-                 InpaintNode.tsx (useCallback_handler)
-                 ActionBar.tsx
-                        │
-                        ▼
-              ► runWorkflow (starter.ts)
-                        │
-            ┌───────────┼───────────┐
-            ▼           ▼           ▼
-     ensureFlowSaved  addLog   workflowStarted
-     (ensureFlowSaved.ts) (workflowStore.ts) (activityLogger.ts)
-            │                       │
-       ┌────┴────┐                  ▼
-       ▼         ▼              info (logger.ts)
- serializeFlow  saveToDatabase
- (serialization.ts) (dataService.ts)
-```
-
-10 nodes, 9 edges, 2 levels deep. Pure static analysis - zero LLM cost.
-
-</details>
-
----
 
 ## Changelog
 
-### v0.6.2 - Lens Architecture Dashboard
+### v0.7.1 - Self-Evaluation Patch
 
-This release adds `reporecall lens`, an interactive architecture dashboard that visualizes your codebase structure as a self-contained HTML file, and promotes the wiki layer into a first-class selling point alongside it.
+Patch release driven by reporecall's self-evaluation on its own codebase. Tightens
+seven defects in retrieval, capability evidence, indexing, and business-context
+routing without breaking any public API.
 
-**Lens dashboard.** Five-tab HTML dashboard generated from existing index data: Overview (stats + D3 chord diagram), Communities (expandable Louvain cluster cards), Hubs (caller/callee cards), Surprises (sortable table + investigation questions), Wiki (browsable auto-generated pages). Every tab includes a legend explaining what the data means. No external server needed — one HTML file with inline CSS, JS, and D3.js.
+- `reporecall index` now generates deterministic wiki/business pages at the end of an index pass so `list_product_areas`/`business_context_query` work without `serve`. Pass `--no-wiki` to skip.
+- Intent classifier routes "what files would I need to change" and similar phrasings to change/architecture mode.
+- Bulk file deletion in the indexer now uses a single transaction, fixing a SIGILL on large delete sets.
+- Wiki/business `scoreFamilyEvidence` no longer publishes false auth capability pages for reporecall's own infra directories, while keeping downstream React `useAuth`/`useSession` hooks classified as authentication.
+- Lookup primary seeds must share at least two non-generic anchors with the query to be returned as a high-score exact hit.
+- Architecture/change queries drop test files entirely (vs the prior multiplicative penalty) unless the query mentions test/spec/e2e/fixture/mock.
+- Capability evidence resolver now runs for lookup mode and gates non-family queries on actual file-path anchor overlap.
+- Discovered product areas can override a weak fixed match only when their score exceeds it by at least `DISCOVERED_OVERRIDE_MARGIN` (3).
 
-**Lens `--serve` mode.** New `--serve` / `--port <n>` flags spin up a minimal local HTTP server (default `http://localhost:7878`) so you can open the dashboard as a URL rather than a `file://` path. Combines with `--open` to launch it straight into your browser. Cross-platform (macOS/Linux/Windows), graceful Ctrl+C shutdown, no caching so reruns show fresh data.
+### v0.7.0 - Capability Evidence and Business Context Export
 
-**Wiki generation on lens.** `reporecall lens` auto-generates wiki pages from topology before building the dashboard, so wiki content is always fresh without needing `reporecall index`.
+This release improves trace and architecture recall without adding project-specific rules.
 
-**Community membership fix.** Fixed a bug where wiki community pages were never generated because `getCommunityForChunk` was called with symbol names instead of chunk IDs.
+- Added generic capability evidence resolution for trace, architecture, and change prompts.
+- Business wiki pages can now act as evidence anchors without being blindly injected into prompt text.
+- Wiki `relatedFiles` are hydrated into concrete source chunks when the query warrants it.
+- Added `selectionSource`, `selectionReason`, and `wikiPagesUsed` metadata to selected files/chunks.
+- Added `capabilityEvidence` and `genericCapabilityHydration` config flags.
+- Added deterministic business capability wiki generation and stable `productAreas[]` / `businessPages[]` exports in `lens --json`.
+- Added `areaKind` metadata for product areas so consumers can distinguish fixed, discovered, and fallback groupings.
+- Added `displayQuality`, `presentationSafe`, and `presentationIssues` so business-facing tools can filter weak generated labels without losing technical evidence.
+- Added Lens Product Areas and Business tabs for generated business capability pages.
+- Added MCP business-context tools (`list_product_areas`, `business_context_query`), the lifecycle tool `refresh_context`, and the Lens export tool `get_lens_data`.
+- Added a large-repo stress harness (`npm run stress:large-repo`, `npm run stress:large-repo:ci`) and chunk-count guardrails on topology/Lens graph construction.
+- Documented Codex support through MCP and direct CLI usage.
+- Added [docs/business-context-schema.md](docs/business-context-schema.md) for external utilities that want product-language context.
+- Fixed rarest-term FTS fallback so zero-document terms do not dominate query planning.
+- Fixed Lens metadata to use the target project root for `projectName` instead of the current shell directory.
+- Filtered assistant/client instruction files from code evidence by default.
+- Removed project/customer-specific examples from source tests and comments.
 
-**Reranker removal.** Removed the local cross-encoder reranker. The retrieval pipeline now uses hydration only. The `rerank` config option is deprecated and ignored.
-
-**Search intent expansion.** New regex patterns improve query routing for workflow lifecycle, bot systems, billing/generation cross-domain, and job orchestration queries.
-
-**Concept family expansion.** New "workflow" and "bot" concept families. Expanded "billing" (credits) and "queue" (poll, status) families.
-
-**Hybrid search tuning.** Broader trace-aware prepend for bot/webhook/queue/workflow queries. New seed scoring penalty for generic resolved file targets.
-
-<details>
-<summary>v0.6.1 - Wiki Startup Generation & Version Sync</summary>
-
-**Wiki startup generation.** Wiki pages now auto-generate on MCP server and daemon startup, not just during `index_codebase`. Ensures wiki context is always available without requiring a full re-index.
-
-**Wiki generator freshness guard.** `writePage` now checks `sourceCommit` from disk to skip unchanged pages. Fixed `surprisesPage` flag not being set on the generation result.
-
-**Version sync.** `package-lock.json` synced to match `package.json`.
-
-</details>
-
-<details>
-<summary>v0.6.0 - Wiki Layer & Memory Precision</summary>
-
-This release adds an **always-on wiki layer** for persistent codebase knowledge and fixes three memory retrieval bugs that caused noisy or missing context injection.
-
-**Wiki layer.** Auto-generated wiki pages from codebase topology are indexed alongside code and injected into every prompt context within a configurable token budget.
-
-**5 new MCP tools** for wiki management: `wiki_query`, `wiki_read`, `wiki_write`, `wiki_check_staleness`.
-
-**FTS5 phrase query fix.** Stop words ("how", "does", "work") were included in phrase queries, causing FTS5 to match only exact phrases and short-circuit before AND/OR fallback. Queries like "how does image generation work" now correctly find wiki pages matching "image generation".
-
-**Memory type isolation.** Wiki pages (type `wiki`) no longer leak into memory search results. The memory search pipeline now explicitly filters to `user`, `feedback`, `project`, and `reference` types.
-
-**Access count penalty.** Over-accessed memories are now penalized: >15 accesses -> 0.5x score, >8 accesses -> 0.75x. Prevents generic feedback rules from drowning out topic-specific results.
-
-**Tighter relevance threshold.** Raised from 0.70 to 0.85, filtering out low-relevance tail results.
-
-Benchmark results (1,140-file production codebase, 30 queries):
-
-| Layer  | Precision | Hit Rate | Notes                                  |
-| ------ | --------- | -------- | -------------------------------------- |
-| Code   | 57%       | 100%     | Always injected                        |
-| Wiki   | 100%      | 50%      | Only injects when relevant pages exist |
-| Memory | 73%       | ~60%     | After access penalty + threshold fix   |
-
-</details>
-
-<details>
-<summary>v0.5.0 - Topology-Aware Search & Architecture Decomposition</summary>
-
-Added **codebase topology analysis** and decomposed the search engine into focused strategy modules.
-
-**Topology analysis pipeline.** After each index, reporecall runs Louvain community detection on the call graph, identifies architectural hub nodes, scores surprising cross-boundary connections, and generates investigation questions. Results are persisted in SQLite and injected into prompt context automatically.
-
-**4 new MCP tools** for exploring codebase structure: `get_communities`, `get_hub_nodes`, `get_surprises`, `suggest_investigations`.
-
-**Community-aware search scoring.** Results from the same Louvain community as the query seed receive a locality boost, improving architecture and trace queries.
-
-**Daemon hardening.** Index scheduler queues are bounded at 50k entries. File watcher has backpressure at 10k pending events. Shutdown timeout is now configurable via `shutdownTimeoutMs`.
-
-**Hook request validation.** All hook endpoints now validate request bodies with Zod schemas, returning 400 with details on malformed payloads instead of silently misbehaving.
-
-**Search architecture decomposition.** The monolithic `hybrid.ts` (~6,800 lines) was split into 7 focused modules: `pipeline-core`, `bug-strategy`, `architecture-strategy`, `trace-strategy`, `lookup-strategy`, `context-prioritization`, and the thin `hybrid` orchestrator. No public API changes.
-
-Other improvements:
-- Tree-sitter parse timeout (5s) prevents hangs on malformed files
-- `reporecall mcp` warns when a daemon is already running (SQLite lock contention risk)
-- Ollama health check added to the `mcp` command
-- Bug intent classifier now recognizes plural forms ("bugs", "issues", "problems")
-- New dependencies: `graphology`, `graphology-communities-louvain` for graph analysis
-
-</details>
-
-<details>
-<summary>v0.4.1 - Claude Hook Compatibility Fix</summary>
-
-This patch fixes Claude hook token lookup for real `claude -p` / headless sessions. Reporecall-generated hooks now fall back to `$PWD` when `$CLAUDE_PROJECT_DIR` is unavailable, so injected context reaches Claude reliably in local CLI sessions after re-running `reporecall init`.
-
-</details>
-
-<details>
-<summary>v0.4.0 - Intent-Based Retrieval Overhaul</summary>
-
-This release replaces the old `R0 / R1 / R2` routing model with intent-based query modes. The old model described retrieval shape (exact, trace, broad), the new model describes what the user actually wants:
-
-| Mode           | Purpose                                                               |
-| -------------- | --------------------------------------------------------------------- |
-| `lookup`       | Exact symbol, file, endpoint, or module lookup                        |
-| `trace`        | Implementation path - "how does X work", "what calls Y"               |
-| `bug`          | Causal debugging - symptom descriptions, "why does this fail"         |
-| `architecture` | Broad inventory - "which files implement...", "full flow from A to B" |
-| `change`       | Cross-cutting edits - "add logging across the auth flow"              |
-| `skip`         | Meta/chat/non-code prompts                                            |
-
-Other changes in this release: streaming windowed indexing, adaptive embedding batches, semantic feature extraction, `summary_only` delivery for low-confidence bundles, PreToolUse hook guidance, and SQLite ABI self-repair.
-
-</details>
-
----
+See [CHANGELOG.md](CHANGELOG.md) for the full package history.
 
 ## Development
 
 ```bash
 npm install
-npm run build
+npm run lint
 npm test
+npm run build
 ```
 
----
+Useful verification:
 
-## Acknowledgments
-
-The wiki layer is inspired by [Andrej Karpathy's LLM Wiki](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-knowledge-base-claude-code) concept - organizing codebase knowledge as structured markdown files that LLMs can query efficiently.
+```bash
+npm test -- --run test/search test/hooks test/wiki test/visualize
+npm run benchmark -- --provider keyword --output /tmp/reporecall-keyword.json
+npm run stress:large-repo -- --files 10000 --changes 1000 --output /tmp/reporecall-large-repo.json
+npm run stress:large-repo:ci
+```
 
 ## License
 

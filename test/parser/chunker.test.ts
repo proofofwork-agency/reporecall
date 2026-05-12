@@ -112,7 +112,7 @@ describe("chunker", () => {
     const filePath = join(dir, "run-e2e-tests.sh");
     const content = `#!/bin/bash
 
-echo "🧪 DUTO E2E Test Runner"
+echo "🧪 Project E2E Test Runner"
 MODE=\${1:-"all"}
 
 case $MODE in
@@ -137,7 +137,7 @@ esac
       expect(chunks[0].kind).toBe("file");
       expect(chunks[0].filePath).toBe("run-e2e-tests.sh");
       expect(chunks[0].language).toBe("bash");
-      expect(chunks[0].content).toContain("🧪 DUTO E2E Test Runner");
+      expect(chunks[0].content).toContain("🧪 Project E2E Test Runner");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

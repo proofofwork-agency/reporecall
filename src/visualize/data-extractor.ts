@@ -4,9 +4,11 @@
  */
 
 import { basename } from "path";
+import { readFileSync } from "fs";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { MemoryStore } from "../storage/memory-store.js";
 import { buildAdjacencyGraph } from "../analysis/graph-builder.js";
+import { buildProductAreas, deriveBusinessDisplayName, evaluateBusinessPresentation } from "../business/product-areas.js";
 import type {
   DashboardData,
   DashboardMeta,
@@ -15,6 +17,9 @@ import type {
   SurpriseViz,
   QuestionViz,
   WikiPageViz,
+  WikiGraphEdgeViz,
+  WikiGraphNodeViz,
+  BusinessPageViz,
   MemberViz,
   CrossEdgeViz,
   CallerCalleeViz,
@@ -29,6 +34,8 @@ interface ExtractOptions {
   maxCommunities?: number;
   maxHubs?: number;
   maxSurprises?: number;
+  maxGraphChunks?: number;
+  projectRoot?: string;
 }
 
 export function extractDashboardData(
@@ -39,13 +46,18 @@ export function extractDashboardData(
   const maxCommunities = opts.maxCommunities ?? 20;
   const maxHubs = opts.maxHubs ?? 15;
   const maxSurprises = opts.maxSurprises ?? 20;
+  const maxGraphChunks = opts.maxGraphChunks ?? 50_000;
+  const stats = metadata.getStats();
+  const includeGraphDetails = stats.totalChunks <= maxGraphChunks;
 
   // --- Build adjacency graph for degree/cross-edge computation ---
-  const graph = buildAdjacencyGraph(metadata);
+  const graph = includeGraphDetails
+    ? buildAdjacencyGraph(metadata)
+    : { nodes: new Map(), adjacency: new Map(), nodeCount: 0, edgeCount: 0 };
 
   // --- Communities ---
   const rawCommunities = metadata.getAllCommunities(maxCommunities);
-  const allChunks = metadata.getAllChunks();
+  const allChunks = includeGraphDetails ? metadata.getAllChunks() : [];
 
   // Build chunk→community and community→chunks maps (use chunk.id for DB lookup)
   const chunkCommunityMap = new Map<string, string>();
@@ -221,21 +233,17 @@ export function extractDashboardData(
 
   // --- Wiki pages ---
   const wikiPages: WikiPageViz[] = [];
+  const wikiGraphNodes: WikiGraphNodeViz[] = [];
+  const wikiGraphEdges: WikiGraphEdgeViz[] = [];
+  const businessPages: BusinessPageViz[] = [];
   if (memoryStore) {
     const rawPages = memoryStore.getByType("wiki");
     for (const page of rawPages) {
       const links = memoryStore.getWikiLinks(page.name);
       const backlinks = memoryStore.getWikiBacklinks(page.name);
 
-      // Extract pageType from content or name pattern
-      let pageType = "unknown";
-      if (page.name.startsWith("community-")) pageType = "community";
-      else if (page.name.startsWith("hub-")) pageType = "hub";
-      else if (page.name.startsWith("surprises-")) pageType = "module";
-      else if (page.name.startsWith("flow-")) pageType = "flow";
-      else if (page.name.startsWith("exploration-")) pageType = "exploration";
-
-      wikiPages.push({
+      const pageType = detectWikiPageType(page.name, page.filePath);
+      const wikiPage: WikiPageViz = {
         name: page.name,
         pageType,
         description: page.description,
@@ -247,20 +255,38 @@ export function extractDashboardData(
         relatedFiles: page.relatedFiles ?? [],
         confidence: page.confidence ?? 0,
         sourceCommit: "", // extracted from frontmatter on disk, not stored in DB
-      });
+      };
+
+      wikiPages.push(wikiPage);
+      wikiGraphNodes.push(toWikiGraphNode(wikiPage));
+      for (const link of links) {
+        wikiGraphEdges.push({ source: page.name, target: link, relation: "wikilink" });
+      }
+      if (pageType === "business") {
+        businessPages.push(toBusinessPageViz(wikiPage));
+      }
     }
   }
+  const productAreas = buildProductAreas(businessPages);
 
   // --- Meta ---
-  const stats = metadata.getStats();
   const meta: DashboardMeta = {
-    projectName: basename(process.cwd()),
+    projectName: basename(opts.projectRoot ?? process.cwd()),
     generatedAt: new Date().toISOString(),
     totalSymbols: stats.totalChunks,
     totalFiles: stats.totalFiles,
     totalEdges: graph.edgeCount,
+    graphDetails: {
+      included: includeGraphDetails,
+      reason: includeGraphDetails ? "within_limit" : "too_many_chunks",
+      totalChunks: stats.totalChunks,
+      maxGraphChunks,
+      edgeCount: graph.edgeCount,
+    },
     communityCount: rawCommunities.length,
     wikiPageCount: wikiPages.length,
+    businessPageCount: businessPages.length,
+    productAreaCount: productAreas.length,
     hubCount: rawHubs.length,
     surpriseCount: rawSurprises.length,
   };
@@ -272,10 +298,184 @@ export function extractDashboardData(
     surprises,
     questions,
     wikiPages,
+    wikiGraphNodes,
+    wikiGraphEdges: wikiGraphEdges.filter((edge) =>
+      wikiGraphNodes.some((node) => node.name === edge.source) &&
+      wikiGraphNodes.some((node) => node.name === edge.target)
+    ),
+    businessPages,
+    productAreas,
     chordMatrix,
     chordLabels: rawCommunities.map((c) => c.label ?? `c_${c.id}`),
     chordColors: rawCommunities.map((c) => communityColorMap.get(c.id) ?? "#888"),
   };
+}
+
+function toWikiGraphNode(page: WikiPageViz): WikiGraphNodeViz {
+  return {
+    name: page.name,
+    pageType: page.pageType,
+    title: page.pageType === "business"
+      ? firstNonEmpty(extractSectionText(page.content, "Capability"), humanizeSlug(page.name))
+      : humanizeSlug(page.name),
+    summary: firstNonEmpty(page.summary, page.description),
+    confidence: page.confidence,
+    relatedFiles: page.relatedFiles.slice(0, 6),
+    relatedSymbols: page.relatedSymbols.slice(0, 8),
+  };
+}
+
+function detectWikiPageType(name: string, filePath: string): string {
+  const storedPageType = readFrontmatterPageType(filePath);
+  if (storedPageType) return storedPageType;
+  if (name.startsWith("business-")) return "business";
+  if (name.startsWith("community-")) return "community";
+  if (name.startsWith("hub-")) return "hub";
+  if (name.startsWith("surprises-")) return "module";
+  if (name.startsWith("flow-")) return "flow";
+  if (name.startsWith("exploration-")) return "exploration";
+  return "unknown";
+}
+
+function readFrontmatterPageType(filePath: string): string | null {
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const match = raw.match(/^---[\s\S]*?\npageType:\s*"?([a-z-]+)"?/m);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
+  const capability = firstNonEmpty(extractSectionText(page.content, "Capability"), humanizeSlug(page.name));
+  const businessTerms = extractBulletSection(page.content, "Business terms");
+  const userActions = extractBulletSection(page.content, "User-visible actions");
+  const businessOutcome = firstNonEmpty(extractSectionText(page.content, "Business outcome"), page.summary);
+  const dataConcepts = extractBulletSection(page.content, "Business / Data Concepts");
+  const displayName = deriveBusinessDisplayName({
+    name: page.name,
+    capability,
+    businessTerms,
+    dataConcepts,
+    supportingSymbols: page.relatedSymbols,
+  });
+  const displaySummary = deriveBusinessDisplaySummary(displayName, page.summary, businessOutcome, userActions, dataConcepts);
+  const presentation = evaluateBusinessPresentation({
+    name: page.name,
+    capability,
+    displayName,
+    displaySummary,
+    businessTerms,
+    userActions,
+    businessOutcome,
+    dataConcepts,
+    supportingSymbols: page.relatedSymbols,
+    confidence: page.confidence,
+  });
+  return {
+    name: page.name,
+    capability,
+    displayName,
+    description: page.description,
+    summary: page.summary,
+    displaySummary,
+    ...presentation,
+    actor: firstNonEmpty(extractSectionText(page.content, "Actor"), "Product user"),
+    trigger: firstNonEmpty(extractSectionText(page.content, "Trigger"), "A request enters this capability."),
+    businessTerms,
+    userActions,
+    decisionPoints: extractBulletSection(page.content, "Key decision points"),
+    sideEffects: extractBulletSection(page.content, "State changes and side effects"),
+    businessOutcome,
+    dataConcepts,
+    externalSystems: extractBulletSection(page.content, "External systems"),
+    confidence: page.confidence,
+    confidenceLabel: page.confidence >= 0.8 ? "high" : page.confidence >= 0.68 ? "medium" : "low",
+    supportingFiles: page.relatedFiles,
+    supportingSymbols: page.relatedSymbols,
+    technicalEvidence: {
+      files: page.relatedFiles,
+      symbols: page.relatedSymbols,
+    },
+    links: page.links,
+    content: page.content,
+  };
+}
+
+function deriveBusinessDisplaySummary(
+  displayName: string,
+  summary: string,
+  businessOutcome: string,
+  userActions: string[],
+  dataConcepts: string[]
+): string {
+  const outcome = cleanBusinessText(businessOutcome);
+  if (outcome) return `${displayName}: ${outcome}`;
+  const action = userActions.map(cleanBusinessText).find(Boolean);
+  if (action) return `${displayName}: Users can ${lowercaseSentence(action)}.`;
+  const cleanSummary = cleanBusinessText(summary);
+  if (cleanSummary) return cleanSummary;
+  const concepts = dataConcepts.map(cleanBusinessText).filter(Boolean).slice(0, 3);
+  if (concepts.length > 0) return `${displayName}: Supports ${concepts.join(", ")}.`;
+  return `${displayName}: Product behavior inferred from code evidence.`;
+}
+
+function cleanBusinessText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/`[^`\s]*\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)(?::\d+(?:-\d+)?)?`/gi, "the product implementation")
+    .replace(/\b(?:src|apps|packages|backend|frontend)\/[A-Za-z0-9_./-]+/gi, "the product implementation")
+    .replace(/\b(?:backend|frontend):\s*/gi, "")
+    .replace(/\b[A-Za-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)\b/gi, "the product implementation")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function lowercaseSentence(value: string): string {
+  if (!value) return value;
+  return `${value[0]!.toLowerCase()}${value.slice(1).replace(/\.$/, "")}`;
+}
+
+function extractSectionText(content: string, heading: string): string {
+  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
+  if (!match?.[1]) return "";
+  return match[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("- "))
+    .join(" ")
+    .trim();
+}
+
+function extractBulletSection(content: string, heading: string): string[] {
+  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
+  if (!match?.[1]) return [];
+  return match[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2).trim())
+    .filter((line) => line.length > 0);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function humanizeSlug(name: string): string {
+  return name
+    .replace(/^business-/, "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : part)
+    .join(" ");
+}
+
+function firstNonEmpty(primary: string, fallback: string): string {
+  return primary.trim() || fallback;
 }
 
 function slugify(label: string): string {

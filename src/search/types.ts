@@ -13,6 +13,9 @@ export interface SearchResult {
   parentName?: string;
   language: string;
   hookScore?: number;
+  selectionSource?: string;
+  selectionReason?: string;
+  wikiPagesUsed?: string[];
 }
 
 export interface SearchOptions {

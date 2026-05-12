@@ -690,7 +690,8 @@ export function createDaemonServer(
             liveOptions.ftsStore,
             cachedSeedResult,
             totalChunks,
-            liveOptions.memorySearch
+            liveOptions.memorySearch,
+            liveOptions.memoryStore
           );
           queryMode = promptContext.resolvedQueryMode;
           const context = promptContext.context;

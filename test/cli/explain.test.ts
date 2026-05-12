@@ -105,4 +105,55 @@ describe('resolveExplainResult', () => {
     expect(result.selectedFiles?.length ?? 0).toBeGreaterThan(0)
     expect(result.selectedFiles?.some((file) => file.filePath === 'src/auth.ts')).toBe(true)
   })
+
+  it('includes product area matches in JSON explain results when wiki memory is available', async () => {
+    const result = await resolveExplainResult(
+      'which files implement authentication',
+      config,
+      pipeline,
+      undefined,
+      {
+        getByType: (type: string) => type === 'wiki'
+          ? [
+              {
+                name: 'business-user-authentication',
+                description: 'Business capability view',
+                summary: 'User Authentication grants protected access.',
+                content: `## Capability
+User Authentication
+
+## Actor
+Product user
+
+## Trigger
+User starts login or resumes a session.
+
+## Business terms
+- User
+- Session
+
+## User-visible actions
+- Sign in.
+
+## Business outcome
+Protected access is granted.
+
+## Business / Data Concepts
+- User
+- Session
+
+## External systems
+- Identity provider`,
+                relatedFiles: ['src/auth.ts'],
+                relatedSymbols: ['AuthService'],
+                confidence: 0.88,
+              },
+            ]
+          : [],
+      } as any
+    )
+
+    expect(result.productAreasUsed[0]?.name).toBe('Product Area: Authentication')
+    expect(result.businessPagesUsed[0]?.name).toBe('business-user-authentication')
+  })
 })

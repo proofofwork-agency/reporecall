@@ -31,6 +31,7 @@ export interface ManagedMemoryInput {
   sourceLayer?: WikiSourceLayer;
   links?: string[];
   sourceCommit?: string;
+  generatorVersion?: string;
 }
 
 export function safeMemorySlug(name: string): string {
@@ -73,6 +74,7 @@ export function buildMemoryMarkdown(input: ManagedMemoryInput): string {
     lines.push(`links: ${yamlString(JSON.stringify(input.links))}`);
   }
   if (input.sourceCommit) lines.push(`sourceCommit: ${yamlString(input.sourceCommit)}`);
+  if (input.generatorVersion) lines.push(`generatorVersion: ${yamlString(input.generatorVersion)}`);
 
   lines.push("---", "", input.content.trim(), "");
   return lines.join("\n");

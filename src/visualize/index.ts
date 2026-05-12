@@ -22,6 +22,7 @@ export async function generateVisualization(opts: LensOptions): Promise<{
 }> {
   const projectRoot = opts.projectRoot || detectProjectRoot(process.cwd());
   const config = loadConfig(projectRoot);
+  const report = opts.onProgress;
 
   const metadata = new MetadataStore(config.dataDir);
   let memoryStore: MemoryStore | null = null;
@@ -45,20 +46,25 @@ export async function generateVisualization(opts: LensOptions): Promise<{
           maxSurprises: opts.maxSurprises ?? 20,
         });
         const wikiResult = await wikiGen.generateFromIndex();
-        if (wikiResult.pagesWritten > 0) {
-          console.log(
+        if (!opts.json && wikiResult.pagesWritten > 0) {
+          report?.(
+            "info",
             `  Wiki: ${wikiResult.pagesWritten} pages written ` +
-            `(${wikiResult.communityPages} communities, ${wikiResult.hubPages} hubs` +
-            `${wikiResult.surprisesPage ? ", 1 surprises page" : ""})`
+              `(${wikiResult.communityPages} communities, ${wikiResult.hubPages} hubs` +
+              `${wikiResult.surprisesPage ? ", 1 surprises page" : ""})`,
           );
         }
       } catch (err) {
         // Wiki generation is best-effort; continue with dashboard
-        console.log("  Wiki generation skipped:", (err as Error).message);
+        report?.(
+          opts.json ? "error" : "info",
+          `  Wiki generation skipped: ${(err as Error).message}`,
+        );
       }
     }
 
     const data = extractDashboardData(metadata, memoryStore, {
+      projectRoot,
       maxCommunities: opts.maxCommunities,
       maxHubs: opts.maxHubs,
       maxSurprises: opts.maxSurprises,

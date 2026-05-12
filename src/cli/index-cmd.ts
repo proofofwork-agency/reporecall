@@ -1,10 +1,14 @@
 import { Command } from 'commander'
+import { mkdirSync } from 'fs'
 import { resolve } from 'path'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { IndexingPipeline } from '../indexer/pipeline.js'
 import { OllamaEmbedder } from '../indexer/embedder.js'
 import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
+import { MemoryStore } from '../storage/memory-store.js'
+import { createMemoryIndexer } from '../memory/indexer.js'
+import { WikiGenerator } from '../wiki/generator.js'
 
 function progressBar(current: number, total: number, width: number): string {
   if (total === 0) return '[' + ' '.repeat(width) + ']'
@@ -17,6 +21,7 @@ export function indexCommand(): Command {
   return new Command('index')
     .description("Index the current project's codebase")
     .option('--project <path>', 'Project root path')
+    .option('--no-wiki', 'Skip deterministic wiki/business page generation')
     .action(async (options) => {
       const projectRoot = options.project
         ? resolve(options.project)
@@ -88,6 +93,10 @@ export function indexCommand(): Command {
         console.log(
           `\nDone: ${result.filesProcessed} files, ${result.chunksCreated} chunks`
         )
+
+        if (options.wiki !== false && config.memory) {
+          await generateWiki(pipeline, config, projectRoot)
+        }
       } catch (err) {
         console.error(`\nIndexing failed: ${err}`)
         process.exit(1)
@@ -95,4 +104,45 @@ export function indexCommand(): Command {
         pipeline.close()
       }
     })
+}
+
+async function generateWiki(
+  pipeline: IndexingPipeline,
+  config: ReturnType<typeof loadConfig>,
+  projectRoot: string
+): Promise<void> {
+  const memoryDataDir = resolve(config.dataDir, 'memory-index')
+  const memoryWritableDir = config.memoryWritableDir
+  mkdirSync(memoryDataDir, { recursive: true })
+  mkdirSync(memoryWritableDir, { recursive: true })
+
+  const memoryStore = new MemoryStore(memoryDataDir)
+  try {
+    const memoryIndexer = createMemoryIndexer(memoryStore, projectRoot, {
+      additionalDirs: config.memoryDirs,
+      writableDir: memoryWritableDir,
+    })
+    const writableDir = memoryIndexer.getWritableDirs()[0]
+    if (!writableDir) {
+      return
+    }
+    const wikiGen = new WikiGenerator(
+      pipeline.getMetadataStore(),
+      memoryStore,
+      memoryIndexer,
+      { writableDir, projectRoot }
+    )
+    const res = await wikiGen.generateFromIndex()
+    if (res.pagesWritten > 0) {
+      console.log(
+        `Wiki: generated ${res.pagesWritten} pages (${res.communityPages} communities, ${res.hubPages} hubs, ${res.businessPages} business)`
+      )
+    } else {
+      console.log('Wiki: up to date')
+    }
+  } catch (err) {
+    console.error(`Wiki generation failed: ${err}`)
+  } finally {
+    memoryStore.close()
+  }
 }

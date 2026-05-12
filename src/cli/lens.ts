@@ -5,6 +5,7 @@ import { createServer, type Server } from "http";
 import { execFile } from "child_process";
 import { detectProjectRoot } from "../core/project.js";
 import { loadConfig } from "../core/config.js";
+import { setLogDestination } from "../core/logger.js";
 import { generateVisualization } from "../visualize/index.js";
 
 function openInBrowser(target: string): void {
@@ -106,6 +107,14 @@ export function lensCommand(): Command {
     .option("--max-surprises <n>", "Maximum surprises to include", "20")
     .option("--max-communities <n>", "Maximum communities to include", "20")
     .action(async (options) => {
+      if (options.json) {
+        try {
+          setLogDestination("stderr");
+        } catch {
+          // Logger was already initialized; continue without changing it.
+        }
+      }
+
       const projectRoot = options.project
         ? resolve(options.project)
         : detectProjectRoot(process.cwd());
@@ -124,6 +133,13 @@ export function lensCommand(): Command {
         maxSurprises: parseInt(options.maxSurprises, 10),
         maxCommunities: parseInt(options.maxCommunities, 10),
         json: !!options.json,
+        onProgress: (level, message) => {
+          if (level === "error") {
+            console.error(message);
+          } else {
+            console.log(message);
+          }
+        },
       });
 
       if (options.json) {

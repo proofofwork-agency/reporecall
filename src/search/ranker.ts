@@ -29,6 +29,7 @@ export function reciprocalRankFusion(
     codeBoostFactor?: number;
     chunkNames?: Map<string, string>;
     testPenaltyFactor?: number;
+    testFileMode?: "penalty" | "exclude";
     anonymousPenaltyFactor?: number;
     queryTerms?: string[];
     expandedQueryTerms?: ExpandedQueryTerm[];
@@ -36,7 +37,7 @@ export function reciprocalRankFusion(
     chunkLineRanges?: Map<string, { startLine: number; endLine: number }>;
   }
 ): RankedItem[] {
-  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
+  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, testFileMode, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
     options;
   const scores = new Map<string, RankedItem>();
 
@@ -105,8 +106,17 @@ export function reciprocalRankFusion(
     }
   }
 
-  // Test file penalty: demote chunks from test/spec/benchmark paths
-  if (chunkFilePaths && testPenaltyFactor != null && testPenaltyFactor !== 1.0) {
+  // Test files: exclude entirely for architecture/change modes (unless the
+  // caller passed testFileMode = "exclude"), otherwise apply the multiplicative
+  // demotion via testPenaltyFactor.
+  if (chunkFilePaths && testFileMode === "exclude") {
+    for (const id of [...scores.keys()]) {
+      const filePath = chunkFilePaths.get(id);
+      if (filePath && isTestFile(filePath)) {
+        scores.delete(id);
+      }
+    }
+  } else if (chunkFilePaths && testPenaltyFactor != null && testPenaltyFactor !== 1.0) {
     for (const [id, item] of scores) {
       const filePath = chunkFilePaths.get(id);
       if (filePath && isTestFile(filePath)) {

@@ -211,6 +211,31 @@ describe("FTSStore", () => {
     expect(results[0].id).toBe("auth-search");
   });
 
+  it("does not anchor rarest-term search on zero-document terms", () => {
+    const chunks = [];
+    for (let i = 0; i < 20; i++) {
+      chunks.push({
+        id: `noise-${i}`,
+        name: `importHelper${i}`,
+        filePath: `src/helpers/import-helper-${i}.ts`,
+        content: `import helper utility ${i}`,
+        kind: "function_declaration",
+      });
+    }
+    chunks.push({
+      id: "import-store",
+      name: "ImportStore",
+      filePath: "src/storage/import-store.ts",
+      content: "class ImportStore tracks dependencies with get imports for file",
+      kind: "class_declaration",
+    });
+    store.bulkUpsert(chunks);
+
+    const results = store.search("dependencie import store", 10);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].id).toBe("import-store");
+  });
+
   it("invalidates df cache after upsert", () => {
     store.bulkUpsert([
       {

@@ -132,6 +132,60 @@ describe("reciprocalRankFusion — test penalty", () => {
   });
 });
 
+describe("reciprocalRankFusion — testFileMode", () => {
+  it("excludes test files entirely when testFileMode is 'exclude'", () => {
+    const ranked = reciprocalRankFusion(
+      makeVector("test-chunk", "src-chunk"),
+      makeKeyword("test-chunk", "src-chunk"),
+      {
+        ...BASE_OPTS,
+        chunkFilePaths: new Map([
+          ["test-chunk", "test/foo.test.ts"],
+          ["src-chunk", "src/foo.ts"],
+        ]),
+        testPenaltyFactor: 0.3,
+        testFileMode: "exclude",
+      }
+    );
+    expect(ranked.some((r) => r.id === "test-chunk")).toBe(false);
+    expect(ranked.some((r) => r.id === "src-chunk")).toBe(true);
+  });
+
+  it("keeps test files when testFileMode is 'penalty' (default behavior)", () => {
+    const ranked = reciprocalRankFusion(
+      makeVector("test-chunk", "src-chunk"),
+      makeKeyword("test-chunk", "src-chunk"),
+      {
+        ...BASE_OPTS,
+        chunkFilePaths: new Map([
+          ["test-chunk", "test/foo.test.ts"],
+          ["src-chunk", "src/foo.ts"],
+        ]),
+        testPenaltyFactor: 0.3,
+        testFileMode: "penalty",
+      }
+    );
+    expect(ranked.some((r) => r.id === "test-chunk")).toBe(true);
+    const testScore = ranked.find((r) => r.id === "test-chunk")!.score;
+    const srcScore = ranked.find((r) => r.id === "src-chunk")!.score;
+    expect(testScore).toBeLessThan(srcScore);
+  });
+
+  it("exclude mode is a no-op on non-test paths", () => {
+    const ranked = reciprocalRankFusion(
+      makeVector("src-chunk"),
+      makeKeyword("src-chunk"),
+      {
+        ...BASE_OPTS,
+        chunkFilePaths: new Map([["src-chunk", "src/foo.ts"]]),
+        testFileMode: "exclude",
+      }
+    );
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0].id).toBe("src-chunk");
+  });
+});
+
 describe("reciprocalRankFusion — anonymous penalty", () => {
   it("applies penalty to <anonymous> chunks", () => {
     const ranked = reciprocalRankFusion(

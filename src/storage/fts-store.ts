@@ -228,6 +228,7 @@ export class FTSStore {
     let lowestDf = Infinity;
     for (const term of terms) {
       const df = this.getDocFreq(term);
+      if (df === 0) continue;
       if (df < lowestDf) {
         lowestDf = df;
         rarest = term;

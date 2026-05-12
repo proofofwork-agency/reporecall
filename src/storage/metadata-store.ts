@@ -103,6 +103,18 @@ export class MetadataStore {
     })();
   }
 
+  removeFiles(paths: string[]): void {
+    if (paths.length === 0) return;
+    this.db.transaction(() => {
+      for (const path of paths) {
+        this.chunks.removeFile(path);
+        this.callEdges.removeCallEdgesForFile(path);
+        this.imports.removeImportsForFile(path);
+        this.semantic.removeByFile(path);
+      }
+    })();
+  }
+
   upsertChunk(chunk: StoredChunk): void {
     this.chunks.upsertChunk(chunk);
   }

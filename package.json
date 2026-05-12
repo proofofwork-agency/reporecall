@@ -1,7 +1,7 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.6.2",
-  "description": "Reporecall - local codebase memory for Claude Code and MCP",
+  "version": "0.7.1",
+  "description": "Local codebase memory, intent-routed retrieval, generated wiki, and MCP tools for coding agents",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -26,12 +26,16 @@
     "claude-code",
     "mcp",
     "code-search",
+    "codebase-wiki",
+    "architecture-lens",
     "tree-sitter",
     "rag"
   ],
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
+    "docs",
     "LICENSE"
   ],
   "author": "ProofOfWork / Danillo Felix <danillo@proofofwork.agency>",
@@ -48,6 +52,8 @@
     "benchmark:external": "tsx benchmark-external.ts",
     "benchmark:project-context": "tsx scripts/benchmarks/project-context-audit.ts",
     "benchmark:production": "tsx scripts/benchmarks/production-gate.ts",
+    "stress:large-repo": "tsx scripts/benchmarks/large-repo-stress.ts",
+    "stress:large-repo:ci": "node --expose-gc --import tsx scripts/benchmarks/large-repo-stress.ts --quiet --files 2000 --changes 200 --topology-max-chunks 1000 --lens-max-graph-chunks 1000 --max-heap-mb 256 --max-no-change-files 0 --max-lens-ms 1000",
     "benchmark:memory": "vitest run test/benchmark/metrics.test.ts test/benchmark/memory-benchmark.test.ts test/daemon/memory-runtime.test.ts test/benchmark/live-memory-benchmark.test.ts",
     "benchmark:live-memory": "tsx scripts/benchmarks/memory-v1-live.ts",
     "smoke": "node scripts/smoke-test.mjs",
