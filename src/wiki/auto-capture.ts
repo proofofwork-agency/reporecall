@@ -6,6 +6,7 @@
  */
 
 import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
 import { writeManagedMemoryFile, safeMemorySlug } from "../memory/files.js";
 import type { MemoryIndexer } from "../memory/indexer.js";
 import type { MemoryStore } from "../storage/memory-store.js";
@@ -51,8 +52,8 @@ export class WikiAutoCapture {
 
     // Check if page already exists and is fresh enough
     const existing = this.store.getByName(slug);
-    if (existing) {
-      const existingCommit = this.extractSourceCommit(existing.content);
+    if (existing && sourceCommit && existing.filePath) {
+      const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
       if (existingCommit === sourceCommit) return null; // No code changes since last capture
     }
 
@@ -110,8 +111,8 @@ export class WikiAutoCapture {
     const sourceCommit = this.getHeadCommit();
 
     const existing = this.store.getByName(slug);
-    if (existing) {
-      const existingCommit = this.extractSourceCommit(existing.content);
+    if (existing && sourceCommit && existing.filePath) {
+      const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
       if (existingCommit === sourceCommit) return null;
     }
 
@@ -165,8 +166,15 @@ export class WikiAutoCapture {
     }
   }
 
-  private extractSourceCommit(content: string): string | undefined {
-    const match = content.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
-    return match?.[1];
+  // Read sourceCommit from the raw memory file on disk (frontmatter is stripped
+  // from the in-memory content, so scraping existing.content never matched).
+  private extractSourceCommitFromFile(filePath: string): string | undefined {
+    try {
+      const raw = readFileSync(filePath, "utf-8");
+      const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
   }
 }

@@ -96,10 +96,12 @@ export class MetadataStore {
 
   removeFile(path: string): void {
     this.db.transaction(() => {
+      const chunkIds = this.getChunkIdsForFile(path);
       this.chunks.removeFile(path);
       this.callEdges.removeCallEdgesForFile(path);
       this.imports.removeImportsForFile(path);
       this.semantic.removeByFile(path);
+      this.cascadeDeleteFileGraphData(path, chunkIds);
     })();
   }
 
@@ -107,10 +109,12 @@ export class MetadataStore {
     if (paths.length === 0) return;
     this.db.transaction(() => {
       for (const path of paths) {
+        const chunkIds = this.getChunkIdsForFile(path);
         this.chunks.removeFile(path);
         this.callEdges.removeCallEdgesForFile(path);
         this.imports.removeImportsForFile(path);
         this.semantic.removeByFile(path);
+        this.cascadeDeleteFileGraphData(path, chunkIds);
       }
     })();
   }
@@ -121,9 +125,40 @@ export class MetadataStore {
 
   removeChunksForFile(filePath: string): void {
     this.db.transaction(() => {
+      const chunkIds = this.getChunkIdsForFile(filePath);
       this.chunks.removeChunksForFile(filePath);
       this.semantic.removeByFile(filePath);
+      this.cascadeDeleteFileGraphData(filePath, chunkIds);
     })();
+  }
+
+  // Capture chunk ids for a file before the chunks rows are deleted, so graph
+  // rows keyed by chunk_id can be cleaned up in the same transaction.
+  private getChunkIdsForFile(filePath: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT id FROM chunks WHERE file_path = ?`)
+      .all(filePath) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  // Cascade-delete targets (by file_path) and topology rows (by chunk_id) that
+  // would otherwise be orphaned when a file/chunks are removed. Must run inside
+  // the caller's transaction. target_aliases cascade via FK ON DELETE CASCADE.
+  private cascadeDeleteFileGraphData(filePath: string, chunkIds: string[]): void {
+    this.db.prepare(`DELETE FROM targets WHERE file_path = ?`).run(filePath);
+    if (chunkIds.length === 0) return;
+    const placeholders = chunkIds.map(() => "?").join(",");
+    this.db
+      .prepare(`DELETE FROM community_memberships WHERE chunk_id IN (${placeholders})`)
+      .run(...chunkIds);
+    this.db
+      .prepare(`DELETE FROM community_god_nodes WHERE chunk_id IN (${placeholders})`)
+      .run(...chunkIds);
+    this.db
+      .prepare(
+        `DELETE FROM community_surprises WHERE source_chunk_id IN (${placeholders}) OR target_chunk_id IN (${placeholders})`
+      )
+      .run(...chunkIds, ...chunkIds);
   }
 
   getChunk(id: string): StoredChunk | undefined {

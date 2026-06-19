@@ -344,6 +344,12 @@ export function loadConfig(projectRoot: string): MemoryConfig {
   if (existsSync(configPath)) {
     try {
       const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+      // Pre-scan the raw object: UserConfigSchema is .strict(), so an
+      // openaiApiKey would make safeParse reject with a generic message.
+      // Emit the specific security guidance before that happens.
+      if (raw && typeof raw === "object" && "openaiApiKey" in raw) {
+        getLogger().warn("openaiApiKey in config file is ignored for security. Use OPENAI_API_KEY env var.");
+      }
       const result = UserConfigSchema.safeParse(raw);
       if (result.success) {
         userConfig = result.data;
@@ -429,10 +435,9 @@ export function loadConfig(projectRoot: string): MemoryConfig {
     });
   }
 
-  // H-1: Never load API keys from config file — env var only
-  if ("openaiApiKey" in (userConfig as Record<string, unknown>)) {
-    getLogger().warn("openaiApiKey in config file is ignored for security. Use OPENAI_API_KEY env var.");
-  }
+  // H-1: API keys are never loaded from config — handled above via raw pre-scan
+  // (openaiApiKey would be rejected by .strict() parsing, so the warning is
+  // emitted before safeParse).
 
   return merged;
 }

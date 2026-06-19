@@ -1847,7 +1847,9 @@ export class ArchitectureStrategy {
         : 1.0;
       const chunks = this.selectConceptChunks(
         bundle.symbols,
-        Math.min(bundle.symbols.length, Math.max(bundle.maxChunks ?? 4, 6))
+        // Bug fix: Math.min (not Math.max) so a small configured maxChunks is
+        // honored rather than silently bumped to 6.
+        Math.min(bundle.symbols.length, Math.min(bundle.maxChunks ?? 4, 6))
       );
 
       for (let index = 0; index < chunks.length; index++) {
@@ -1896,8 +1898,10 @@ export class ArchitectureStrategy {
     const byPath = new Map<string, BroadFileCandidate>();
     for (const bundle of bundles) {
       const chunks = this.selectConceptChunks(
+        // Bug fix: Math.min (not Math.max) so a small configured maxChunks is
+        // honored rather than silently bumped to 6.
         bundle.symbols,
-        Math.min(bundle.symbols.length, Math.max(bundle.maxChunks ?? 4, 6))
+        Math.min(bundle.symbols.length, Math.min(bundle.maxChunks ?? 4, 6))
       );
       const hitsByPath = new Map<string, number>();
       for (const chunk of chunks) {

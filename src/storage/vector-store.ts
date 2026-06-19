@@ -203,7 +203,27 @@ export class VectorStore {
           getLogger().debug({ err }, "VectorStore.upsert: failed to delete existing records");
         }
 
-        await table.add(normalizedRecords);
+        // LanceDB has no multi-op transaction; if add fails after delete, the
+        // records are gone. Attempt a restore re-add, log loudly, then re-throw
+        // so the caller's merkle/retry logic handles it (failing is safer than
+        // silently losing data).
+        try {
+          await table.add(normalizedRecords);
+        } catch (addError) {
+          getLogger().error(
+            { err: addError },
+            "VectorStore.upsert: add failed after delete; attempting restore re-add"
+          );
+          try {
+            await table.add(normalizedRecords);
+          } catch (restoreErr) {
+            getLogger().error(
+              { err: restoreErr },
+              "VectorStore.upsert: restore re-add also failed; records may be lost"
+            );
+          }
+          throw addError;
+        }
       }
 
       // Build ANN index once table is large enough (skip for empty-vector records)
@@ -270,15 +290,19 @@ export class VectorStore {
         .limit(limit)
         .toArray();
 
-      return results.map((r) => ({
-        id: r.id as string,
-        score: Math.max(0, 1 - ((r._distance as number) ?? 0)), // Convert distance to similarity, clamped
-        filePath: r.filePath as string,
-        name: r.name as string,
-        kind: r.kind as string,
-        startLine: r.startLine as number,
-        endLine: r.endLine as number,
-      }));
+      return results.map((r) => {
+        const distance = r._distance as number;
+        return {
+          id: r.id as string,
+          // LanceDB index default metric is L2 (squared): similarity = 1/(1+d)
+          score: Number.isFinite(distance) && distance >= 0 ? 1 / (1 + distance) : 0,
+          filePath: r.filePath as string,
+          name: r.name as string,
+          kind: r.kind as string,
+          startLine: r.startLine as number,
+          endLine: r.endLine as number,
+        };
+      });
     } catch (err) {
       if (this.isCorruptionError(err)) {
         await this.recoverFromCorruption();

@@ -278,8 +278,12 @@ export class RetrievalPipeline {
     const rankedIds = new Set(ranked.map((r) => r.id));
     const topN = options?.graphTopN ?? 10;
     const top10 = ranked.slice(0, topN);
-    const discoveredNames = new Set<string>();
-    const nameScoreMap = new Map<string, number>();
+    // Bug fix: keep caller and callee names in separate sets. Previously both
+    // were merged into one set fed to findChunksByNames with a score map that
+    // only covered callee targets, so caller-named chunks got the wrong
+    // (top-score) fallback. Now only callee target names drive that lookup.
+    const calleeNames = new Set<string>();
+    const calleeScoreMap = new Map<string, number>();
 
     for (const item of top10) {
       const name = maps.chunkNames.get(item.id);
@@ -290,7 +294,6 @@ export class RetrievalPipeline {
 
       for (const caller of callers) {
         if (!rankedIds.has(caller.chunkId)) {
-          discoveredNames.add(caller.callerName);
           ranked.push({
             id: caller.chunkId,
             score: item.score * this.config.graphDiscountFactor,
@@ -300,19 +303,19 @@ export class RetrievalPipeline {
       }
 
       for (const callee of callees) {
-        discoveredNames.add(callee.targetName);
-        const existing = nameScoreMap.get(callee.targetName) ?? 0;
-        nameScoreMap.set(callee.targetName, Math.max(existing, item.score));
+        calleeNames.add(callee.targetName);
+        const existing = calleeScoreMap.get(callee.targetName) ?? 0;
+        calleeScoreMap.set(callee.targetName, Math.max(existing, item.score));
       }
     }
 
-    if (discoveredNames.size > 0) {
+    if (calleeNames.size > 0) {
       const calleeChunks = this.metadata.findChunksByNames(
-        Array.from(discoveredNames)
+        Array.from(calleeNames)
       );
       for (const chunk of calleeChunks) {
         if (!rankedIds.has(chunk.id)) {
-          const triggerScore = nameScoreMap.get(chunk.name) ?? top10[0]?.score ?? 0;
+          const triggerScore = calleeScoreMap.get(chunk.name) ?? top10[0]?.score ?? 0;
           ranked.push({
             id: chunk.id,
             score: triggerScore * this.config.graphDiscountFactor,

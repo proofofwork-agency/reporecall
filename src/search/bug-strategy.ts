@@ -1629,12 +1629,16 @@ export class BugStrategy {
     const cappedPromoted = this.isBugBackendRequestPrompt(subjectProfile)
       ? promoted.slice(0, 1)
       : promoted;
-    const final = cappedPromoted.map((result, index) => {
-      const normalizedScore = Math.max(1, 3 - index * 0.2);
+    const final = cappedPromoted.map((result) => {
+      // Bug fix: preserve the real multiplicative evidence score instead of
+      // overwriting it with a linear rank-based value (was Math.max(1, 3 - i*0.2)).
+      // Downstream (assembleContext) only uses the score as a ratio relative to
+      // the top result, so absolute values don't matter — the real signal must
+      // survive. hookScore is bumped to at least the real score for consumers
+      // that read it.
       return {
         ...result,
-        score: normalizedScore,
-        hookScore: Math.max(result.hookScore ?? 0, normalizedScore),
+        hookScore: Math.max(result.hookScore ?? 0, result.score),
       };
     });
     return final;

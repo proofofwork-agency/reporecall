@@ -703,7 +703,10 @@ export class MemoryStore {
         const bConfidence = b.confidence ?? 0;
         if (bConfidence !== aConfidence) return bConfidence - aConfidence;
         if (b.accessCount !== a.accessCount) return b.accessCount - a.accessCount;
-        return new Date(b.indexedAt).getTime() - new Date(a.indexedAt).getTime();
+        // Guard malformed timestamps: non-finite → epoch (0) so NaN never poisons the sort.
+        const aIndexed = new Date(a.indexedAt).getTime();
+        const bIndexed = new Date(b.indexedAt).getTime();
+        return (Number.isFinite(bIndexed) ? bIndexed : 0) - (Number.isFinite(aIndexed) ? aIndexed : 0);
       });
 
       const keep = sorted[0];
@@ -725,7 +728,10 @@ export class MemoryStore {
       if (memory.status !== "active") continue;
       if (keepPinned && memory.pinned) continue;
       if (memory.class !== "episode") continue;
-      const ageMs = now - new Date(memory.indexedAt).getTime();
+      // Guard malformed timestamps: treat non-finite indexedAt as age 0 (skip),
+      // so a corrupt timestamp can't force-archive an episode.
+      const indexedAtMs = new Date(memory.indexedAt).getTime();
+      const ageMs = Number.isFinite(indexedAtMs) ? now - indexedAtMs : 0;
       if (ageMs <= archiveAfterMs) continue;
       this.archive(memory.id, `Archived episode older than ${archiveEpisodeOlderThanDays} days`);
       archived++;

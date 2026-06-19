@@ -274,9 +274,9 @@ export function resolveCapabilityEvidence(input: {
     for (const callee of metadata.findCalleesForChunk?.(chunk.id, 8) ?? []) {
       upsert(callee.targetFilePath ?? callee.filePath, 22, "call_neighbor", "call_neighbor");
     }
-    for (const callee of metadata.findCallees?.(chunk.name, 8) ?? []) {
-      upsert(callee.targetFilePath ?? callee.filePath, 18, "call_neighbor", "call_neighbor");
-    }
+    // Bug fix: removed redundant unscoped `findCallees(chunk.name, 8)` — it
+    // pulled callees from ANY file with a matching symbol name (cross-file
+    // contamination), duplicating the chunk-scoped findCalleesForChunk above.
   }
 
   const files = Array.from(entries.values())
@@ -724,7 +724,8 @@ function selectBestChunkForEvidence(chunks: StoredChunk[]): StoredChunk | null {
     if (aExport !== bExport) return bExport - aExport;
     const aSpan = a.endLine - a.startLine;
     const bSpan = b.endLine - b.startLine;
-    return aSpan - bSpan || a.startLine - b.startLine;
+    // Bug fix: pick the most substantial chunk (descending span), not the smallest.
+    return bSpan - aSpan || a.startLine - b.startLine;
   })[0] ?? null;
 }
 
