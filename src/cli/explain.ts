@@ -20,6 +20,7 @@ import {
 } from '../business/product-areas.js'
 import type { MemoryStore } from '../storage/memory-store.js'
 import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
+import type { ContextCompressionMetadata } from '../search/types.js'
 
 function formatQueryMode(queryMode: QueryMode): string {
   if (queryMode === 'skip') return 'skip (meta/non-code prompt)'
@@ -74,6 +75,7 @@ export interface ExplainResult {
   localizationSignals?: BugSelectionDiagnostics
   tokensInjected: number
   chunksInjected: number
+  compression?: ContextCompressionMetadata
   memoryTokensInjected?: number
   memoriesInjected?: number
   memoryNames?: string[]
@@ -245,6 +247,7 @@ export async function resolveExplainResult(
     localizationSignals: queryMode === 'bug' ? bugSelection ?? undefined : undefined,
     tokensInjected: context?.tokenCount ?? 0,
     chunksInjected: context?.chunks.length ?? 0,
+    compression: context?.compression,
     memoryTokensInjected: promptContext.memoryTokenCount,
     memoriesInjected: promptContext.memoryCount,
     memoryNames: promptContext.memoryNames,
@@ -349,6 +352,12 @@ export function explainCommand(): Command {
         }
         console.log(`Tokens:         ${result.tokensInjected.toLocaleString()}`)
         console.log(`Chunks:         ${result.chunksInjected}`)
+        if (result.compression?.compressedChunks) {
+          console.log(
+            `Compression:    ${result.compression.compressedChunks} compacted, ` +
+              `${result.compression.tokensSaved.toLocaleString()} tokens saved`
+          )
+        }
         if (result.contextStrength) {
           console.log(`Context:        ${result.contextStrength}`)
         }

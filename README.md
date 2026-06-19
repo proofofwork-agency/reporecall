@@ -300,7 +300,7 @@ Main tool groups:
 
 | Group | Tools |
 | --- | --- |
-| Code search | `search_code`, `get_symbol`, `resolve_seed` |
+| Code search | `search_context`, `search_code`, `read_code_chunk`, `get_symbol`, `resolve_seed` |
 | Flow/navigation | `find_callers`, `find_callees`, `explain_flow`, `build_stack_tree`, `get_imports` |
 | Business context | `list_product_areas`, `business_context_query` |
 | Topology | `get_communities`, `get_hub_nodes`, `get_surprises`, `suggest_investigations` |
@@ -320,6 +320,10 @@ Configuration lives in `.memory/config.json`.
 | `memoryBudget` | `500` | Max tokens for memory injection per prompt. |
 | `capabilityEvidence` | `true` | Use code/wiki/graph evidence to select related files for trace, architecture, and change prompts. |
 | `genericCapabilityHydration` | `true` | Hydrate broad inventory evidence into prompt context for questions like "which files implement...". |
+| `contextCompressionMode` | `"auto"` | Compress secondary code evidence in assembled context. Use `"off"` to disable or `"always"` for diagnostics. |
+| `contextCompressionPreserveTopChunks` | `1` | Number of top chunks kept as full source before secondary evidence can be compacted. |
+| `contextCompressionMinChunkTokens` | `100` | Minimum chunk size before compression is attempted. |
+| `contextCompressionTargetRatio` | `0.75` | Maximum compressed/full token ratio accepted for compacted evidence. |
 | `topologyEnabled` | `true` | Run topology/community analysis after indexing. |
 | `topologyMaxChunks` | `50000` | Skip full topology graph construction above this indexed chunk count. |
 | `shutdownTimeoutMs` | `10000` | Graceful shutdown timeout in milliseconds. |

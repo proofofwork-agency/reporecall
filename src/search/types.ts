@@ -18,6 +18,29 @@ export interface SearchResult {
   wikiPagesUsed?: string[];
 }
 
+export interface ContextOriginalRef {
+  chunkId: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  name: string;
+  kind: string;
+  language: string;
+}
+
+export interface ContextCompressionMetadata {
+  enabled: boolean;
+  mode: "off" | "auto" | "always";
+  tokensBeforeCompression: number;
+  tokensAfterCompression: number;
+  tokensSaved: number;
+  savingsRatio: number;
+  fullChunks: number;
+  compressedChunks: number;
+  originalRefs: ContextOriginalRef[];
+  strategies: Record<string, number>;
+}
+
 export interface SearchOptions {
   limit?: number;
   tokenBudget?: number;
@@ -39,6 +62,7 @@ export interface AssembledContext {
   chunks: SearchResult[];
   routeStyle?: "standard" | "concept" | "flow" | "deep";
   deliveryMode?: "code_context" | "summary_only";
+  compression?: ContextCompressionMetadata;
 }
 
 export interface HookDebugRecord {
@@ -72,4 +96,5 @@ export interface HookDebugRecord {
   dominantFamily?: string;
   familyConfidence?: number;
   deferredReason?: string;
+  compression?: ContextCompressionMetadata;
 }

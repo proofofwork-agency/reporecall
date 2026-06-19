@@ -1,8 +1,9 @@
 import { encoding_for_model } from "tiktoken";
-import type { SearchResult, AssembledContext } from "./types.js";
+import type { ContextCompressionMetadata, SearchResult, AssembledContext } from "./types.js";
 import type { StackTree } from "./tree-builder.js";
 import type { StoredChunk } from "../storage/types.js";
 import { getLogger } from "../core/logger.js";
+import { compressEvidenceChunk, type EvidenceCompressionMode, type EvidenceCompressionResult } from "./evidence-compressor.js";
 
 let encoder: ReturnType<typeof encoding_for_model> | undefined;
 
@@ -39,6 +40,21 @@ export interface AssembleOptions {
   query?: string;
   factExtractors?: Array<{ keyword: string; pattern: string; label: string }>;
   compressionRank?: number;   // chunks after this rank use compressed format (default: undefined = no compression)
+  contextCompressionEnabled?: boolean;
+  contextCompressionMode?: EvidenceCompressionMode;
+  contextCompressionPreserveTopChunks?: number;
+  contextCompressionMinChunkTokens?: number;
+  contextCompressionTargetRatio?: number;
+}
+
+interface RenderedChunk {
+  result: SearchResult;
+  text: string;
+  fullText: string;
+  tokenCount: number;
+  fullTokenCount: number;
+  compressed: boolean;
+  compression?: EvidenceCompressionResult;
 }
 
 export type ConceptContextKind = "ast" | "call_graph" | "search_pipeline" | "storage" | "daemon" | "embedding" | "cli" | "context_assembly" | (string & {});
@@ -57,8 +73,16 @@ export function assembleContext(
   const scoreFloorRatio = opts.scoreFloorRatio ?? 0.7;
   const maxChunks = opts.maxChunks ?? Infinity;
   const directiveHeader = opts.directiveHeader ?? true;
+  const compressionMode = opts.contextCompressionMode ?? "auto";
+  const compressionEnabled =
+    opts.contextCompressionEnabled !== false && compressionMode !== "off";
+  const preserveTopChunks =
+    opts.compressionRank ?? opts.contextCompressionPreserveTopChunks ?? 1;
+  const minChunkTokens = opts.contextCompressionMinChunkTokens ?? 100;
+  const targetRatio = opts.contextCompressionTargetRatio ?? 0.75;
 
   const included: SearchResult[] = [];
+  const rendered: RenderedChunk[] = [];
   let totalTokens = 0;
 
   // Header — file list is added after chunk assembly (placeholder budget for now)
@@ -78,35 +102,62 @@ export function assembleContext(
 
   for (const result of results) {
     if (result.score < scoreFloor) continue;
-    let useCompressed = opts.compressionRank !== undefined && included.length >= opts.compressionRank;
-    let fileHeader = `### ${result.filePath}\n`;
-    let fileHeaderTokens = useCompressed || emittedHeaders.has(result.filePath) ? 0 : countTokens(fileHeader);
-    let chunkText = useCompressed ? formatChunkCompressed(result) : formatChunk(result);
-    let chunkTokens = countTokens(chunkText);
+    const fullText = formatChunk(result);
+    const fullTokens = countTokens(fullText);
+    const shouldPreferCompressed =
+      compressionEnabled
+      && (
+        compressionMode === "always"
+        || opts.compressionRank !== undefined && included.length >= opts.compressionRank
+        || included.length >= preserveTopChunks
+      );
 
-    if (totalTokens + fileHeaderTokens + chunkTokens > tokenBudget - SUMMARY_RESERVE) {
-      if (!useCompressed && opts.compressionRank !== undefined) {
-        useCompressed = true;
-        fileHeaderTokens = 0;
-        chunkText = formatChunkCompressed(result);
-        chunkTokens = countTokens(chunkText);
+    let candidate = buildRenderedChunk(
+      result,
+      fullText,
+      fullTokens,
+      shouldPreferCompressed,
+      opts.query,
+      minChunkTokens,
+      targetRatio
+    );
+
+    const fileHeader = `### ${result.filePath}\n`;
+    let fileHeaderTokens = candidate.compressed || emittedHeaders.has(result.filePath) ? 0 : countTokens(fileHeader);
+
+    if (totalTokens + fileHeaderTokens + candidate.tokenCount > tokenBudget - SUMMARY_RESERVE) {
+      if (compressionEnabled && !candidate.compressed) {
+        const compactCandidate = buildRenderedChunk(
+          result,
+          fullText,
+          fullTokens,
+          true,
+          opts.query,
+          minChunkTokens,
+          targetRatio
+        );
+        if (compactCandidate.compressed) {
+          candidate = compactCandidate;
+          fileHeaderTokens = 0;
+        }
       }
     }
 
-    if (totalTokens + fileHeaderTokens + chunkTokens > tokenBudget - SUMMARY_RESERVE) {
-      if (opts.compressionRank !== undefined) {
+    if (totalTokens + fileHeaderTokens + candidate.tokenCount > tokenBudget - SUMMARY_RESERVE) {
+      if (compressionEnabled || opts.compressionRank !== undefined) {
         continue;
       }
       break;
     }
 
-    if (!useCompressed && !emittedHeaders.has(result.filePath)) {
+    if (!candidate.compressed && !emittedHeaders.has(result.filePath)) {
       emittedHeaders.add(result.filePath);
       totalTokens += fileHeaderTokens;
     }
 
-    totalTokens += chunkTokens;
+    totalTokens += candidate.tokenCount;
     included.push(result);
+    rendered.push(candidate);
 
     if (included.length >= maxChunks) break;
   }
@@ -140,17 +191,27 @@ export function assembleContext(
 
   const seenFiles = new Set<string>();
 
-  for (let i = 0; i < included.length; i++) {
-    const chunk = included[i]!;
-    const useCompressed = opts.compressionRank !== undefined && i >= opts.compressionRank;
-    if (!useCompressed && !seenFiles.has(chunk.filePath)) {
+  for (const entry of rendered) {
+    const chunk = entry.result;
+    if (!entry.compressed && !seenFiles.has(chunk.filePath)) {
       if (seenFiles.size > 0) parts.push(""); // blank line between file groups
       parts.push(`### ${chunk.filePath}\n`);
       seenFiles.add(chunk.filePath);
     }
-    parts.push(useCompressed ? formatChunkCompressed(chunk) : formatChunk(chunk));
+    parts.push(entry.text);
   }
   if (included.length > 0) parts.push("");
+
+  const finalText = parts.join("\n");
+  const finalTokenCount = countTokens(finalText);
+  const compression = buildCompressionMetadata(
+    compressionEnabled,
+    compressionMode,
+    header,
+    includeFacts ? factsSection : null,
+    rendered,
+    finalTokenCount
+  );
 
   const log = getLogger();
   log.debug({
@@ -159,16 +220,124 @@ export function assembleContext(
     includedChunks: included.length,
     droppedByScoreFloor: results.filter(r => r.score < scoreFloor).length,
     droppedByBudget: results.filter(r => r.score >= scoreFloor).length - included.length,
-    totalTokens,
+    totalTokens: finalTokenCount,
     tokenBudget,
+    compressedChunks: compression.compressedChunks,
+    compressionTokensSaved: compression.tokensSaved,
   }, "context assembly complete");
 
   return {
-    text: parts.join("\n"),
-    tokenCount: totalTokens,
+    text: finalText,
+    tokenCount: finalTokenCount,
     chunks: included,
     routeStyle: "standard",
     deliveryMode: "code_context",
+    compression,
+  };
+}
+
+function buildRenderedChunk(
+  result: SearchResult,
+  fullText: string,
+  fullTokens: number,
+  preferCompressed: boolean,
+  query: string | undefined,
+  minChunkTokens: number,
+  targetRatio: number
+): RenderedChunk {
+  if (!preferCompressed || fullTokens < minChunkTokens) {
+    return {
+      result,
+      text: fullText,
+      fullText,
+      tokenCount: fullTokens,
+      fullTokenCount: fullTokens,
+      compressed: false,
+    };
+  }
+
+  const compression = compressEvidenceChunk(result, {
+    query,
+    minChunkTokens,
+    targetRatio,
+  });
+  const compressedTokens = countTokens(compression.text);
+  const ratio = fullTokens > 0 ? compressedTokens / fullTokens : 1;
+  const worthwhile = compression.text.trim().length > 0
+    && compressedTokens < fullTokens
+    && ratio <= targetRatio;
+
+  if (!worthwhile) {
+    return {
+      result,
+      text: fullText,
+      fullText,
+      tokenCount: fullTokens,
+      fullTokenCount: fullTokens,
+      compressed: false,
+    };
+  }
+
+  return {
+    result,
+    text: compression.text,
+    fullText,
+    tokenCount: compressedTokens,
+    fullTokenCount: fullTokens,
+    compressed: true,
+    compression,
+  };
+}
+
+function buildCompressionMetadata(
+  enabled: boolean,
+  mode: EvidenceCompressionMode,
+  header: string,
+  factsSection: string | null,
+  rendered: RenderedChunk[],
+  finalTokenCount: number
+): ContextCompressionMetadata {
+  const fullParts: string[] = [header];
+  if (factsSection) {
+    fullParts.push(factsSection);
+    fullParts.push("");
+  }
+
+  const seenFiles = new Set<string>();
+  for (const entry of rendered) {
+    const chunk = entry.result;
+    if (!seenFiles.has(chunk.filePath)) {
+      if (seenFiles.size > 0) fullParts.push("");
+      fullParts.push(`### ${chunk.filePath}\n`);
+      seenFiles.add(chunk.filePath);
+    }
+    fullParts.push(entry.fullText);
+  }
+  if (rendered.length > 0) fullParts.push("");
+
+  const tokensBeforeCompression = countTokens(fullParts.join("\n"));
+  const compressedEntries = rendered.filter((entry) => entry.compressed && entry.compression);
+  const strategies: Record<string, number> = {};
+  for (const entry of compressedEntries) {
+    const strategy = entry.compression?.strategy;
+    if (!strategy) continue;
+    strategies[strategy] = (strategies[strategy] ?? 0) + 1;
+  }
+
+  const tokensSaved = Math.max(0, tokensBeforeCompression - finalTokenCount);
+  return {
+    enabled,
+    mode,
+    tokensBeforeCompression,
+    tokensAfterCompression: finalTokenCount,
+    tokensSaved,
+    savingsRatio: tokensBeforeCompression > 0 ? tokensSaved / tokensBeforeCompression : 0,
+    fullChunks: rendered.length - compressedEntries.length,
+    compressedChunks: compressedEntries.length,
+    originalRefs: compressedEntries.flatMap((entry) =>
+      entry.compression ? [entry.compression.originalRef] : []
+    ),
+    strategies,
   };
 }
 
@@ -277,13 +446,6 @@ function formatChunk(result: SearchResult): string {
   const lang = result.language || "";
   const location = `Lines ${result.startLine}-${result.endLine}: ${result.kind} ${result.name}`;
   return `\`\`\`${lang}\n// ${location}\n${result.content}\n\`\`\`\n`;
-}
-
-function formatChunkCompressed(result: SearchResult): string {
-  const loc = `${result.filePath}:${result.startLine}-${result.endLine}`;
-  const sig = `${result.kind} ${result.name}`;
-  const doc = result.docstring ? ` — ${result.docstring.slice(0, 120)}` : '';
-  return `- \`${sig}\` (${loc})${doc}\n`;
 }
 
 // --- Metadata-aware chunk type for hydration ---
@@ -453,10 +615,15 @@ function selectFlowEntries(
   summaryReserve: number,
   implementationFirst: boolean,
   callerFocused: boolean,
-  direction: "caller" | "callee"
-): { parts: string[]; results: SearchResult[]; totalTokens: number } {
+  direction: "caller" | "callee",
+  query: string | undefined,
+  compressionEnabled: boolean,
+  minChunkTokens: number,
+  targetRatio: number
+): { parts: string[]; results: SearchResult[]; rendered: RenderedChunk[]; totalTokens: number } {
   const parts: string[] = [];
   const results: SearchResult[] = [];
+  const rendered: RenderedChunk[] = [];
   const seenFiles = new Set<string>();
   let currentTokens = totalTokens;
   let crossFileCount = 0;
@@ -476,19 +643,29 @@ function selectFlowEntries(
 
     const chunkLines = entry.chunk.endLine - entry.chunk.startLine + 1;
     const useCompressed = parts.length >= 1 || chunkLines > 80 || (!entry.sameFile && results.length >= 1);
-    const text = useCompressed ? formatChunkCompressed(entry.result) : formatChunk(entry.result);
-    const tokens = countTokens(text);
-    if (currentTokens + tokens > tokenBudget - summaryReserve) continue;
+    const fullText = formatChunk(entry.result);
+    const fullTokens = countTokens(fullText);
+    const candidate = buildRenderedChunk(
+      entry.result,
+      fullText,
+      fullTokens,
+      compressionEnabled && useCompressed,
+      query,
+      minChunkTokens,
+      targetRatio
+    );
+    if (currentTokens + candidate.tokenCount > tokenBudget - summaryReserve) continue;
 
-    currentTokens += tokens;
-    parts.push(text);
+    currentTokens += candidate.tokenCount;
+    parts.push(candidate.text);
     results.push(entry.result);
+    rendered.push(candidate);
     seenFiles.add(entry.filePath);
     if (!entry.sameFile) crossFileCount++;
     if (results.length >= maxEntries) break;
   }
 
-  return { parts, results, totalTokens: currentTokens };
+  return { parts, results, rendered, totalTokens: currentTokens };
 }
 
 function describeChunk(chunk: SearchResult | StoredChunk | undefined): string | null {
@@ -617,7 +794,14 @@ export function assembleFlowContext(
   tree: StackTree,
   metadata: HydratableMetadata,
   tokenBudget: number,
-  query?: string
+  query?: string,
+  options: Pick<AssembleOptions,
+    "contextCompressionEnabled"
+    | "contextCompressionMode"
+    | "contextCompressionPreserveTopChunks"
+    | "contextCompressionMinChunkTokens"
+    | "contextCompressionTargetRatio"
+  > = {}
 ): AssembledContext {
   const log = getLogger();
   const SUMMARY_RESERVE = 80;
@@ -627,6 +811,11 @@ export function assembleFlowContext(
     !!query && /\b(who|what)\s+calls\b|\bcalled\s+by\b|\bwhere\s+is\b.*\bused\b|\busage\b/i.test(query);
   const queryTerms = tokenizeFlowAssemblyQuery(query);
   const families = inferFlowFamilies(queryTerms);
+  const compressionMode = options.contextCompressionMode ?? "auto";
+  const compressionEnabled =
+    options.contextCompressionEnabled !== false && compressionMode !== "off";
+  const minChunkTokens = options.contextCompressionMinChunkTokens ?? 100;
+  const targetRatio = options.contextCompressionTargetRatio ?? 0.75;
 
   // Collect all node IDs for bulk hydration
   const allNodeIds = [
@@ -666,6 +855,14 @@ export function assembleFlowContext(
   const seedResult = storedChunkToSearchResult(seedChunk);
   const seedSection = `> Flow seed\n\n` + formatChunk(seedResult);
   const seedTokens = countTokens(seedSection);
+  const seedRendered: RenderedChunk = {
+    result: seedResult,
+    text: seedSection,
+    fullText: seedSection,
+    tokenCount: seedTokens,
+    fullTokenCount: seedTokens,
+    compressed: false,
+  };
 
   // Seed always gets included even if it fills the budget
   if (seedTokens > tokenBudget - SUMMARY_RESERVE) {
@@ -698,7 +895,11 @@ export function assembleFlowContext(
     SUMMARY_RESERVE,
     implementationFirst,
     callerFocused,
-    "caller"
+    "caller",
+    query,
+    compressionEnabled,
+    minChunkTokens,
+    targetRatio
   );
   totalTokens = selectedCallers.totalTokens;
   const callerParts = selectedCallers.parts;
@@ -728,7 +929,11 @@ export function assembleFlowContext(
     SUMMARY_RESERVE,
     implementationFirst,
     callerFocused,
-    "callee"
+    "callee",
+    query,
+    compressionEnabled,
+    minChunkTokens,
+    targetRatio
   );
   totalTokens = selectedCallees.totalTokens;
   const calleeParts = selectedCallees.parts;
@@ -760,33 +965,47 @@ export function assembleFlowContext(
   };
 
   if (implementationFirst && !callerFocused) {
-    parts.push(seedSection);
+    parts.push(seedRendered.text);
     appendCallees();
     appendCallers();
   } else {
     appendCallers();
-    parts.push(seedSection);
+    parts.push(seedRendered.text);
     appendCallees();
   }
 
   parts.push("");
+  const finalText = parts.join("\n");
+  const finalTokenCount = countTokens(finalText);
+  const renderedForMetadata = [seedRendered, ...selectedCallers.rendered, ...selectedCallees.rendered];
+  const compression = buildCompressionMetadata(
+    compressionEnabled,
+    compressionMode,
+    header,
+    null,
+    renderedForMetadata,
+    finalTokenCount
+  );
 
   log.debug({
     seedName: tree.seed.name,
     upTreeCount: tree.upTree.length,
     downTreeCount: tree.downTree.length,
     includedChunks: included.length,
-    totalTokens,
+    totalTokens: finalTokenCount,
     tokenBudget,
     coverage: tree.coverage,
+    compressedChunks: compression.compressedChunks,
+    compressionTokensSaved: compression.tokensSaved,
   }, "flow context assembly complete");
 
   return {
-    text: parts.join("\n"),
-    tokenCount: totalTokens,
+    text: finalText,
+    tokenCount: finalTokenCount,
     chunks: included,
     routeStyle: "flow",
     deliveryMode: "code_context",
+    compression,
   };
 }
 
@@ -813,7 +1032,14 @@ function buildDeepRouteHeader(chunks: SearchResult[]): string {
 export function assembleDeepRouteContext(
   chunks: SearchResult[],
   tokenBudget: number,
-  query?: string
+  query?: string,
+  options: Pick<AssembleOptions,
+    "contextCompressionEnabled"
+    | "contextCompressionMode"
+    | "contextCompressionPreserveTopChunks"
+    | "contextCompressionMinChunkTokens"
+    | "contextCompressionTargetRatio"
+  > = {}
 ): AssembledContext {
   // Reserve a generous estimate for the header (file list varies); adjust after assembly
   const headerEstimate = 60;
@@ -826,26 +1052,35 @@ export function assembleDeepRouteContext(
     directiveHeader: false,
     query,
     maxChunks: 5,
-    compressionRank: 3,
+    compressionRank: options.contextCompressionPreserveTopChunks ?? 3,
+    contextCompressionEnabled: options.contextCompressionEnabled,
+    contextCompressionMode: options.contextCompressionMode,
+    contextCompressionPreserveTopChunks: options.contextCompressionPreserveTopChunks,
+    contextCompressionMinChunkTokens: options.contextCompressionMinChunkTokens,
+    contextCompressionTargetRatio: options.contextCompressionTargetRatio,
   });
 
   // Build final header with actual file list from assembled chunks
   const deepHeader = buildDeepRouteHeader(baseContext.chunks);
-  const deepHeaderTokens = countTokens(deepHeader);
 
-  // Replace the standard header in baseContext.text with our deep route header.
-  const baseHeader = "## Relevant codebase context\n\n";
-  const baseHeaderTokens = countTokens(baseHeader);
-  const textWithoutHeader = baseContext.text.replace(
-    /^## Relevant codebase context\n\n\n?/,
-    ""
-  );
+  // The base context was assembled with directiveHeader:false, so it still
+  // begins with "## Relevant codebase context\n\n> Files included: ...\n".
+  // Strip that entire prefix — buildDeepRouteHeader already rebuilds a complete
+  // (broad-search) header carrying the same file list, so leaving the base
+  // file-list line in place would emit it twice (and miscount tokens).
+  const strippedPrefixRe = /^## Relevant codebase context\n\n(?:> Files included:[^\n]*\n)?\n?/;
+  const prefixMatch = strippedPrefixRe.exec(baseContext.text);
+  const removedPrefix = prefixMatch ? prefixMatch[0] : "## Relevant codebase context\n\n";
+  const removedTokens = countTokens(removedPrefix);
+  const textWithoutHeader = baseContext.text.slice(removedPrefix.length);
+  const deepHeaderTokens = countTokens(deepHeader);
 
   return {
     text: deepHeader + textWithoutHeader,
-    tokenCount: deepHeaderTokens + baseContext.tokenCount - baseHeaderTokens,
+    tokenCount: deepHeaderTokens + baseContext.tokenCount - removedTokens,
     chunks: baseContext.chunks,
     routeStyle: "deep",
     deliveryMode: baseContext.deliveryMode ?? "code_context",
+    compression: baseContext.compression,
   };
 }

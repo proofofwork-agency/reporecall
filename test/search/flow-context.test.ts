@@ -152,6 +152,70 @@ describe("assembleFlowContext", () => {
     expect(result.text).toContain("validateCredentials");
   });
 
+  it("compresses secondary flow chunks with reversible chunk refs", () => {
+    const calleeOne = makeTreeNode({
+      chunkId: "callee-1",
+      name: "validateCredentials",
+      filePath: "src/auth/validator.ts",
+      direction: "down",
+      depth: 1,
+    });
+    const calleeTwo = makeTreeNode({
+      chunkId: "callee-2",
+      name: "loadSessionToken",
+      filePath: "src/auth/session.ts",
+      direction: "down",
+      depth: 1,
+    });
+    const largeSessionBody = [
+      "export function loadSessionToken(request: Request) {",
+      "  const token = request.headers.get('authorization');",
+      "  if (!token) throw new Error('unauthorized session token');",
+      ...Array.from({ length: 50 }, (_, i) => `  // route auth session implementation detail ${i}`),
+      "  return token;",
+      "}",
+    ].join("\n");
+    const tree = makeTree({
+      downTree: [calleeOne, calleeTwo],
+      nodeCount: 3,
+    });
+    const metadata = makeMetadata({
+      "seed-1": makeChunk("seed-1", "handleLogin", "function handleLogin() { validateCredentials(); loadSessionToken(); }", {
+        filePath: "src/auth/handler.ts",
+        startLine: 45,
+        endLine: 89,
+      }),
+      "callee-1": makeChunk("callee-1", "validateCredentials", "function validateCredentials(user, pass) { return true; }", {
+        filePath: "src/auth/validator.ts",
+        startLine: 5,
+        endLine: 20,
+      }),
+      "callee-2": makeChunk("callee-2", "loadSessionToken", largeSessionBody, {
+        filePath: "src/auth/session.ts",
+        startLine: 30,
+        endLine: 90,
+      }),
+    });
+
+    const result = assembleFlowContext(
+      tree,
+      metadata as any,
+      10000,
+      "how does handleLogin validate credentials",
+      {
+        contextCompressionEnabled: true,
+        contextCompressionMode: "auto",
+        contextCompressionMinChunkTokens: 1,
+        contextCompressionTargetRatio: 0.95,
+      }
+    );
+
+    expect(result.text).toContain("chunkId `callee-2`");
+    expect(result.text).toContain("L30: export function loadSessionToken");
+    expect(result.compression?.compressedChunks).toBeGreaterThanOrEqual(1);
+    expect(result.compression?.originalRefs.map((ref) => ref.chunkId)).toContain("callee-2");
+  });
+
   it("respects token budget — seed always included, extras trimmed", () => {
     const callerNode = makeTreeNode({
       chunkId: "caller-1",

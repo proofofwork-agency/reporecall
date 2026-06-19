@@ -57,6 +57,19 @@ function makeMockPipeline(overrides?: Partial<any>): any {
 }
 
 function makeMockMetadata(overrides?: Partial<any>): any {
+  const chunk = {
+    id: "c1",
+    name: "processRequest",
+    filePath: "src/server.ts",
+    kind: "function_declaration",
+    startLine: 10,
+    endLine: 25,
+    content: "function processRequest(req) { return req; }",
+    docstring: undefined,
+    parentName: undefined,
+    language: "typescript",
+    indexedAt: "2025-01-01T00:00:00.000Z",
+  };
   return {
     getStats: () => ({ totalFiles: 5, totalChunks: 22, languages: { typescript: 22 } }),
     getStat: (_key: string) => "2025-01-01T00:00:00.000Z",
@@ -64,6 +77,8 @@ function makeMockMetadata(overrides?: Partial<any>): any {
     getConventions: () => null,
     getLatencyPercentiles: () => ({ avg: 12, p50: 10, p95: 25, count: 100 }),
     getAllChunks: () => [],
+    getChunk: (id: string) => (id === chunk.id ? chunk : undefined),
+    findChunksByFilePath: (filePath: string) => (filePath === chunk.filePath ? [chunk] : []),
     getAllResolvedCallEdges: () => [],
     getAllCommunities: () => [],
     getGodNodes: () => [],
@@ -265,7 +280,106 @@ describe("MCP server tools (3G)", () => {
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBeGreaterThan(0);
     expect(parsed[0].name).toBe("processRequest");
+    expect(parsed[0].id).toBe("c1");
     expect(parsed[0].filePath).toBe("src/server.ts");
+  });
+
+  it("search_context returns assembled context with compression metadata", async () => {
+    const search = makeMockSearch({
+      searchWithContext: async () => ({
+        text: "## Relevant codebase context\n\n- `function compacted` (src/server.ts:10-25, chunkId `c1`, typescript)\n",
+        tokenCount: 42,
+        routeStyle: "standard",
+        deliveryMode: "code_context",
+        chunks: [
+          {
+            id: "c1",
+            name: "processRequest",
+            filePath: "src/server.ts",
+            kind: "function_declaration",
+            startLine: 10,
+            endLine: 25,
+            score: 0.92,
+            content: "function processRequest(req) { return req; }",
+            language: "typescript",
+          },
+        ],
+        compression: {
+          enabled: true,
+          mode: "auto",
+          tokensBeforeCompression: 100,
+          tokensAfterCompression: 42,
+          tokensSaved: 58,
+          savingsRatio: 0.58,
+          fullChunks: 0,
+          compressedChunks: 1,
+          originalRefs: [
+            {
+              chunkId: "c1",
+              filePath: "src/server.ts",
+              startLine: 10,
+              endLine: 25,
+              name: "processRequest",
+              kind: "function_declaration",
+              language: "typescript",
+            },
+          ],
+          strategies: { code: 1 },
+        },
+      }),
+    });
+    const pipeline = makeMockPipeline();
+    const metadata = makeMockMetadata();
+    const config = makeConfig();
+
+    const handlers = await captureToolHandlers(search, pipeline, metadata, config);
+    const handler = handlers.get("search_context");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ query: "how does request processing work", tokenBudget: 500 });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.text).toContain("Relevant codebase context");
+    expect(parsed.tokenCount).toBe(42);
+    expect(parsed.chunksIncluded).toBe(1);
+    expect(parsed.selectedFiles).toEqual(["src/server.ts"]);
+    expect(parsed.compression.compressedChunks).toBe(1);
+    expect(parsed.compression.originalRefs[0].chunkId).toBe("c1");
+  });
+
+  it("read_code_chunk returns original source by chunk id", async () => {
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig()
+    );
+    const handler = handlers.get("read_code_chunk");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ chunkId: "c1" });
+    expect(result.content).toHaveLength(1);
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.id).toBe("c1");
+    expect(parsed.content).toContain("function processRequest");
+    expect(parsed.startLine).toBe(10);
+  });
+
+  it("read_code_chunk returns original source by file and line range", async () => {
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig()
+    );
+    const handler = handlers.get("read_code_chunk");
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ filePath: "src/server.ts", startLine: 12, endLine: 13 });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.id).toBe("c1");
+    expect(parsed.filePath).toBe("src/server.ts");
   });
 
   it("index_codebase with no paths calls indexAll", async () => {
@@ -753,6 +867,8 @@ The product completes the capability.`,
     expect(parsed.tree.coverage).toHaveProperty("overall");
     expect(parsed.tokenCount).toBeGreaterThan(0);
     expect(parsed.chunksIncluded).toBeGreaterThanOrEqual(1);
+    expect(parsed.compression).toBeDefined();
+    expect(parsed.compression.enabled).toBe(true);
   });
 
   it("explain_flow returns message when no seed found", async () => {

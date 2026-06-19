@@ -146,6 +146,7 @@ async function buildDeepRouteContext(
   query: string,
   search: HybridSearch,
   budget: number,
+  config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
   seedResult?: SeedResult
@@ -154,7 +155,17 @@ async function buildDeepRouteContext(
   if (baseContext.routeStyle === "concept") {
     return baseContext;
   }
-  return assembleDeepRouteContext(baseContext.chunks, budget, query);
+  return assembleDeepRouteContext(baseContext.chunks, budget, query, compressionOptionsFromConfig(config));
+}
+
+function compressionOptionsFromConfig(config: MemoryConfig) {
+  return {
+    contextCompressionEnabled: config.contextCompressionEnabled,
+    contextCompressionMode: config.contextCompressionMode,
+    contextCompressionPreserveTopChunks: config.contextCompressionPreserveTopChunks,
+    contextCompressionMinChunkTokens: config.contextCompressionMinChunkTokens,
+    contextCompressionTargetRatio: config.contextCompressionTargetRatio,
+  };
 }
 
 function scoreTraceContextCoherence(query: string, context: AssembledContext): number {
@@ -330,6 +341,7 @@ export async function handlePromptContextDetailed(
     query,
     search,
     codeBudget,
+    config,
     activeFiles,
     signal,
     queryMode,
@@ -417,7 +429,12 @@ export async function handlePromptContextDetailed(
         scoreFloorRatio: 0.05,
         query,
         factExtractors: config.factExtractors,
-        compressionRank: 3,
+        compressionRank: config.contextCompressionPreserveTopChunks,
+        contextCompressionEnabled: config.contextCompressionEnabled,
+        contextCompressionMode: config.contextCompressionMode,
+        contextCompressionPreserveTopChunks: config.contextCompressionPreserveTopChunks,
+        contextCompressionMinChunkTokens: config.contextCompressionMinChunkTokens,
+        contextCompressionTargetRatio: config.contextCompressionTargetRatio,
       });
       context = {
         ...hydratedContext,
@@ -614,6 +631,7 @@ async function resolveCodeContext(
   query: string,
   search: HybridSearch,
   codeBudget: number,
+  config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
   queryMode?: QueryMode,
@@ -681,7 +699,7 @@ async function resolveCodeContext(
       const augmentedTree = augmentFlowTreeWithRelatedSeeds(tree, resolvedSeeds, query);
 
       if (augmentedTree.nodeCount <= 1) {
-        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
         const diagnostics = getBroadDiagnostics();
         return finalizePromptContextResult(query, {
           context,
@@ -694,9 +712,9 @@ async function resolveCodeContext(
         });
       }
 
-      const flowContext = assembleFlowContext(augmentedTree, metadata, codeBudget, query);
+      const flowContext = assembleFlowContext(augmentedTree, metadata, codeBudget, query, compressionOptionsFromConfig(config));
       if (flowContext.chunks.length === 0 || !flowContext.text.trim()) {
-        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
         const diagnostics = getBroadDiagnostics();
         return finalizePromptContextResult(query, {
           context,
@@ -709,7 +727,7 @@ async function resolveCodeContext(
         });
       }
 
-      const deepContext = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+      const deepContext = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
       const flowScore = scoreTraceContextCoherence(query, flowContext);
       const deepScore = scoreTraceContextCoherence(query, deepContext);
       if (deepScore > flowScore * 1.1) {
@@ -733,7 +751,7 @@ async function resolveCodeContext(
       });
     }
 
-    const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+    const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
     const diagnostics = getBroadDiagnostics();
     return finalizePromptContextResult(query, {
       context,
@@ -746,7 +764,7 @@ async function resolveCodeContext(
     });
   }
 
-  const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, seedResult);
+  const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, seedResult);
   const diagnostics = getBroadDiagnostics();
   return finalizePromptContextResult(query, {
     context,
@@ -791,7 +809,7 @@ function finalizePromptContextResult(
     executionSurface,
     missingEvidence,
     recommendedNextReads,
-    advisoryText: buildReporecallAdvisory(result.resolvedQueryMode, contextStrength, selectedFiles, missingEvidence),
+    advisoryText: buildReporecallAdvisory(result.resolvedQueryMode, contextStrength, selectedFiles, missingEvidence, context?.compression),
   };
 }
 
@@ -924,7 +942,8 @@ function buildReporecallAdvisory(
   queryMode: QueryMode,
   contextStrength: "sufficient" | "partial" | "weak",
   selectedFiles: string[],
-  missingEvidence: string[]
+  missingEvidence: string[],
+  compression?: AssembledContext["compression"]
 ): string | undefined {
   if (selectedFiles.length === 0) return undefined;
   const lines = [
@@ -938,6 +957,11 @@ function buildReporecallAdvisory(
     lines.push("Start from these files first. If you need more evidence, prefer narrow targeted reads instead of broad codebase exploration.");
   } else {
     lines.push("The injected context is weak. If you expand, prefer the listed files first and keep exploration narrow.");
+  }
+  if (compression?.compressedChunks) {
+    lines.push(
+      `Compressed ${compression.compressedChunks} secondary chunks, saving ${compression.tokensSaved} tokens. Use Reporecall MCP read_code_chunk with chunkId for full source.`
+    );
   }
   if (missingEvidence.length > 0) {
     lines.push(`Missing evidence: ${missingEvidence.join(" ")}`);

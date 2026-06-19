@@ -37,8 +37,11 @@ export function reciprocalRankFusion(
     chunkLineRanges?: Map<string, { startLine: number; endLine: number }>;
   }
 ): RankedItem[] {
-  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, testFileMode, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
+  const { vectorWeight, keywordWeight, recencyWeight, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, testFileMode, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
     options;
+  // Guard k: a non-positive or non-finite value would yield Infinity/negative RRF
+  // scores. Fall back to the canonical RRF constant (60).
+  const k = options.k > 0 && Number.isFinite(options.k) ? options.k : 60;
   const scores = new Map<string, RankedItem>();
 
   // Vector scores — standard RRF: 1/(k + rank) with 1-indexed rank
@@ -77,8 +80,13 @@ export function reciprocalRankFusion(
     for (const [id, item] of scores) {
       const dateStr = chunkDates.get(id);
       if (dateStr) {
-        const age = now - new Date(dateStr).getTime();
-        const recencyScore = Math.max(0, 1 - age / ninetyDays);
+        const time = new Date(dateStr).getTime();
+        // A single malformed date yields NaN, which propagates through the
+        // score and corrupts the final sort (NaN comparators are non-transitive,
+        // scrambling the whole result set). Skip such entries instead.
+        if (!Number.isFinite(time)) continue;
+        const age = now - time;
+        const recencyScore = Math.min(1, Math.max(0, 1 - age / ninetyDays));
         item.score += recencyWeight * recencyScore;
         item.indexedAt = dateStr;
       }

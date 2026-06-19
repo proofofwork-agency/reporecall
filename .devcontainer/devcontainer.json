@@ -1,0 +1,30 @@
+{
+  "name": "Reporecall",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-20-bookworm",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "remoteUser": "node",
+  "updateRemoteUserUID": true,
+  "init": true,
+  "postCreateCommand": "npm ci",
+  "postStartCommand": "bash -lc 'git rev-parse --git-dir >/dev/null 2>&1 && git config --global --add safe.directory \"${containerWorkspaceFolder}\" || true'",
+  "forwardPorts": [37222],
+  "portsAttributes": {
+    "37222": {
+      "label": "Reporecall daemon",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.vscode-github-actions",
+        "vitest.explorer",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "files.eol": "\n",
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  }
+}

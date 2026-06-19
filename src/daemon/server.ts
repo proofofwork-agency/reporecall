@@ -790,6 +790,7 @@ export function createDaemonServer(
             dominantFamily: promptContext.dominantFamily,
             familyConfidence: promptContext.familyConfidence,
             deferredReason: promptContext.deferredReason,
+            compression: context.compression,
           };
 
           const memTok = promptContext.memoryTokenCount ?? 0;
@@ -929,6 +930,7 @@ export function createDaemonServer(
                 dominantFamily: promptContext.dominantFamily,
                 familyConfidence: promptContext.familyConfidence,
                 deferredReason: promptContext.deferredReason,
+                compression: context.compression,
                 queryClassification: intent,
                 latencyMs: elapsed,
                 ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),

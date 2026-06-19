@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .memory/
+.engram/
 reports
 .claude/
 .demo/

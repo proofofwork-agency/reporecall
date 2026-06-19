@@ -2,6 +2,51 @@ import type { EmbeddingProvider } from "./types.js";
 import { LocalEmbedder } from "./local-embedder.js";
 import { NullEmbedder } from "./null-embedder.js";
 
+/**
+ * HTTP error thrown by embedding providers. Carries the status code and an
+ * optional parsed `Retry-After` (ms) so the retry policy can honor it.
+ */
+export class EmbeddingHttpError extends Error {
+  readonly status: number;
+  readonly retryAfterMs?: number;
+  constructor(status: number, message: string, retryAfterMs?: number) {
+    super(message);
+    this.name = "EmbeddingHttpError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** HTTP statuses that are worth retrying (transient failures). */
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function isRetryable(err: unknown): boolean {
+  if (err instanceof EmbeddingHttpError) {
+    return RETRYABLE_STATUS.has(err.status);
+  }
+  // fetch() rejects with a TypeError on network/DNS/connection failures — those
+  // are transient and worth retrying. Any other thrown Error (e.g. a 400/401
+  // surfaced as EmbeddingHttpError) is not retryable.
+  if (err instanceof TypeError) return true;
+  return false;
+}
+
+function parseRetryAfter(headerValue: string | null): number | undefined {
+  if (!headerValue) return undefined;
+  // Delta-seconds form
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, 60_000);
+  }
+  // HTTP-date form
+  const dateMs = Date.parse(headerValue);
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - Date.now();
+    return delta > 0 ? Math.min(delta, 60_000) : 0;
+  }
+  return undefined;
+}
+
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries = 3,
@@ -13,10 +58,16 @@ async function withRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        await new Promise((r) => setTimeout(r, delay));
+      // Don't retry non-retryable failures (4xx other than 429, fatal errors).
+      if (attempt >= maxRetries || !isRetryable(err)) {
+        throw err;
       }
+      // Honor Retry-After when provided; otherwise exponential backoff + jitter.
+      const retryAfter = err instanceof EmbeddingHttpError ? err.retryAfterMs : undefined;
+      const base = retryAfter ?? baseDelayMs * Math.pow(2, attempt);
+      // Full jitter: randomize within [base/2, base] to avoid thundering herds.
+      const jittered = Math.max(50, base / 2 + Math.random() * (base / 2));
+      await new Promise((r) => setTimeout(r, jittered));
     }
   }
   throw lastError;
@@ -109,8 +160,10 @@ export class OllamaEmbedder implements EmbeddingProvider {
 
         if (!response.ok) {
           const body = await response.text();
-          throw new Error(
-            `Ollama embedding failed (${response.status}): ${body}`
+          throw new EmbeddingHttpError(
+            response.status,
+            `Ollama embedding failed (${response.status}): ${body}`,
+            parseRetryAfter(response.headers.get("retry-after"))
           );
         }
 
@@ -176,8 +229,10 @@ export class OpenAIEmbedder implements EmbeddingProvider {
 
         if (!response.ok) {
           const body = await response.text();
-          throw new Error(
-            `OpenAI embedding failed (${response.status}): ${body}`
+          throw new EmbeddingHttpError(
+            response.status,
+            `OpenAI embedding failed (${response.status}): ${body}`,
+            parseRetryAfter(response.headers.get("retry-after"))
           );
         }
 

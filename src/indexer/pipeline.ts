@@ -301,15 +301,17 @@ export class IndexingPipeline {
     windowTextBytes: number,
     progressState: WindowProgressState,
     onProgress?: (progress: IndexProgress) => void
-  ): Promise<Array<{ chunk: CodeChunk & { fileMtime: string }; vector: EmbeddingVector }>> {
+  ): Promise<{ results: Array<{ chunk: CodeChunk & { fileMtime: string }; vector: EmbeddingVector }>; degraded: boolean }> {
     const log = getLogger();
     const keywordMode = this.config.embeddingProvider === "keyword" || !this.embedder.isEnabled();
     if (keywordMode) {
       progressState.embeddedChunks += chunks.length;
-      return chunks.map((chunk) => ({ chunk, vector: [] }));
+      // Keyword mode intentionally produces empty vectors — this is not degradation.
+      return { results: chunks.map((chunk) => ({ chunk, vector: [] })), degraded: false };
     }
 
     const embeddedChunks: Array<{ chunk: CodeChunk & { fileMtime: string }; vector: EmbeddingVector }> = [];
+    let degraded = false;
     let batchSize = this.getAdaptiveEmbedBatchSize(chunks.length, windowTextBytes);
     let index = 0;
 
@@ -352,7 +354,12 @@ export class IndexingPipeline {
           }
         }
 
-        log.warn({ err, batchSize, failedChunks: batch.length }, "Embedding batch failed — falling back to keyword vectors for batch");
+        log.error(
+          { err, batchSize, failedChunks: batch.length },
+          "Embedding batch failed — storing empty vectors as fallback. " +
+            "Vector retrieval will be degraded for these chunks until the next successful reindex."
+        );
+        degraded = true;
         for (const chunk of batch) {
           embeddedChunks.push({ chunk, vector: [] });
         }
@@ -368,16 +375,16 @@ export class IndexingPipeline {
       });
     }
 
-    return embeddedChunks;
+    return { results: embeddedChunks, degraded };
   }
 
   private async persistWindow(
     records: ChunkedFileRecord[],
     progressState: WindowProgressState,
     onProgress?: (progress: IndexProgress) => void
-  ): Promise<{ filesProcessed: number; chunksCreated: number; filePaths: string[] }> {
+  ): Promise<{ filesProcessed: number; chunksCreated: number; filePaths: string[]; degraded: boolean }> {
     if (records.length === 0) {
-      return { filesProcessed: 0, chunksCreated: 0, filePaths: [] };
+      return { filesProcessed: 0, chunksCreated: 0, filePaths: [], degraded: false };
     }
 
     const log = getLogger();
@@ -395,7 +402,7 @@ export class IndexingPipeline {
       heapUsedMb: Math.round(this.getHeapUsedBytes() / 1024 / 1024),
     }, "Processing indexing window");
 
-    const embeddedChunks = await this.embedWindowChunks(windowChunks, windowTextBytes, progressState, onProgress);
+    const { results: embeddedChunks, degraded } = await this.embedWindowChunks(windowChunks, windowTextBytes, progressState, onProgress);
 
     onProgress?.({
       phase: "storing",
@@ -497,6 +504,7 @@ export class IndexingPipeline {
       filesProcessed: records.length,
       chunksCreated: metadataChunks.length,
       filePaths,
+      degraded,
     };
   }
 
@@ -505,13 +513,19 @@ export class IndexingPipeline {
     progressState: WindowProgressState,
     successfulFiles: Set<string>,
     counters: { filesProcessed: number; chunksCreated: number },
-    onProgress?: (progress: IndexProgress) => void
+    onProgress?: (progress: IndexProgress) => void,
+    degradedFiles?: Set<string>
   ): Promise<void> {
     if (window.length === 0) return;
     const result = await this.persistWindow(window, progressState, onProgress);
     counters.filesProcessed += result.filesProcessed;
     counters.chunksCreated += result.chunksCreated;
     for (const filePath of result.filePaths) successfulFiles.add(filePath);
+    // Track files whose embeddings fell back to empty vectors so the caller
+    // can skip committing their merkle state (forcing a retry next run).
+    if (result.degraded && degradedFiles) {
+      for (const filePath of result.filePaths) degradedFiles.add(filePath);
+    }
     window.length = 0;
   }
 
@@ -596,6 +610,7 @@ export class IndexingPipeline {
     });
 
     const successfulFiles = new Set<string>();
+    const degradedFiles = new Set<string>();
     const progressState: WindowProgressState = { discoveredChunks: 0, embeddedChunks: 0 };
     const counters = { filesProcessed: 0, chunksCreated: 0 };
     const pendingWindow: ChunkedFileRecord[] = [];
@@ -618,7 +633,7 @@ export class IndexingPipeline {
           );
 
         if (wouldOverflowWindow) {
-          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress, degradedFiles);
           pendingWindowBytes = 0;
         }
 
@@ -629,7 +644,7 @@ export class IndexingPipeline {
           pendingWindow.length >= this.getFileBatchSize()
           || pendingWindowBytes >= this.getMaxChunkTextBytesPerWindow();
         if (shouldFlushNow) {
-          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress, degradedFiles);
           pendingWindowBytes = 0;
         }
       } catch (err) {
@@ -644,17 +659,28 @@ export class IndexingPipeline {
       });
     }
 
-    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress);
+    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress, degradedFiles);
 
     const filteredPendingState: Record<string, string | { hash: string; mtimeMs: number }> = {};
     for (const [path, entry] of Object.entries(pendingState)) {
       const isChangedFile = toProcess.some((change) => change.path === path);
-      if (!isChangedFile || successfulFiles.has(path)) {
+      // Exclude degraded files: their embeddings fell back to empty vectors,
+      // so we leave their merkle state untouched to force a retry next run
+      // rather than marking them as fully indexed.
+      if ((!isChangedFile || successfulFiles.has(path)) && !degradedFiles.has(path)) {
         filteredPendingState[path] = entry;
       }
     }
     this.merkle.applyPendingState(filteredPendingState);
     this.merkle.save();
+
+    if (degradedFiles.size > 0) {
+      log.error(
+        { degradedFileCount: degradedFiles.size },
+        "Indexing completed but " + degradedFiles.size + " file(s) had embedding failures and were stored with empty vectors. " +
+          "Vector search will return no results for these files until re-indexed successfully. Their merkle state was not committed so they will retry on the next index run."
+      );
+    }
 
     this.rebuildTargetCatalog();
     const now = new Date().toISOString();
@@ -687,6 +713,7 @@ export class IndexingPipeline {
     await this.ensureIndexFormat();
 
     const successfulFiles = new Set<string>();
+    const degradedFiles = new Set<string>();
     const progressState: WindowProgressState = { discoveredChunks: 0, embeddedChunks: 0 };
     const counters = { filesProcessed: 0, chunksCreated: 0 };
     const pendingWindow: ChunkedFileRecord[] = [];
@@ -714,7 +741,7 @@ export class IndexingPipeline {
           );
 
         if (wouldOverflowWindow) {
-          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, undefined, degradedFiles);
           pendingWindowBytes = 0;
         }
 
@@ -725,7 +752,7 @@ export class IndexingPipeline {
           pendingWindow.length >= this.getFileBatchSize()
           || pendingWindowBytes >= this.getMaxChunkTextBytesPerWindow();
         if (shouldFlushNow) {
-          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+          await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, undefined, degradedFiles);
           pendingWindowBytes = 0;
         }
       } catch (err) {
@@ -733,13 +760,15 @@ export class IndexingPipeline {
       }
     }
 
-    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters);
+    await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, undefined, degradedFiles);
 
     this.rebuildTargetCatalog();
     for (const pathValue of paths) {
       const relPath = isAbsolute(pathValue) ? relative(this.config.projectRoot, pathValue) : pathValue;
       const absPath = resolve(this.config.projectRoot, relPath);
       if (!successfulFiles.has(relPath)) continue;
+      // Don't commit merkle state for degraded files — they need to retry.
+      if (degradedFiles.has(relPath)) continue;
       try {
         await this.merkle.updateHash(relPath, absPath);
       } catch {
@@ -748,6 +777,14 @@ export class IndexingPipeline {
     }
     this.merkle.save();
     this.metadata.setStat("lastIndexedAt", new Date().toISOString());
+
+    if (degradedFiles.size > 0) {
+      log.error(
+        { degradedFileCount: degradedFiles.size },
+        "Incremental indexing completed but " + degradedFiles.size + " file(s) had embedding failures and were stored with empty vectors. " +
+          "Vector search will return no results for these files until re-indexed successfully. Their merkle state was not committed so they will retry on the next index run."
+      );
+    }
 
     try {
       const conventions = analyzeConventions(this.metadata);

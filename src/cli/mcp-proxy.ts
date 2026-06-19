@@ -123,10 +123,21 @@ export function createProxyMCPServer(config: ProxyConfig): McpServer {
 
   proxyTool(
     'search_code',
-    'Search the codebase using hybrid vector + keyword search',
+    'Search the codebase using hybrid vector + keyword search and return raw matching chunks. For multi-file questions, prefer search_context.',
     {
       query: z.string().min(1).describe('Search query'),
       limit: z.number().int().min(1).max(500).optional().describe('Max results (default 20)'),
+      activeFiles: z.array(z.string()).optional().describe('Currently open file paths for boosting'),
+    },
+    { readOnlyHint: true, idempotentHint: true }
+  )
+
+  proxyTool(
+    'search_context',
+    'Return assembled, token-budgeted code context for a multi-file question. Uses Reporecall routing and evidence compression; compressed entries can be expanded with read_code_chunk.',
+    {
+      query: z.string().min(1).describe('Natural language codebase question'),
+      tokenBudget: z.number().int().min(1).optional().describe('Optional context token budget; defaults to configured auto budget'),
       activeFiles: z.array(z.string()).optional().describe('Currently open file paths for boosting'),
     },
     { readOnlyHint: true, idempotentHint: true }

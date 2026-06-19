@@ -27,6 +27,7 @@ import { suggestWikiPages } from '../wiki/suggestions.js'
 import { buildBusinessContextFromMemoryStore, queryBusinessContext } from '../business/product-areas.js'
 import { extractDashboardData } from '../visualize/data-extractor.js'
 import type { DashboardData } from '../visualize/types.js'
+import type { StoredChunk } from '../storage/types.js'
 import { getLogger } from '../core/logger.js'
 
 const require = createRequire(import.meta.url)
@@ -68,6 +69,46 @@ function errorResult(err: unknown) {
     ],
     isError: true
   }
+}
+
+function shapeCodeChunk(chunk: StoredChunk) {
+  return {
+    id: chunk.id,
+    name: chunk.name,
+    filePath: chunk.filePath,
+    kind: chunk.kind,
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
+    language: chunk.language,
+    content: chunk.content,
+    docstring: chunk.docstring,
+    parentName: chunk.parentName,
+  }
+}
+
+function findBestChunkByLocation(
+  metadata: MetadataStore,
+  filePath: string | undefined,
+  startLine: number | undefined,
+  endLine: number | undefined
+): StoredChunk | undefined {
+  if (!filePath) return undefined
+  const chunks = metadata.findChunksByFilePath(filePath)
+  if (chunks.length === 0) return undefined
+  if (startLine === undefined && endLine === undefined) return chunks[0]
+
+  const start = startLine ?? endLine ?? 1
+  const end = endLine ?? startLine ?? start
+  const overlapping = chunks
+    .filter((chunk) => chunk.startLine <= end && chunk.endLine >= start)
+    .sort((a, b) => {
+      const aContains = a.startLine <= start && a.endLine >= end ? 0 : 1
+      const bContains = b.startLine <= start && b.endLine >= end ? 0 : 1
+      const aDistance = Math.abs(a.startLine - start) + Math.abs(a.endLine - end)
+      const bDistance = Math.abs(b.startLine - start) + Math.abs(b.endLine - end)
+      return aContains - bContains || aDistance - bDistance
+    })
+  return overlapping[0]
 }
 
 function shapeLensData(
@@ -159,7 +200,7 @@ export function createMCPServer(
   server.registerTool(
     'search_code',
     {
-      description: 'Search the codebase using hybrid vector + keyword search',
+      description: 'Search the codebase using hybrid vector + keyword search and return raw matching chunks. For multi-file questions, prefer search_context.',
       inputSchema: {
         query: z.string().min(1).describe('Search query'),
         limit: z
@@ -187,6 +228,7 @@ export function createMCPServer(
                 text: JSON.stringify(
                   results.map((r) => ({
                     name: r.name,
+                    id: r.id,
                     filePath: r.filePath,
                     kind: r.kind,
                     startLine: r.startLine,
@@ -205,6 +247,119 @@ export function createMCPServer(
           }
         }
         return lock ? await lock.withRead(doSearch) : doSearch()
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'search_context',
+    {
+      description:
+        'Return assembled, token-budgeted code context for a multi-file question. Uses Reporecall routing and evidence compression; compressed entries can be expanded with read_code_chunk.',
+      inputSchema: {
+        query: z.string().min(1).describe('Natural language codebase question'),
+        tokenBudget: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Optional context token budget; defaults to configured auto budget'),
+        activeFiles: z
+          .array(z.string())
+          .optional()
+          .describe('Currently open file paths for boosting')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ query, tokenBudget, activeFiles }) => {
+      try {
+        const doSearchContext = async () => {
+          const budget = tokenBudget ?? resolveContextBudget(
+            config.contextBudget,
+            metadata.getStats().totalChunks
+          )
+          const context = await search.searchWithContext(query, budget, activeFiles)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    text: context.text,
+                    tokenCount: context.tokenCount,
+                    chunksIncluded: context.chunks.length,
+                    routeStyle: context.routeStyle,
+                    deliveryMode: context.deliveryMode,
+                    selectedFiles: [...new Set(context.chunks.map((chunk) => chunk.filePath))],
+                    chunks: context.chunks.map((chunk) => ({
+                      id: chunk.id,
+                      name: chunk.name,
+                      filePath: chunk.filePath,
+                      kind: chunk.kind,
+                      startLine: chunk.startLine,
+                      endLine: chunk.endLine,
+                      score: chunk.score,
+                      language: chunk.language,
+                    })),
+                    compression: context.compression,
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          }
+        }
+        return lock ? await lock.withRead(doSearchContext) : doSearchContext()
+      } catch (err) {
+        return errorResult(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'read_code_chunk',
+    {
+      description: 'Read the full original source for a code chunk by chunkId, or by file path and line range.',
+      inputSchema: {
+        chunkId: z.string().min(1).optional().describe('Exact chunk id from search_code or compressed context'),
+        filePath: z.string().min(1).optional().describe('Indexed project-relative file path'),
+        startLine: z.number().int().min(1).optional().describe('Start line for file path lookup'),
+        endLine: z.number().int().min(1).optional().describe('End line for file path lookup')
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ chunkId, filePath, startLine, endLine }) => {
+      try {
+        const readChunk = async () => {
+          const chunk = chunkId
+            ? metadata.getChunk(chunkId)
+            : findBestChunkByLocation(metadata, filePath, startLine, endLine)
+
+          if (!chunk) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ error: 'chunk not found', chunkId, filePath, startLine, endLine }, null, 2)
+                }
+              ],
+              isError: true
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(shapeCodeChunk(chunk), null, 2)
+              }
+            ]
+          }
+        }
+        return lock ? await lock.withRead(readChunk) : readChunk()
       } catch (err) {
         return errorResult(err)
       }
@@ -782,7 +937,14 @@ export function createMCPServer(
             tree,
             metadata,
             flowBudget,
-            query
+            query,
+            {
+              contextCompressionEnabled: config.contextCompressionEnabled,
+              contextCompressionMode: config.contextCompressionMode,
+              contextCompressionPreserveTopChunks: config.contextCompressionPreserveTopChunks,
+              contextCompressionMinChunkTokens: config.contextCompressionMinChunkTokens,
+              contextCompressionTargetRatio: config.contextCompressionTargetRatio,
+            }
           )
 
           const allNodes = [tree.seed, ...tree.upTree, ...tree.downTree]
@@ -817,7 +979,8 @@ export function createMCPServer(
             },
             flowContext: explained.flowContext.text,
             tokenCount: explained.flowContext.tokenCount,
-            chunksIncluded: explained.flowContext.chunks.length
+            chunksIncluded: explained.flowContext.chunks.length,
+            compression: explained.flowContext.compression
           },
           null,
           2

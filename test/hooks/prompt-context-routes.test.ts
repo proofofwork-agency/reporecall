@@ -110,6 +110,38 @@ describe("handlePromptContext — route integration", () => {
     expect(result.advisoryText).toContain("Reporecall Guidance");
   });
 
+  it("mentions active compression in advisory metadata", async () => {
+    const compressedContext: AssembledContext = {
+      ...makeAssembledContext("## context", 80),
+      compression: {
+        enabled: true,
+        mode: "auto",
+        tokensBeforeCompression: 180,
+        tokensAfterCompression: 80,
+        tokensSaved: 100,
+        savingsRatio: 0.55,
+        fullChunks: 1,
+        compressedChunks: 2,
+        originalRefs: [],
+        strategies: { code: 2 },
+      },
+    };
+
+    const result = await handlePromptContextDetailed(
+      "how does main work",
+      makeSearch({
+        searchWithContext: async () => compressedContext,
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "trace"
+    );
+
+    expect(result.advisoryText).toContain("Compressed 2 secondary chunks");
+    expect(result.advisoryText).toContain("read_code_chunk");
+  });
+
   it("lookup mode uses existing searchWithContext behavior", async () => {
     let searchCalled = false;
     const search = makeSearch({

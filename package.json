@@ -60,10 +60,14 @@
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "hono": "4.12.26",
+    "protobufjs": "7.6.3"
   },
   "license": "MIT",
   "dependencies": {

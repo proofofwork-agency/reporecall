@@ -87,6 +87,16 @@ export interface MemoryConfig {
   capabilityEvidence: boolean;
   /** Hydrate generic capability evidence into prompt context for broad inventory queries */
   genericCapabilityHydration: boolean;
+  /** Enable language-aware code evidence compression in assembled context */
+  contextCompressionEnabled: boolean;
+  /** Compression policy: off disables, auto compresses lower-ranked/budget chunks, always attempts all eligible chunks */
+  contextCompressionMode: "off" | "auto" | "always";
+  /** Number of top-ranked chunks to keep as full source before compressing later chunks */
+  contextCompressionPreserveTopChunks: number;
+  /** Minimum chunk size, in tokens, before compression is attempted */
+  contextCompressionMinChunkTokens: number;
+  /** Maximum compressed/full token ratio accepted for compressed evidence */
+  contextCompressionTargetRatio: number;
   /** Enable topology analysis after indexing */
   topologyEnabled?: boolean;
   /** Skip topology graph construction above this indexed chunk count */
@@ -167,6 +177,11 @@ const UserConfigSchema = z.object({
   wikiMaxPages: z.number().int().min(1).max(10).optional(),
   capabilityEvidence: z.boolean().optional(),
   genericCapabilityHydration: z.boolean().optional(),
+  contextCompressionEnabled: z.boolean().optional(),
+  contextCompressionMode: z.enum(["off", "auto", "always"]).optional(),
+  contextCompressionPreserveTopChunks: z.number().int().min(0).max(20).optional(),
+  contextCompressionMinChunkTokens: z.number().int().min(1).optional(),
+  contextCompressionTargetRatio: z.number().min(0.1).max(0.95).optional(),
   topologyEnabled: z.boolean().optional(),
   topologyMaxChunks: z.number().int().min(100).optional(),
 }).strict();
@@ -255,6 +270,11 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   wikiMaxPages: 3,
   capabilityEvidence: true,
   genericCapabilityHydration: true,
+  contextCompressionEnabled: true,
+  contextCompressionMode: "auto",
+  contextCompressionPreserveTopChunks: 1,
+  contextCompressionMinChunkTokens: 100,
+  contextCompressionTargetRatio: 0.75,
   topologyEnabled: true,
   topologyMaxChunks: 50_000,
   factExtractors: [],
