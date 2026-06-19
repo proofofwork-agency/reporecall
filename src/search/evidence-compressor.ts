@@ -4,8 +4,8 @@ export type EvidenceCompressionMode = "off" | "auto" | "always";
 
 export interface EvidenceCompressionOptions {
   query?: string;
-  minChunkTokens: number;
-  targetRatio: number;
+  minChunkTokens?: number;
+  targetRatio?: number;
 }
 
 export interface EvidenceCompressionResult {
@@ -36,7 +36,7 @@ export function compressEvidenceChunk(
   options: EvidenceCompressionOptions
 ): EvidenceCompressionResult {
   const strategy = inferStrategy(chunk);
-  const selected = selectEvidenceLines(chunk, options.query, strategy);
+  const selected = selectEvidenceLines(chunk, options.query, strategy, options.targetRatio);
   const ref = buildOriginalRef(chunk);
   const doc = chunk.docstring ? `\n  - doc: ${oneLine(chunk.docstring, 180)}` : "";
   const evidence = selected.length > 0
@@ -72,7 +72,8 @@ function inferStrategy(chunk: SearchResult): EvidenceCompressionResult["strategy
 function selectEvidenceLines(
   chunk: SearchResult,
   query: string | undefined,
-  strategy: EvidenceCompressionResult["strategy"]
+  strategy: EvidenceCompressionResult["strategy"],
+  targetRatio?: number
 ): Array<{ line: number; text: string; score: number }> {
   const queryTerms = tokenizeQuery(query);
   const lines = chunk.content.split("\n");
@@ -122,7 +123,12 @@ function selectEvidenceLines(
     }
   }
 
-  const maxLines = strategy === "code" ? 8 : 10;
+  // Base cap by strategy; scale down conservatively when a targetRatio is
+  // requested so callers can request a tighter evidence summary.
+  const baseMaxLines = strategy === "code" ? 8 : 10;
+  const maxLines = targetRatio !== undefined && targetRatio > 0
+    ? Math.max(2, Math.min(baseMaxLines, Math.floor(baseMaxLines * targetRatio)))
+    : baseMaxLines;
   return candidates
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, maxLines)
