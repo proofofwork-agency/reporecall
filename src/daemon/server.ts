@@ -240,8 +240,10 @@ function withTimeout(
   endpoint?: string
 ): Promise<void> {
   const abortController = new AbortController();
+  let timedOut = false;
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
+      timedOut = true;
       abortController.abort();
       if (!res.writableEnded) {
         json(res, { error: "Request timeout", code: "TIMEOUT", endpoint, timeoutMs }, 504);
@@ -252,11 +254,17 @@ function withTimeout(
     handler(abortController.signal)
       .then(() => {
         clearTimeout(timer);
-        resolve();
+        // If the handler resolved AFTER a timeout, the client already received
+        // a 504 and any writes it performed hit an ended response — treat as
+        // a no-op rather than resolving a second time.
+        if (!timedOut) resolve();
       })
       .catch((err) => {
         clearTimeout(timer);
-        reject(err);
+        // Swallow errors raised after a timeout (e.g. a handler attempting
+        // json() on an already-ended response throws ERR_HTTP_HEADERS_SENT).
+        // These are consequences of the timeout, not independent failures.
+        if (!timedOut) reject(err);
       });
   });
 }

@@ -182,17 +182,48 @@ export function mcpCommand(): Command {
         new (await import("@modelcontextprotocol/sdk/server/stdio.js")).StdioServerTransport()
       );
 
+      // Graceful shutdown — mirrors the discipline in serve.ts: re-entrancy
+      // guard, try/catch around every step, and a force-exit safety timeout.
+      // Without this, any rejection from server.close()/stop()/closeAsync()
+      // became an unhandled rejection that could hang or crash the stdio MCP
+      // process and leave the client with a broken pipe.
+      let shuttingDown = false;
       const shutdown = async () => {
-        await server.close();
-        await memoryRuntime?.stop();
-        memoryStore?.close();
-        await pipeline.closeAsync();
-        process.exit(0);
+        if (shuttingDown) return;
+        shuttingDown = true;
+
+        const forceExitTimer = setTimeout(() => {
+          console.error("MCP graceful shutdown timed out after 10s, forcing exit");
+          process.exit(1);
+        }, 10_000);
+        forceExitTimer.unref();
+
+        try {
+          await server.close();
+          await memoryRuntime?.stop();
+          memoryStore?.close();
+          await pipeline.closeAsync();
+        } catch (err) {
+          console.error(`Error during MCP shutdown: ${err}`);
+        } finally {
+          clearTimeout(forceExitTimer);
+          process.exit(0);
+        }
       };
 
       // Windows: SIGTERM is not sent by Task Manager/services. Only SIGINT (Ctrl+C) works.
       // Node.js emulates SIGINT on Windows, so graceful shutdown via Ctrl+C is supported.
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
+
+      // Global safety nets so the long-running stdio process never hangs or
+      // exits ungracefully on an unhandled async failure.
+      process.on("unhandledRejection", (reason) => {
+        console.error(`Unhandled rejection in MCP server: ${reason}`);
+      });
+      process.on("uncaughtException", (err) => {
+        console.error(`Uncaught exception in MCP server: ${err}`);
+        void shutdown();
+      });
     });
 }

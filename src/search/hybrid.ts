@@ -136,13 +136,16 @@ export class HybridSearch {
 
   // ── Store hot-swap (after re-index) ─────────────────────────────
 
-  updateStores(
+  async updateStores(
     vectors: VectorStore,
     fts: FTSStore,
     metadata: MetadataStore
-  ): void {
+  ): Promise<void> {
     this._fts = fts;
-    this.pipeline.updateStores(vectors, fts, metadata);
+    // Await the pipeline swap so it completes (under the write lock) before we
+    // propagate to the strategy stores. bugStrategy/archStrategy swaps are
+    // synchronous reference assignments.
+    await this.pipeline.updateStores(vectors, fts, metadata);
     this.bugStrategy.updateStores(metadata, fts);
     this.archStrategy.updateStores(metadata, fts);
   }

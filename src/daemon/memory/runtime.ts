@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import { existsSync, readdirSync, rmSync } from "fs";
-import { extname, basename, resolve } from "path";
+import { extname, basename, resolve, sep } from "path";
 import { watch, type FSWatcher } from "chokidar";
 import { getLogger } from "../../core/logger.js";
 import { writeManagedMemoryFile } from "../../memory/files.js";
@@ -158,9 +158,13 @@ export class MemoryRuntime {
   async clearWorkingMemory(): Promise<number> {
     if (!this.writableDir) return 0;
     let removed = 0;
+    // Use a separator-aware prefix so a sibling directory like "/a/.mem/proj-evil"
+    // cannot match writableDir "/a/.mem/proj" (the bare startsWith below would
+    // have allowed rmSync to delete files outside the intended directory).
+    const writablePrefix = this.writableDir.endsWith(sep) ? this.writableDir : this.writableDir + sep;
     for (const memory of this.store.getAll()) {
       if (resolveMemoryClass(memory) !== "working") continue;
-      if (!memory.filePath.startsWith(this.writableDir)) continue;
+      if (!memory.filePath.startsWith(writablePrefix)) continue;
       try {
         rmSync(memory.filePath, { force: true });
       } catch {
@@ -208,6 +212,13 @@ export class MemoryRuntime {
         resolve();
       });
       this.watcher?.once("error", reject);
+    });
+
+    // Persistent error handler: the `once("error")` above only covers the
+    // startup window. Without this, a later chokidar error (EMFILE, EACCES,
+    // watched-dir deletion) is unhandled and can crash the process.
+    this.watcher?.on("error", (err: unknown) => {
+      log.warn({ err }, "Memory runtime watcher error (non-fatal)");
     });
   }
 

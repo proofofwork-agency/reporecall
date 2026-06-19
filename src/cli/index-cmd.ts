@@ -101,7 +101,9 @@ export function indexCommand(): Command {
         console.error(`\nIndexing failed: ${err}`)
         process.exit(1)
       } finally {
-        pipeline.close()
+        // Use async teardown — the synchronous close() can race native
+        // vector-store destructors (libc++abi mutex errors on exit).
+        await pipeline.closeAsync()
       }
     })
 }

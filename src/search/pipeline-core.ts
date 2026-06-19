@@ -60,6 +60,7 @@ export class RetrievalPipeline {
   private fts: FTSStore;
   private metadata: MetadataStore;
   private config: MemoryConfig;
+  private lock?: ReadWriteLock;
   private queryEmbedCache = new Map<string, EmbeddingVector>();
 
   constructor(opts: RetrievalPipelineConfig) {
@@ -68,17 +69,37 @@ export class RetrievalPipeline {
     this.fts = opts.ftsStore;
     this.metadata = opts.metadata;
     this.config = opts.config;
+    // Previously this field was declared in the config interface but silently
+    // dropped here, giving callers a false guarantee of concurrency safety.
+    this.lock = opts.lock;
+  }
+
+  /** Run fn under the read lock when one is configured; otherwise run it directly. */
+  private async withReadLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock ? this.lock.withRead(fn) : fn();
+  }
+
+  /** Run fn under the write lock when one is configured; otherwise run it directly. */
+  private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock ? this.lock.withWrite(fn) : fn();
   }
 
   // ── Store hot-swap (used after re-index) ─────────────────────────
-  updateStores(
+  /**
+   * Swap the underlying stores. Runs under the write lock (when configured) so
+   * that in-flight `retrieve` calls cannot observe a half-swapped set of stores
+   * (old vectors/fts read alongside new metadata, causing chunk-id mismatches).
+   */
+  async updateStores(
     vectors: VectorStore,
     fts: FTSStore,
     metadata: MetadataStore
-  ): void {
-    this.vectors = vectors;
-    this.fts = fts;
-    this.metadata = metadata;
+  ): Promise<void> {
+    await this.withWriteLock(async () => {
+      this.vectors = vectors;
+      this.fts = fts;
+      this.metadata = metadata;
+    });
   }
 
   // ── Accessors (for callers that need the underlying stores) ──────
@@ -102,11 +123,16 @@ export class RetrievalPipeline {
     vectorResults: Array<{ id: string; score: number }>;
     keywordResults: Array<{ id: string; rank: number }>;
   }> {
-    const [vectorResults, keywordResults] = await Promise.all([
-      isKeywordMode ? Promise.resolve([]) : this.vectorSearch(query, 50),
-      this.keywordSearch(query, 50),
-    ]);
-    return { vectorResults, keywordResults };
+    // Hold the read lock for the duration of both searches so a concurrent
+    // updateStores() cannot swap the stores between the vector and keyword
+    // reads (which would yield mismatched chunk-id spaces).
+    return this.withReadLock(async () => {
+      const [vectorResults, keywordResults] = await Promise.all([
+        isKeywordMode ? Promise.resolve([]) : this.vectorSearch(query, 50),
+        this.keywordSearch(query, 50),
+      ]);
+      return { vectorResults, keywordResults };
+    });
   }
 
   // ── Vector search (with LRU embedding cache) ────────────────────

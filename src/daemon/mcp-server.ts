@@ -575,8 +575,8 @@ export function createMCPServer(
           // Reinitialize pipeline with fresh stores so subsequent calls work
           await pipeline.reinit()
 
-          // Update search to use the new store instances
-          search.updateStores(
+          // Update search to use the new store instances (awaits the write lock).
+          await search.updateStores(
             pipeline.getVectorStore(),
             pipeline.getFTSStore(),
             pipeline.getMetadataStore()
@@ -1326,10 +1326,13 @@ export function createMCPServer(
         annotations: { destructiveHint: true }
       },
       async ({ name, description, memoryType, content, class: memoryClass, scope, status, summary, sourceKind, pinned, relatedFiles, relatedSymbols, supersedesId, confidence, reason }) => {
-        try {
+        // The consolidation check AND the write must run together under the
+        // write lock. Previously the check ran unlocked, so two concurrent
+        // stores of similar-named memories both passed the check and both wrote.
+        const doStore = async (): Promise<{ content: Array<{ type: 'text'; text: string }> } | { __filePath: string }> => {
           const writableDirs = memoryIndexer.getWritableDirs()
           if (writableDirs.length === 0) {
-            return errorResult(new Error('No memory directory configured'))
+            throw new Error('No memory directory configured')
           }
 
           const targetDir = writableDirs[0]!
@@ -1338,22 +1341,13 @@ export function createMCPServer(
           // Consolidation check: warn if a memory with similar name exists
           if (memoryStore) {
             const existing = memoryStore.getByName(name)
-            if (existing) {
-              // Same name — will overwrite (existing behavior)
-            } else {
-              // Check FTS for genuinely similar content — only block if both
-              // name overlap AND strong FTS rank indicate a real duplicate.
-              // Previous logic blocked on ANY FTS match, causing false positives
-              // (e.g., a domain term blocked by an unrelated benchmark result).
+            if (!existing) {
               const similar = memoryStore.search(name, 5)
               const nameLower = name.toLowerCase()
               const blocked = similar.find((match) => {
                 const existingMem = memoryStore.get(match.id)
                 if (!existingMem || existingMem.name === name) return false
-                // Require strong FTS rank — BM25 inflates in small corpus (10-20 memories),
-                // so -25 is a genuinely strong match, not just a token overlap.
                 if (match.rank > -25) return false
-                // Require substantial name character overlap (≥40% of the longer name)
                 const existingLower = existingMem.name.toLowerCase()
                 const overlapLen = Math.max(10, Math.floor(Math.max(existingLower.length, nameLower.length) * 0.40))
                 const nameOverlap =
@@ -1385,43 +1379,40 @@ export function createMCPServer(
             .toLowerCase()
             .slice(0, 100)
 
-          // Write and index atomically under the write lock
-          const doIndex = async () => {
-            const filePath = writeManagedMemoryFile(targetDir, safeName, {
-              name,
-              description,
-              memoryType,
-              content,
-              class: memoryClass,
-              scope,
-              status,
-              summary,
-              sourceKind,
-              pinned,
-              relatedFiles,
-              relatedSymbols,
-              supersedesId,
-              confidence,
-              reason,
-            })
-            await memoryIndexer.indexFile(filePath)
-            return filePath
-          }
-          let filePath: string
-          if (lock) {
-            filePath = await lock.withWrite(doIndex)
-          } else {
-            filePath = await doIndex()
-          }
+          const filePath = writeManagedMemoryFile(targetDir, safeName, {
+            name,
+            description,
+            memoryType,
+            content,
+            class: memoryClass,
+            scope,
+            status,
+            summary,
+            sourceKind,
+            pinned,
+            relatedFiles,
+            relatedSymbols,
+            supersedesId,
+            confidence,
+            reason,
+          })
+          await memoryIndexer.indexFile(filePath)
+          return { __filePath: filePath }
+        }
 
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({ stored: true, filePath, name })
-              }
-            ]
+        try {
+          const outcome = lock ? await lock.withWrite(doStore) : await doStore()
+          if ('__filePath' in outcome) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ stored: true, filePath: outcome.__filePath, name })
+                }
+              ]
+            }
           }
+          return outcome
         } catch (err) {
           return errorResult(err)
         }
@@ -1810,7 +1801,7 @@ export function createMCPServer(
         annotations: { readOnlyHint: true, idempotentHint: true }
       },
       async ({ query, limit }) => {
-        try {
+        const run = async () => {
           const results = await memorySearch.search(query, {
             types: ['wiki'],
             limit: limit ?? 5
@@ -1826,6 +1817,11 @@ export function createMCPServer(
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({ pages, count: pages.length }, null, 2) }]
           }
+        }
+        try {
+          // Hold the read lock so concurrent wiki_write/store_memory cannot
+          // mutate the store mid-query.
+          return lock ? await lock.withRead(run) : await run()
         } catch (err) {
           return errorResult(err)
         }
@@ -1843,7 +1839,7 @@ export function createMCPServer(
         annotations: { readOnlyHint: true, idempotentHint: true }
       },
       async ({ name }) => {
-        try {
+        const run = async () => {
           if (name) {
             const page = memoryStore.getByName(name)
             if (!page || page.type !== 'wiki') {
@@ -1889,6 +1885,9 @@ export function createMCPServer(
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({ pages: index, count: index.length }, null, 2) }]
           }
+        }
+        try {
+          return lock ? await lock.withRead(run) : await run()
         } catch (err) {
           return errorResult(err)
         }
@@ -1911,7 +1910,7 @@ export function createMCPServer(
         annotations: { readOnlyHint: false }
       },
       async ({ name, description, content, relatedFiles, relatedSymbols, pageType }) => {
-        try {
+        const run = async () => {
           const writableDir = memoryIndexer.getWritableDirs()[0]
           if (!writableDir) {
             return errorResult(new Error('No writable memory directory configured'))
@@ -1946,6 +1945,10 @@ export function createMCPServer(
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({ slug, filePath, links: allLinks }) }]
           }
+        }
+        try {
+          // Serialize writes with other mutating memory tools.
+          return lock ? await lock.withWrite(run) : await run()
         } catch (err) {
           return errorResult(err)
         }
@@ -1963,7 +1966,7 @@ export function createMCPServer(
         annotations: { readOnlyHint: true, idempotentHint: true }
       },
       async ({ name }) => {
-        try {
+        const run = async () => {
           const pages = name
             ? [memoryStore.getByName(name)].filter((p): p is NonNullable<typeof p> => p != null && p.type === 'wiki')
             : memoryStore.getByType('wiki')
@@ -1992,6 +1995,9 @@ export function createMCPServer(
               text: JSON.stringify({ results, total: results.length, stale: staleCount }, null, 2)
             }]
           }
+        }
+        try {
+          return lock ? await lock.withRead(run) : await run()
         } catch (err) {
           return errorResult(err)
         }
