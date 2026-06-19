@@ -19,6 +19,7 @@ import type { SearchResult, SearchOptions } from "./types.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
 import { classifyIntent } from "./intent.js";
 import type { StoredChunk } from "../storage/types.js";
+import { chunkToSearchResult } from "./shared/mappers.js";
 
 // ── Scoring constants ────────────────────────────────────────────────
 export const IMPL_BOOST = 1.25;
@@ -405,18 +406,6 @@ export class RetrievalPipeline {
 
   // ── Convert a StoredChunk to a SearchResult ─────────────────────
   chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 }

@@ -258,7 +258,8 @@ export class FTSStore {
       }
       this._dfCache.set(term, row.cnt);
       return row.cnt;
-    } catch {
+    } catch (err) {
+      getLogger().warn({ err, term }, "FTS getDocFreq failed; treating term as absent");
       return 0;
     }
   }
@@ -270,7 +271,8 @@ export class FTSStore {
         rank: number;
       }>;
       return rows.map((r) => ({ id: r.id, rank: r.rank }));
-    } catch {
+    } catch (err) {
+      getLogger().warn({ err, query: ftsQuery }, "FTS query failed; returning empty results");
       return [];
     }
   }

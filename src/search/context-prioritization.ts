@@ -27,6 +27,10 @@ import type { SearchResult, AssembledContext } from "./types.js";
 import { resolveSeeds } from "./seed.js";
 import type { SeedResult } from "./seed.js";
 import { normalizeTargetText } from "./targets.js";
+import { INVENTORY_GENERIC_TARGET_ALIAS_TERMS, INVENTORY_STRUCTURAL_TERMS } from "./shared/workflow-families.js";
+import { isImplementationPath } from "./shared/mappers.js";
+
+export { isImplementationPath } from "./shared/mappers.js";
 
 // ── Scoring constants from the retrieval pipeline ─────────────────
 import {
@@ -55,15 +59,6 @@ export interface CompiledConceptBundle {
  * True when `filePath` sits under an implementation directory
  * (src/, lib/, bin/, etc.).
  */
-export function isImplementationPath(
-  filePath: string,
-  implementationPaths: string[] = ["src/", "lib/", "bin/"]
-): boolean {
-  const lowerPath = filePath.toLowerCase();
-  if (implementationPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-  return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
-}
-
 /**
  * True when the search result lives in an implementation path.
  */
@@ -293,13 +288,6 @@ export function prioritizeForHookContext(
 /** Inventory-suppression gate shared by several prepend strategies. */
 const BROAD_INVENTORY_RE =
   /\b(?:which|what|list|show)\s+files\b|\bfiles?\s+(?:implement|handle|power|control|cover)\b/i;
-const INVENTORY_GENERIC_TARGET_ALIAS_TERMS = new Set(["route", "routes", "router", "routing", "navigation"]);
-const INVENTORY_STRUCTURAL_TERMS = new Set([
-  "which", "what", "list", "show", "file", "files",
-  "implement", "implements", "handle", "handles",
-  "power", "powers", "control", "controls", "cover", "covers",
-  "full", "entire",
-]);
 
 function shouldSuppressBroadResolvedTarget(
   query: string,

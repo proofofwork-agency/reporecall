@@ -1,5 +1,6 @@
 import { basename } from "path";
 import type { CommunityRecord, GodNodeRecord, SurpriseRecord } from "../storage/metadata-store.js";
+import { slugify } from "../core/strings.js";
 
 export interface BusinessCommunityMember {
   name: string;
@@ -909,14 +910,6 @@ function isMetadataFile(filePath: string): boolean {
 
 function isLowSignalSymbol(name: string): boolean {
   return /^(test|describe|beforeeach|aftereach|render|forwardref_handler|test_handler|describe_handler)$/i.test(name);
-}
-
-function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
 }
 
 function unique(values: string[]): string[] {

@@ -30,7 +30,7 @@ export interface ResolvedTargetCandidate {
   phrase: string;
 }
 
-function splitIdentifierTokens(value: string): string[] {
+export function splitIdentifierTokens(value: string): string[] {
   return value
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
@@ -469,14 +469,6 @@ export function buildLiteralAliasCandidates(values: string[]): string[] {
     }
   }
   return Array.from(aliases).filter(Boolean);
-}
-
-export function sameNormalizedTarget(a: string, b: string): boolean {
-  return normalizeTargetText(a) === normalizeTargetText(b);
-}
-
-export function isIndexFilePath(filePath: string): boolean {
-  return INDEX_FILE_RE.test(basename(filePath));
 }
 
 export function fileStem(filePath: string): string {

@@ -1,3 +1,6 @@
+import { escapeRegExp } from "../core/strings.js";
+import { splitIdentifierTokens } from "./targets.js";
+
 /**
  * Common English stop words shared across search modules.
  * Union of words from seed.ts and ranker.ts to avoid duplicate definitions.
@@ -21,7 +24,6 @@ export const STOP_WORDS = new Set([
 ]);
 
 const CODE_DELIMITER_RE = /[^a-z0-9_./-]+/;
-const CAMEL_BOUNDARY_RE = /(?<!^)(?=[A-Z])/g;
 const TEST_PATH_RE =
   /(?:^|\/)(test|tests|spec|__tests__|__fixtures__|fixtures|benchmark|examples|e2e|cypress|playwright|integration)\//;
 const TEST_FILE_RE = /\.(test|spec|e2e)\.[^.]+$/;
@@ -552,14 +554,6 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
   },
 ];
 
-function splitIdentifierTokens(value: string): string[] {
-  return value
-    .replace(CAMEL_BOUNDARY_RE, " ")
-    .toLowerCase()
-    .split(CODE_DELIMITER_RE)
-    .filter(Boolean);
-}
-
 /**
  * Checks if a file path is a test/spec/fixture/benchmark/example file.
  */
@@ -845,6 +839,3 @@ export function textMatchesQueryTerm(text: string, term: string): boolean {
   });
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}

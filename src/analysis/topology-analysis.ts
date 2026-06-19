@@ -1,7 +1,7 @@
 import { basename } from "path";
 import type { AdjacencyGraph, GraphNode } from "./graph-builder.js";
 import type { CommunityResult } from "./community-detection.js";
-import { detectExecutionSurfaces } from "../search/utils.js";
+import { detectExecutionSurfaces, isTestFile } from "../search/utils.js";
 import type {
   GodNodeRecord,
   SurpriseRecord,
@@ -9,7 +9,6 @@ import type {
 } from "../storage/community-store.js";
 
 // --- Constants ported from graphify-3 analyze.py ---
-const TEST_FILE_RE = /[/\\](test|__tests__|spec|__spec__|fixtures|__fixtures__)[/\\]|\.(test|spec)\.[jt]sx?$/i;
 
 // Resolution source → surprise weight (replaces AMBIGUOUS/INFERRED/EXTRACTED)
 // Lowered alias_path from 3→1 because many normal cross-module deps use alias_path resolution
@@ -50,10 +49,6 @@ function isFileNode(node: GraphNode): boolean {
   // Method stubs: .foo()
   if (name.startsWith(".") && name.endsWith("()")) return true;
   return false;
-}
-
-function isTestFile(filePath: string): boolean {
-  return TEST_FILE_RE.test(filePath);
 }
 
 export function findGodNodes(
@@ -424,52 +419,3 @@ export function suggestQuestions(
   return questions.slice(0, topN);
 }
 
-// --- Graph Diff ---
-
-export interface GraphDiffResult {
-  newNodes: Array<{ chunkId: string; name: string }>;
-  removedNodes: Array<{ chunkId: string; name: string }>;
-  communityChanges: Array<{ chunkId: string; name: string; oldCommunity: number; newCommunity: number }>;
-  summary: string;
-}
-
-export function graphDiff(
-  oldMembership: Map<string, number>,
-  newMembership: Map<string, number>,
-  nodeNames: Map<string, string>
-): GraphDiffResult {
-  const newNodes: Array<{ chunkId: string; name: string }> = [];
-  const removedNodes: Array<{ chunkId: string; name: string }> = [];
-  const communityChanges: Array<{ chunkId: string; name: string; oldCommunity: number; newCommunity: number }> = [];
-
-  for (const [id, comm] of newMembership) {
-    if (!oldMembership.has(id)) {
-      newNodes.push({ chunkId: id, name: nodeNames.get(id) ?? id });
-    } else if (oldMembership.get(id) !== comm) {
-      communityChanges.push({
-        chunkId: id,
-        name: nodeNames.get(id) ?? id,
-        oldCommunity: oldMembership.get(id)!,
-        newCommunity: comm,
-      });
-    }
-  }
-
-  for (const [id] of oldMembership) {
-    if (!newMembership.has(id)) {
-      removedNodes.push({ chunkId: id, name: nodeNames.get(id) ?? id });
-    }
-  }
-
-  const parts: string[] = [];
-  if (newNodes.length > 0) parts.push(`${newNodes.length} new node${newNodes.length !== 1 ? "s" : ""}`);
-  if (removedNodes.length > 0) parts.push(`${removedNodes.length} removed node${removedNodes.length !== 1 ? "s" : ""}`);
-  if (communityChanges.length > 0) parts.push(`${communityChanges.length} community change${communityChanges.length !== 1 ? "s" : ""}`);
-
-  return {
-    newNodes,
-    removedNodes,
-    communityChanges,
-    summary: parts.length > 0 ? parts.join(", ") : "no structural changes",
-  };
-}

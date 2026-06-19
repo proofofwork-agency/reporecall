@@ -61,10 +61,6 @@ setInterval(() => {
   }
 }, RATE_LIMIT_CLEANUP_INTERVAL_MS).unref();
 
-export function resetHookSessionState(): void {
-  hookSessionState.clear();
-}
-
 export function resetRateLimitMap(): void {
   rateLimitMap.clear();
 }
@@ -554,7 +550,8 @@ export function createDaemonServer(
                 .filter((f: unknown) => typeof f === "string" && f.length < 1024)
                 .slice(0, 100);
             }
-          } catch {
+          } catch (err) {
+            log.warn({ err }, "prompt-context body JSON parse failed; falling back to raw body as query");
             query = body;
           }
 
@@ -971,7 +968,8 @@ export function createDaemonServer(
               return;
             }
             parsed = validation.data as Record<string, unknown>;
-          } catch {
+          } catch (err) {
+            log.warn({ err }, "pre-tool-use body JSON parse failed; continuing with empty context");
             parsed = {};
           }
 

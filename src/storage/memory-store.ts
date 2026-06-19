@@ -12,6 +12,7 @@ import { resolve, dirname } from "path";
 import { mkdirSync } from "fs";
 import type Database from "better-sqlite3";
 import { openSqliteWithRecovery } from "./sqlite-utils.js";
+import { getLogger } from "../core/logger.js";
 import type {
   Memory,
   MemoryCompactionOptions,
@@ -581,8 +582,8 @@ export class MemoryStore {
         rank: number;
       }>;
       return rows.map((r) => ({ id: r.id, rank: r.rank }));
-    } catch {
-      // FTS query syntax error — return empty
+    } catch (err) {
+      getLogger().warn({ err }, "Memory FTS query failed; returning empty results");
       return [];
     }
   }

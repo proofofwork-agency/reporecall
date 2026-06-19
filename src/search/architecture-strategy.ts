@@ -34,6 +34,18 @@ import {
   textMatchesQueryTerm,
   tokenizeQueryTerms,
 } from "./utils.js";
+import {
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  INVENTORY_STRUCTURAL_TERMS,
+  ADJACENT_WORKFLOW_FAMILIES,
+} from "./shared/workflow-families.js";
+import { chunkToSearchResult, isImplementationPath } from "./shared/mappers.js";
+
+export {
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  INVENTORY_STRUCTURAL_TERMS,
+  ADJACENT_WORKFLOW_FAMILIES,
+} from "./shared/workflow-families.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -41,33 +53,8 @@ import {
 
 export const BROAD_PHRASE_GENERIC_TERMS = GENERIC_BROAD_TERMS;
 
-export const INVENTORY_GENERIC_TARGET_ALIAS_TERMS = new Set([
-  "route", "routes", "router", "routing", "navigation",
-]);
-
 export const BROAD_INVENTORY_RE =
   /\b(?:which|what|list|show)\s+files\b|\bfiles?\s+(?:implement|handle|power|control|cover)\b/i;
-
-export const INVENTORY_STRUCTURAL_TERMS = new Set([
-  "which",
-  "what",
-  "list",
-  "show",
-  "file",
-  "files",
-  "implement",
-  "implements",
-  "handle",
-  "handles",
-  "power",
-  "powers",
-  "control",
-  "controls",
-  "cover",
-  "covers",
-  "full",
-  "entire",
-]);
 
 export const SUBSYSTEM_INVENTORY_FAMILIES = new Set(["search"]);
 
@@ -79,16 +66,6 @@ export const STRICT_WORKFLOW_FAMILY_COHESION = new Set([
   "generation",
   "workflow",
 ]);
-
-export const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
-  auth: ["routing", "permissions"],
-  routing: ["auth", "permissions"],
-  billing: ["auth", "generation"],
-  storage: ["auth", "generation"],
-  generation: ["storage", "queue", "billing", "workflow"],
-  queue: ["generation", "workflow"],
-  workflow: ["generation", "queue"],
-};
 
 // ---------------------------------------------------------------------------
 // Types / interfaces
@@ -2530,26 +2507,11 @@ export class ArchitectureStrategy {
   // -------------------------------------------------------------------------
 
   private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 
   private isImplementationPath(filePath: string): boolean {
-    const lowerPath = filePath.toLowerCase();
-    const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
-    if (implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-    return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
+    return isImplementationPath(filePath, this.config.implementationPaths ?? ["src/", "lib/", "bin/"]);
   }
 
   private getMatchedConceptBundles(query: string): CompiledConceptBundle[] {

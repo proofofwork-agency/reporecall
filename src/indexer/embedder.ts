@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "./types.js";
 import { LocalEmbedder } from "./local-embedder.js";
 import { NullEmbedder } from "./null-embedder.js";
+import { getLogger } from "../core/logger.js";
 
 /**
  * HTTP error thrown by embedding providers. Carries the status code and an
@@ -177,7 +178,8 @@ export class OllamaEmbedder implements EmbeddingProvider {
     try {
       const response = await fetch(`${this.url}/api/tags`);
       return response.ok;
-    } catch {
+    } catch (err) {
+      getLogger().debug({ err }, "Ollama healthCheck failed");
       return false;
     }
   }

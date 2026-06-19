@@ -1,6 +1,5 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { StoredChunk } from "../storage/types.js";
-import type { MemorySearchResult } from "../memory/types.js";
 import type { QueryMode } from "./intent.js";
 import type { SearchResult } from "./types.js";
 import { isTestFile, textMatchesQueryTerm, tokenizeQueryTerms, STOP_WORDS, GENERIC_BROAD_TERMS, GENERIC_QUERY_ACTION_TERMS } from "./utils.js";
@@ -315,10 +314,6 @@ export function hydrateCapabilityEvidenceFiles(
     hydrated.push(storedChunkToSearchResult(chunk, Math.max(0.2, file.score / 100), file));
   }
   return hydrated;
-}
-
-export function isBusinessWikiPage(page: Pick<MemorySearchResult, "name" | "content" | "filePath">): boolean {
-  return page.name.startsWith("business-") || /^---[\s\S]*?\npageType:\s*"?business"?/m.test(page.content);
 }
 
 function inferCapabilityFamilies(query: string): CapabilityFamilies {

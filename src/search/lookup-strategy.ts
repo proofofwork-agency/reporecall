@@ -7,30 +7,14 @@
 
 import type { SearchResult } from "./types.js";
 import type { SeedResult, SeedCandidate } from "./seed.js";
-import type { StoredChunk } from "../storage/types.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import { GENERIC_BROAD_TERMS, GENERIC_QUERY_ACTION_TERMS, isTestFile, STOP_WORDS } from "./utils.js";
 import { resolveTargetsForQuery } from "./targets.js";
+import { chunkToSearchResult } from "./shared/mappers.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-  return {
-    id: chunk.id,
-    score,
-    filePath: chunk.filePath,
-    name: chunk.name,
-    kind: chunk.kind,
-    startLine: chunk.startLine,
-    endLine: chunk.endLine,
-    content: chunk.content,
-    docstring: chunk.docstring,
-    parentName: chunk.parentName,
-    language: chunk.language ?? "",
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Seed filtering helpers

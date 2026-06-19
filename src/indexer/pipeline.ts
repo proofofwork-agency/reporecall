@@ -771,8 +771,12 @@ export class IndexingPipeline {
       if (degradedFiles.has(relPath)) continue;
       try {
         await this.merkle.updateHash(relPath, absPath);
-      } catch {
-        // file may have been deleted
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          /* file deleted mid-index */
+        } else {
+          getLogger().warn({ err, relPath }, "merkle.updateHash failed (non-ENOENT)");
+        }
       }
     }
     this.merkle.save();

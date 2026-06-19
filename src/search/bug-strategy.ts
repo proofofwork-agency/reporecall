@@ -30,6 +30,12 @@ import {
   type ExecutionSurfaceBias,
 } from "./utils.js";
 import { normalizeTargetText } from "./targets.js";
+import {
+  ADJACENT_WORKFLOW_FAMILIES,
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  TRACE_NOISE_TERMS,
+} from "./shared/workflow-families.js";
+import { chunkToSearchResult, isImplementationPath } from "./shared/mappers.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -117,19 +123,6 @@ export const BUG_SUBJECT_TAG_RULES: Array<{ tag: string; pattern: RegExp; relate
 
 const MODE_EXPLICIT_LOGGING_RE = /\b(log|logger|logging|audit|instrument|instrumentation|telemetry|metrics?)\b/i;
 const MODE_EXPLICIT_WEBHOOK_RE = /\b(webhook|signature|payload|delivery|event)\b/i;
-
-const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
-  auth: ["routing", "permissions"],
-  routing: ["auth", "permissions"],
-  billing: ["auth"],
-  storage: ["auth"],
-  generation: ["storage"],
-};
-
-const INVENTORY_GENERIC_TARGET_ALIAS_TERMS = new Set(["route", "routes", "router", "routing", "navigation"]);
-
-// Imported via re-export so the trace noise set is only needed internally
-const TRACE_NOISE_TERMS = new Set(["path", "page", "pages", "include", "includes", "including", "start", "first", "then", "full", "intent"]);
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -2828,10 +2821,7 @@ export class BugStrategy {
   }
 
   private isImplementationPath(filePath: string): boolean {
-    const lowerPath = filePath.toLowerCase();
-    const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
-    if (implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-    return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
+    return isImplementationPath(filePath, this.config.implementationPaths ?? ["src/", "lib/", "bin/"]);
   }
 
   private detectWorkflowLayers(lowerPath: string, lowerName: string): string[] {
@@ -2863,19 +2853,7 @@ export class BugStrategy {
   }
 
   private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 
   private mergeBroadResults(targetResults: SearchResult[], results: SearchResult[]): SearchResult[] {

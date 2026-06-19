@@ -17,6 +17,7 @@ import { writeManagedMemoryFile } from "../memory/files.js";
 import { resolveAllLinks } from "./links.js";
 import { getLogger } from "../core/logger.js";
 import { buildBusinessPages } from "./business.js";
+import { slugify } from "../core/strings.js";
 
 const WIKI_GENERATOR_VERSION = "deterministic-wiki-v3-business-presentation";
 const GENERATED_WIKI_PREFIXES = /^(business-|community-|hub-|surprises-)/;
@@ -426,14 +427,6 @@ export class WikiGenerator {
       return "";
     }
   }
-}
-
-function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
 }
 
 function uniqueValues(arr: string[]): string[] {
