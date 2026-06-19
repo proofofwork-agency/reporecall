@@ -44,7 +44,7 @@ export interface CapabilityEvidenceResult {
 
 type CapabilityMetadata = Partial<Pick<
   MetadataStore,
-  "findChunksByFilePath" | "getAllChunks" | "getImportsForFile" | "findImporterFiles" | "findCallers" | "findCallees" | "findCalleesForChunk"
+  "findChunksByFilePath" | "getAllChunks" | "getChunksLightweight" | "getImportsForFile" | "findImporterFiles" | "findCallers" | "findCallees" | "findCalleesForChunk"
 >>;
 
 interface MutableEvidenceFile extends CapabilityEvidenceFile {
@@ -478,8 +478,7 @@ function findMandatoryFlowFiles(
   metadata: CapabilityMetadata,
   families: CapabilityFamilies
 ): string[] {
-  const files = new Set<string>();
-  for (const chunk of getAllChunks(metadata)) files.add(chunk.filePath);
+  const files = getDistinctFilePaths(metadata);
   const primary = primaryCapabilityFamily(families);
   const broad = queryMode === "architecture" || queryMode === "change" || /\b(full|from|through|which\s+files?|all\s+files?|flow|workflow|end[- ]?to[- ]?end)\b/i.test(query);
   if (!primary) {
@@ -504,8 +503,7 @@ function findQueryAnchoredFlowFiles(
   metadata: CapabilityMetadata,
   limit: number
 ): string[] {
-  const files = new Set<string>();
-  for (const chunk of getAllChunks(metadata)) files.add(chunk.filePath);
+  const files = getDistinctFilePaths(metadata);
   const candidates = Array.from(files)
     .map((filePath) => {
       const chunks = findFileChunks(metadata, filePath);
@@ -711,8 +709,17 @@ function findFileChunks(metadata: CapabilityMetadata, filePath: string): StoredC
   return metadata.findChunksByFilePath?.(filePath) ?? [];
 }
 
-function getAllChunks(metadata: CapabilityMetadata): StoredChunk[] {
-  return metadata.getAllChunks?.() ?? [];
+// Hot-path: enumerate unique file paths WITHOUT loading chunk content. The
+// lightweight projection excludes `content`, avoiding the largest avoidable
+// I/O on the per-query path. Falls back to getAllChunks() if unavailable.
+function getDistinctFilePaths(metadata: CapabilityMetadata): Set<string> {
+  const files = new Set<string>();
+  if (metadata.getChunksLightweight) {
+    for (const chunk of metadata.getChunksLightweight()) files.add(chunk.filePath);
+  } else {
+    for (const chunk of metadata.getAllChunks?.() ?? []) files.add(chunk.filePath);
+  }
+  return files;
 }
 
 function selectBestChunkForEvidence(chunks: StoredChunk[]): StoredChunk | null {

@@ -595,6 +595,7 @@ export class ArchitectureStrategy {
       && orderedSelectedFiles.length < Math.min(maxContextChunks, 4)
     ) {
       const orderedSeen = new Set(orderedSelectedFiles.map((candidate) => candidate.filePath));
+      const orderedSelectedLayers = new Set(orderedSelectedFiles.flatMap((item) => item.layers));
       const supplementalAuthRoutingFiles = this.mergeBroadFileCandidates(
         [...scopedFileCandidates],
         [...fileCandidates]
@@ -612,8 +613,8 @@ export class ArchitectureStrategy {
           const bText = normalizeTargetText(`${b.filePath} ${b.primary.result.name}`);
           const aBackbone = /\b(callback|redirect|protected|guard|pending|destination)\b/.test(aText) ? 120 : 0;
           const bBackbone = /\b(callback|redirect|protected|guard|pending|destination)\b/.test(bText) ? 120 : 0;
-          const aLayerDiversity = a.layers.some((layer) => !orderedSelectedFiles.flatMap((item) => item.layers).includes(layer)) ? 30 : 0;
-          const bLayerDiversity = b.layers.some((layer) => !orderedSelectedFiles.flatMap((item) => item.layers).includes(layer)) ? 30 : 0;
+          const aLayerDiversity = a.layers.some((layer) => !orderedSelectedLayers.has(layer)) ? 30 : 0;
+          const bLayerDiversity = b.layers.some((layer) => !orderedSelectedLayers.has(layer)) ? 30 : 0;
           return (bBackbone + bLayerDiversity + b.score) - (aBackbone + aLayerDiversity + a.score);
         })
         .slice(0, Math.min(maxContextChunks, 4) - orderedSelectedFiles.length);

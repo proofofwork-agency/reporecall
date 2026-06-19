@@ -442,16 +442,27 @@ export class IndexingPipeline {
       this.metadata.upsertImports(windowImports);
     }
 
+    // Dedup: resolveCallTarget is a pure read-only lookup, so identical
+    // (targetName, filePath, receiver, literalTargets) edges resolve identically.
+    // Cache per-window to skip redundant SQL for repeated call targets.
+    const edgeResolutionCache = new Map<string, ReturnType<typeof resolveCallTarget>>();
     for (const edge of windowCallEdges) {
-      const resolution = resolveCallTarget(
-        {
-          targetName: edge.targetName,
-          filePath: edge.filePath,
-          receiver: edge.receiver,
-          literalTargets: edge.literalTargets,
-        },
-        this.metadata
-      );
+      const cacheKey = `${edge.targetName}\0${edge.filePath}\0${edge.receiver ?? ""}\0${(edge.literalTargets ?? []).join("\u0001")}`;
+      let resolution: ReturnType<typeof resolveCallTarget>;
+      if (edgeResolutionCache.has(cacheKey)) {
+        resolution = edgeResolutionCache.get(cacheKey) ?? null;
+      } else {
+        resolution = resolveCallTarget(
+          {
+            targetName: edge.targetName,
+            filePath: edge.filePath,
+            receiver: edge.receiver,
+            literalTargets: edge.literalTargets,
+          },
+          this.metadata
+        );
+        edgeResolutionCache.set(cacheKey, resolution);
+      }
       if (resolution) {
         edge.targetFilePath = resolution.filePath;
         edge.targetId = resolution.targetId;

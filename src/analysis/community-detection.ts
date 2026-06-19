@@ -98,13 +98,31 @@ export function detectCommunities(
     raw.set(nextCid++, [iso]);
   }
 
+  // Single membership-bucketed pass over all edges: precompute each raw
+  // community's internal edges so splitCommunity can read them instead of
+  // scanning the whole graph once per oversized community.
+  const rawMembership = new Map<string, number>();
+  for (const [cid, members] of raw) {
+    for (const m of members) rawMembership.set(m, cid);
+  }
+  const rawEdges = new Map<number, Array<[string, string, string]>>();
+  g.forEachEdge((edge, _attrs, source, target) => {
+    const cs = rawMembership.get(source);
+    const ct = rawMembership.get(target);
+    if (cs !== undefined && cs === ct) {
+      let bucket = rawEdges.get(cs);
+      if (bucket === undefined) { bucket = []; rawEdges.set(cs, bucket); }
+      bucket.push([source, target, edge]);
+    }
+  });
+
   // Split oversized communities
   const maxSize = Math.max(minSplit, Math.floor(adjGraph.nodeCount * maxFrac));
   const splitCommunities: string[][] = [];
 
-  for (const [, members] of raw) {
+  for (const [cid, members] of raw) {
     if (members.length > maxSize) {
-      const subs = splitCommunity(g, members);
+      const subs = splitCommunity(g, members, rawEdges.get(cid) ?? []);
       for (const sub of subs) splitCommunities.push(sub);
     } else {
       splitCommunities.push(members);
@@ -123,27 +141,46 @@ export function detectCommunities(
     const members = splitCommunities[i]!.sort();
     communities.set(i, members);
     for (const m of members) membership.set(m, i);
-    cohesionMap.set(i, computeCohesion(g, members));
+  }
+
+  // Single pass over all edges: count internal edges per final community
+  // (replaces one full forEachEdge per community in computeCohesion).
+  const internalEdges = new Map<number, number>();
+  for (let i = 0; i < splitCommunities.length; i++) internalEdges.set(i, 0);
+  g.forEachEdge((_edge, _attrs, source, target) => {
+    const cs = membership.get(source);
+    const ct = membership.get(target);
+    if (cs !== undefined && cs === ct) {
+      internalEdges.set(cs, internalEdges.get(cs)! + 1);
+    }
+  });
+
+  for (let i = 0; i < splitCommunities.length; i++) {
+    const members = communities.get(i)!;
+    cohesionMap.set(i, computeCohesion(members.length, internalEdges.get(i) ?? 0));
     labels.set(i, generateLabel(adjGraph, members));
   }
 
   return { communities, membership, cohesion: cohesionMap, labels };
 }
 
-function splitCommunity(g: Graph, nodes: string[]): string[][] {
-  // Build subgraph and re-run Louvain
+function splitCommunity(
+  g: Graph,
+  nodes: string[],
+  edges: Array<[string, string, string]>
+): string[][] {
+  // Build subgraph from pre-bucketed edges (order preserved from the single pass)
   const sub = new Graph({ type: "undirected", multi: false });
-  const nodeSet = new Set(nodes);
 
   for (const n of nodes) {
     if (g.hasNode(n)) sub.addNode(n, g.getNodeAttributes(n));
   }
 
-  g.forEachEdge((_edge, _attrs, source, target) => {
-    if (nodeSet.has(source) && nodeSet.has(target) && sub.hasNode(source) && sub.hasNode(target)) {
-      try { sub.addEdge(source, target, _attrs); } catch { /* dup */ }
+  for (const [source, target, edge] of edges) {
+    if (sub.hasNode(source) && sub.hasNode(target)) {
+      try { sub.addEdge(source, target, g.getEdgeAttributes(edge)); } catch { /* dup */ }
     }
-  });
+  }
 
   if (sub.size === 0) {
     // No internal edges — each node is its own community
@@ -168,22 +205,15 @@ function splitCommunity(g: Graph, nodes: string[]): string[][] {
 
 /**
  * Cohesion = actual_internal_edges / possible_internal_edges.
- * Mirrors graphify-3's cohesion_score().
+ * Mirrors graphify-3's cohesion_score(). `internalEdges` is precomputed in a
+ * single membership-bucketed pass over all edges by the caller.
  */
-function computeCohesion(g: Graph, members: string[]): number {
-  const n = members.length;
+function computeCohesion(n: number, internalEdges: number): number {
   if (n <= 1) return 1.0;
-
-  const memberSet = new Set(members);
-  let actualEdges = 0;
-
-  g.forEachEdge((_edge, _attrs, source, target) => {
-    if (memberSet.has(source) && memberSet.has(target)) actualEdges++;
-  });
 
   const possible = (n * (n - 1)) / 2;
   if (possible === 0) return 0;
-  return Math.round((actualEdges / possible) * 100) / 100;
+  return Math.round((internalEdges / possible) * 100) / 100;
 }
 
 /**

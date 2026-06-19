@@ -7,7 +7,7 @@ import { basename } from "path";
 import { readFileSync } from "fs";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { MemoryStore } from "../storage/memory-store.js";
-import { buildAdjacencyGraph } from "../analysis/graph-builder.js";
+import { buildAdjacencyGraph, type GraphNode } from "../analysis/graph-builder.js";
 import { buildProductAreas, deriveBusinessDisplayName, evaluateBusinessPresentation } from "../business/product-areas.js";
 import { slugify, extractSectionText, extractBulletSection, humanizeSlug } from "../core/strings.js";
 import type {
@@ -55,6 +55,13 @@ export function extractDashboardData(
   const graph = includeGraphDetails
     ? buildAdjacencyGraph(metadata)
     : { nodes: new Map(), adjacency: new Map(), nodeCount: 0, edgeCount: 0 };
+
+  // Index graph nodes by name+file (first match wins, mirroring Array.find order)
+  const nodeByNameFile = new Map<string, GraphNode>();
+  for (const gn of graph.nodes.values()) {
+    const key = `${gn.name}\x00${gn.filePath}`;
+    if (!nodeByNameFile.has(key)) nodeByNameFile.set(key, gn);
+  }
 
   // --- Communities ---
   const rawCommunities = metadata.getAllCommunities(maxCommunities);
@@ -113,10 +120,7 @@ export function extractDashboardData(
         name: m.name,
         kind: m.kind,
         filePath: m.filePath,
-        degree: graph.nodes.get(
-          // Find the graph node by name match
-          Array.from(graph.nodes.values()).find((gn) => gn.name === m.name && gn.filePath === m.filePath)?.chunkId ?? ""
-        )?.degree ?? 0,
+        degree: nodeByNameFile.get(`${m.name}\x00${m.filePath}`)?.degree ?? 0,
       }))
       .sort((a, b) => b.degree - a.degree);
 
@@ -207,8 +211,8 @@ export function extractDashboardData(
   const rawSurprises = metadata.getTopSurprises(maxSurprises);
   const surprises: SurpriseViz[] = rawSurprises.map((s) => {
     // Resolve chunk names and files
-    const srcNode = Array.from(graph.nodes.values()).find((n) => n.chunkId === s.sourceChunkId);
-    const tgtNode = Array.from(graph.nodes.values()).find((n) => n.chunkId === s.targetChunkId);
+    const srcNode = graph.nodes.get(s.sourceChunkId);
+    const tgtNode = graph.nodes.get(s.targetChunkId);
 
     return {
       sourceName: srcNode?.name ?? s.sourceChunkId,
@@ -270,6 +274,9 @@ export function extractDashboardData(
   }
   const productAreas = buildProductAreas(businessPages);
 
+  // Set of wiki node names for O(1) edge endpoint filtering
+  const wikiNodeNames = new Set(wikiGraphNodes.map((n) => n.name));
+
   // --- Meta ---
   const meta: DashboardMeta = {
     projectName: basename(opts.projectRoot ?? process.cwd()),
@@ -301,8 +308,7 @@ export function extractDashboardData(
     wikiPages,
     wikiGraphNodes,
     wikiGraphEdges: wikiGraphEdges.filter((edge) =>
-      wikiGraphNodes.some((node) => node.name === edge.source) &&
-      wikiGraphNodes.some((node) => node.name === edge.target)
+      wikiNodeNames.has(edge.source) && wikiNodeNames.has(edge.target)
     ),
     businessPages,
     productAreas,
