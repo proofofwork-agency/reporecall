@@ -34,6 +34,9 @@ export class ChunkStore {
   private selectLanguageCountsStmt!: Database.Statement;
   private selectSiblingsStmt!: Database.Statement;
   private selectChunksByFilePathStmt!: Database.Statement;
+  private selectChunksByIdsStmt!: Database.Statement;
+  private selectChunkScoringByIdsStmt!: Database.Statement;
+  private selectChunksByNamesStmt!: Database.Statement;
   private clearFilesStmt!: Database.Statement;
   private clearChunksStmt!: Database.Statement;
 
@@ -108,6 +111,17 @@ export class ChunkStore {
        AND kind != 'file' AND name != '<anonymous>'
        ORDER BY start_line ASC`
     );
+    const inPlaceholders = Array.from({ length: ChunkStore.SQLITE_PARAM_LIMIT }, () => "?").join(",");
+    this.selectChunksByIdsStmt = this.db.prepare(
+      `SELECT * FROM chunks WHERE id IN (${inPlaceholders})`
+    );
+    this.selectChunkScoringByIdsStmt = this.db.prepare(
+      `SELECT id, file_path, name, kind, parent_name, indexed_at, file_mtime, start_line, end_line
+       FROM chunks WHERE id IN (${inPlaceholders})`
+    );
+    this.selectChunksByNamesStmt = this.db.prepare(
+      `SELECT * FROM chunks WHERE name IN (${inPlaceholders})`
+    );
     this.clearFilesStmt = this.db.prepare(`DELETE FROM files`);
     this.clearChunksStmt = this.db.prepare(`DELETE FROM chunks`);
   }
@@ -154,13 +168,7 @@ export class ChunkStore {
     const results: ChunkScoringInfo[] = [];
     for (let i = 0; i < ids.length; i += ChunkStore.SQLITE_PARAM_LIMIT) {
       const batch = ids.slice(i, i + ChunkStore.SQLITE_PARAM_LIMIT);
-      const placeholders = batch.map(() => "?").join(",");
-      const rows = this.db
-        .prepare(
-          `SELECT id, file_path, name, kind, parent_name, indexed_at, file_mtime, start_line, end_line
-           FROM chunks WHERE id IN (${placeholders})`
-        )
-        .all(...batch) as Array<Record<string, unknown>>;
+      const rows = this.selectChunkScoringByIdsStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
       results.push(...rows.map((row) => ({
         id: row.id as string,
         filePath: row.file_path as string,
@@ -181,10 +189,7 @@ export class ChunkStore {
     const results: StoredChunk[] = [];
     for (let i = 0; i < ids.length; i += ChunkStore.SQLITE_PARAM_LIMIT) {
       const batch = ids.slice(i, i + ChunkStore.SQLITE_PARAM_LIMIT);
-      const placeholders = batch.map(() => "?").join(",");
-      const rows = this.db
-        .prepare(`SELECT * FROM chunks WHERE id IN (${placeholders})`)
-        .all(...batch) as Array<Record<string, unknown>>;
+      const rows = this.selectChunksByIdsStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
       results.push(...rows.map((row) => this.mapRow(row)));
     }
     return results;
@@ -230,10 +235,7 @@ export class ChunkStore {
     const results: StoredChunk[] = [];
     for (let i = 0; i < names.length; i += ChunkStore.SQLITE_PARAM_LIMIT) {
       const batch = names.slice(i, i + ChunkStore.SQLITE_PARAM_LIMIT);
-      const placeholders = batch.map(() => "?").join(",");
-      const rows = this.db
-        .prepare(`SELECT * FROM chunks WHERE name IN (${placeholders})`)
-        .all(...batch) as Array<Record<string, unknown>>;
+      const rows = this.selectChunksByNamesStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
       results.push(...rows.map((row) => this.mapRow(row)));
     }
     return results;
@@ -292,6 +294,12 @@ export class ChunkStore {
       this.clearFilesStmt.run();
       this.clearChunksStmt.run();
     })();
+  }
+
+  private padToLimit(values: string[]): unknown[] {
+    const bindings: unknown[] = values.slice();
+    while (bindings.length < ChunkStore.SQLITE_PARAM_LIMIT) bindings.push(null);
+    return bindings;
   }
 
   private mapRow(row: Record<string, unknown>): StoredChunk {

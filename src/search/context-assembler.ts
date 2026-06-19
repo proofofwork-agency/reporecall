@@ -88,7 +88,15 @@ export function assembleContext(
   // Header — file list is added after chunk assembly (placeholder budget for now)
   const baseHeader = "## Relevant codebase context\n\n";
   const directiveLine = "> Answer from this context first. Only fetch files NOT listed above.\n\n";
-  const headerBudget = countTokens(baseHeader) + (directiveHeader ? countTokens(directiveLine) + 40 /* file list estimate */ : 0);
+  const fileListFileCount = results.length > 0
+    ? Math.min(new Set(results.map((r) => r.filePath)).size, 8)
+    : 0;
+  const fileListEstimate = fileListFileCount > 0
+    ? countTokens("> Files included: ") + fileListFileCount * 12
+    : 0;
+  const headerBudget = countTokens(baseHeader)
+    + fileListEstimate
+    + (directiveHeader ? countTokens(directiveLine) : 0);
   totalTokens += headerBudget;
 
   // Drop results scoring below scoreFloorRatio of the top result
@@ -101,6 +109,7 @@ export function assembleContext(
   const SUMMARY_RESERVE = 80;
 
   for (const result of results) {
+    if (included.length >= maxChunks) break;
     if (result.score < scoreFloor) continue;
     const fullText = formatChunk(result);
     const fullTokens = countTokens(fullText);
@@ -158,8 +167,6 @@ export function assembleContext(
     totalTokens += candidate.tokenCount;
     included.push(result);
     rendered.push(candidate);
-
-    if (included.length >= maxChunks) break;
   }
 
   // Build direct facts (skip summary — chunk list is redundant with the chunks themselves)
@@ -442,10 +449,25 @@ function extractUniqueMatches(
   return Array.from(values);
 }
 
+function longestBacktickRun(content: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const ch of content) {
+    if (ch === "`") {
+      current++;
+      if (current > longest) longest = current;
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
 function formatChunk(result: SearchResult): string {
   const lang = result.language || "";
   const location = `Lines ${result.startLine}-${result.endLine}: ${result.kind} ${result.name}`;
-  return `\`\`\`${lang}\n// ${location}\n${result.content}\n\`\`\`\n`;
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(result.content) + 1));
+  return `${fence}${lang}\n// ${location}\n${result.content}\n${fence}\n`;
 }
 
 // --- Metadata-aware chunk type for hydration ---
@@ -846,8 +868,21 @@ export function assembleFlowContext(
   // Build header
   const seedInfo = `${tree.seed.name} (${tree.seed.kind}, ${seedChunk.filePath}:${seedChunk.startLine}-${seedChunk.endLine})`;
 
-  // Header is built after chunk assembly to include file list; use budget estimate
-  const headerEstimate = 60; // conservative estimate for header tokens
+  // Header is built after chunk assembly to include file list; estimate its
+  // tokens from the title, file list (up to 8 paths), directive, and seed line.
+  const flowFileCount = Math.min(
+    new Set(
+      [seedChunk.filePath, ...tree.upTree.map((n) => n.filePath), ...tree.downTree.map((n) => n.filePath)]
+        .filter((p): p is string => Boolean(p))
+    ).size,
+    8
+  );
+  const flowTitle = "## Relevant codebase context (flow trace)\n\n";
+  const flowDirective = "> Answer from this context first. The flow trace below shows the call graph from the seed.\n";
+  const headerEstimate = countTokens(flowTitle)
+    + (flowFileCount > 0 ? countTokens("> Files included: ") + flowFileCount * 12 : 0)
+    + countTokens(flowDirective)
+    + countTokens(`> Seed: ${seedInfo}\n\n`);
   let totalTokens = headerEstimate;
   const included: SearchResult[] = [];
 

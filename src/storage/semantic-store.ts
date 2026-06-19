@@ -15,6 +15,7 @@ export class SemanticStore {
   private clearChunkFeaturesStmt!: Database.Statement;
   private clearFileFeaturesStmt!: Database.Statement;
   private clearChunkTagsStmt!: Database.Statement;
+  private readonly inStatementsByTemplate = new Map<string, Database.Statement>();
 
   constructor(private readonly db: Database.Database) {}
 
@@ -281,14 +282,25 @@ export class SemanticStore {
     sqlTemplate: string
   ): Array<Record<string, unknown>> {
     const SQLITE_PARAM_LIMIT = 900;
+    const stmt = this.getCachedInStatement(sqlTemplate);
     const results: Array<Record<string, unknown>> = [];
     for (let i = 0; i < ids.length; i += SQLITE_PARAM_LIMIT) {
       const batch = ids.slice(i, i + SQLITE_PARAM_LIMIT);
-      const placeholders = batch.map(() => "?").join(",");
-      const sql = sqlTemplate.replace("__IDS__", placeholders);
-      const rows = this.db.prepare(sql).all(...batch) as Array<Record<string, unknown>>;
+      const bindings: unknown[] = batch.slice();
+      while (bindings.length < SQLITE_PARAM_LIMIT) bindings.push(null);
+      const rows = stmt.all(...bindings) as Array<Record<string, unknown>>;
       results.push(...rows);
     }
     return results;
+  }
+
+  private getCachedInStatement(sqlTemplate: string): Database.Statement {
+    let stmt = this.inStatementsByTemplate.get(sqlTemplate);
+    if (!stmt) {
+      const placeholders = Array.from({ length: 900 }, () => "?").join(",");
+      stmt = this.db.prepare(sqlTemplate.replace("__IDS__", placeholders));
+      this.inStatementsByTemplate.set(sqlTemplate, stmt);
+    }
+    return stmt;
   }
 }

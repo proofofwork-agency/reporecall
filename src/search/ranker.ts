@@ -14,6 +14,30 @@ export interface RankedItem {
   score: number;
 }
 
+const MATCH_BOOST_CEILING = 8;
+
+function splitBoundaryTokens(text: string): string[] {
+  return text
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .toLowerCase()
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+function variantMatchesText(
+  variant: string,
+  boundaryTokens: Set<string>,
+  lowerText: string
+): boolean {
+  if (variant.length <= 4) {
+    return boundaryTokens.has(variant);
+  }
+  return lowerText.includes(variant);
+}
+
 export function reciprocalRankFusion(
   vectorResults: Array<{ id: string; score: number }>,
   keywordResults: Array<{ id: string; rank: number }>,
@@ -165,8 +189,12 @@ export function reciprocalRankFusion(
 
     if (terms.length > 0) {
       for (const [id, item] of scores) {
-        const filePath = (chunkFilePaths.get(id) ?? "").toLowerCase();
-        const chunkName = (chunkNames?.get(id) ?? "").toLowerCase();
+        const rawFilePath = chunkFilePaths.get(id) ?? "";
+        const rawChunkName = chunkNames?.get(id) ?? "";
+        const filePath = rawFilePath.toLowerCase();
+        const chunkName = rawChunkName.toLowerCase();
+        const pathTokens = new Set(splitBoundaryTokens(rawFilePath));
+        const nameTokens = new Set(splitBoundaryTokens(rawChunkName));
 
         let matchCount = 0;
         let matchedWeight = 0;
@@ -177,7 +205,10 @@ export function reciprocalRankFusion(
 
         for (const term of expandedTerms) {
           const variants = getQueryTermVariants(term.term);
-          if (variants.some((variant) => filePath.includes(variant) || chunkName.includes(variant))) {
+          if (variants.some((variant) =>
+            variantMatchesText(variant, pathTokens, filePath)
+            || variantMatchesText(variant, nameTokens, chunkName)
+          )) {
             matchCount++;
             matchedWeight += term.weight;
             matchBoost *= camelTerms.has(term.term) ? 1.7 : term.term.length >= 8 ? 1.45 : term.weight >= 0.7 ? 1.3 : 1.18;
@@ -186,6 +217,8 @@ export function reciprocalRankFusion(
             if (!term.generic) onlyGenericMatches = false;
           }
         }
+
+        matchBoost = Math.min(matchBoost, MATCH_BOOST_CEILING);
 
         if (matchCount > 0) {
           const coverageRatio = matchedWeight / totalExpandedWeight;

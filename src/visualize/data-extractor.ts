@@ -8,7 +8,7 @@ import { readFileSync } from "fs";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { MemoryStore } from "../storage/memory-store.js";
 import { buildAdjacencyGraph, type GraphNode } from "../analysis/graph-builder.js";
-import { buildProductAreas, deriveBusinessDisplayName, evaluateBusinessPresentation } from "../business/product-areas.js";
+import { buildProductAreas, deriveBusinessDisplayName, deriveBusinessDisplaySummary, evaluateBusinessPresentation } from "../business/product-areas.js";
 import { slugify, extractSectionText, extractBulletSection, humanizeSlug } from "../core/strings.js";
 import type {
   DashboardData,
@@ -70,12 +70,22 @@ export function extractDashboardData(
   // Build chunk→community and community→chunks maps (use chunk.id for DB lookup)
   const chunkCommunityMap = new Map<string, string>();
   const communityChunks = new Map<string, Array<{ name: string; filePath: string; kind: string }>>();
-  for (const chunk of allChunks) {
-    const cid = metadata.getCommunityForChunk(chunk.id);
-    if (cid) {
-      chunkCommunityMap.set(chunk.name, cid);
-      if (!communityChunks.has(cid)) communityChunks.set(cid, []);
-      communityChunks.get(cid)!.push(chunk);
+  if (allChunks.length > 0) {
+    const bulkMemberships = (metadata as {
+      getMembershipsForChunks?: (chunkIds: string[]) => Map<string, string>;
+    }).getMembershipsForChunks;
+    const membershipMap = bulkMemberships
+      ? bulkMemberships(allChunks.map((chunk) => chunk.id))
+      : null;
+    for (const chunk of allChunks) {
+      const cid = membershipMap
+        ? membershipMap.get(chunk.id)
+        : metadata.getCommunityForChunk(chunk.id);
+      if (cid) {
+        chunkCommunityMap.set(chunk.name, cid);
+        if (!communityChunks.has(cid)) communityChunks.set(cid, []);
+        communityChunks.get(cid)!.push(chunk);
+      }
     }
   }
 
@@ -259,7 +269,7 @@ export function extractDashboardData(
         relatedSymbols: page.relatedSymbols ?? [],
         relatedFiles: page.relatedFiles ?? [],
         confidence: page.confidence ?? 0,
-        sourceCommit: "", // extracted from frontmatter on disk, not stored in DB
+        sourceCommit: readFrontmatterSourceCommit(page.filePath),
       };
 
       wikiPages.push(wikiPage);
@@ -354,6 +364,16 @@ function readFrontmatterPageType(filePath: string): string | null {
   }
 }
 
+function readFrontmatterSourceCommit(filePath: string): string {
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
+    return match?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
   const capability = firstNonEmpty(extractSectionText(page.content, "Capability"), humanizeSlug(page.name));
   const businessTerms = extractBulletSection(page.content, "Business terms");
@@ -367,7 +387,7 @@ function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
     dataConcepts,
     supportingSymbols: page.relatedSymbols,
   });
-  const displaySummary = deriveBusinessDisplaySummary(displayName, page.summary, businessOutcome, userActions, dataConcepts);
+  const displaySummary = deriveBusinessDisplaySummary({ displayName, summary: page.summary, businessOutcome, userActions, dataConcepts });
   const presentation = evaluateBusinessPresentation({
     name: page.name,
     capability,
@@ -408,42 +428,6 @@ function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
     links: page.links,
     content: page.content,
   };
-}
-
-function deriveBusinessDisplaySummary(
-  displayName: string,
-  summary: string,
-  businessOutcome: string,
-  userActions: string[],
-  dataConcepts: string[]
-): string {
-  const outcome = cleanBusinessText(businessOutcome);
-  if (outcome) return `${displayName}: ${outcome}`;
-  const action = userActions.map(cleanBusinessText).find(Boolean);
-  if (action) return `${displayName}: Users can ${lowercaseSentence(action)}.`;
-  const cleanSummary = cleanBusinessText(summary);
-  if (cleanSummary) return cleanSummary;
-  const concepts = dataConcepts.map(cleanBusinessText).filter(Boolean).slice(0, 3);
-  if (concepts.length > 0) return `${displayName}: Supports ${concepts.join(", ")}.`;
-  return `${displayName}: Product behavior inferred from code evidence.`;
-}
-
-function cleanBusinessText(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/`[^`\s]*\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)(?::\d+(?:-\d+)?)?`/gi, "the product implementation")
-    .replace(/\b(?:src|apps|packages|backend|frontend)\/[A-Za-z0-9_./-]+/gi, "the product implementation")
-    .replace(/\b(?:backend|frontend):\s*/gi, "")
-    .replace(/\b[A-Za-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)\b/gi, "the product implementation")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function lowercaseSentence(value: string): string {
-  if (!value) return value;
-  return `${value[0]!.toLowerCase()}${value.slice(1).replace(/\.$/, "")}`;
 }
 
 function firstNonEmpty(primary: string, fallback: string): string {

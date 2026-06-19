@@ -10,7 +10,7 @@ import { generateVisualization } from "../visualize/index.js";
 
 function openInBrowser(target: string): void {
   const onError = (err: Error | null) => {
-    if (err) console.log("Could not open browser. Open manually:", target);
+    if (err) console.error("Could not open browser. Open manually:", target);
   };
   if (process.platform === "darwin") {
     execFile("open", [target], onError);
@@ -156,8 +156,8 @@ export function lensCommand(): Command {
 
       if (options.serve) {
         const port = parseInt(options.port, 10);
-        if (!Number.isFinite(port) || port < 0 || port > 65535) {
-          console.log(`Invalid port: ${options.port}`);
+        if (!Number.isFinite(port) || port < 1 || port > 65535) {
+          console.error(`Invalid port: ${options.port}`);
           process.exit(1);
         }
         await serveDashboard(outputPath, port, !!options.open);

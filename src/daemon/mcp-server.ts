@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { resolve, sep } from 'path'
-import { realpathSync, unlinkSync, mkdirSync, readFileSync } from 'fs'
+import { realpathSync, unlinkSync, mkdirSync, rmSync } from 'fs'
+import { readFile } from 'fs/promises'
 import type { HybridSearch } from '../search/hybrid.js'
 import type { IndexingPipeline } from '../indexer/pipeline.js'
 import type { MetadataStore } from '../storage/metadata-store.js'
@@ -548,8 +549,6 @@ export function createMCPServer(
           // Close stores and wipe merkle state before deleting files
           await pipeline.closeAndClearMerkle()
 
-          const { rmSync } = await import('fs')
-          const { resolve } = await import('path')
           const files = [
             'metadata.db',
             'metadata.db-wal',
@@ -1971,12 +1970,12 @@ export function createMCPServer(
             ? [memoryStore.getByName(name)].filter((p): p is NonNullable<typeof p> => p != null && p.type === 'wiki')
             : memoryStore.getByType('wiki')
 
-          const results = pages.map(page => {
+          const results = await Promise.all(pages.map(async page => {
             // sourceCommit is in frontmatter, which is stripped from page.content.
             // Read the raw file from disk to extract it.
             let sourceCommit = ''
             try {
-              const raw = readFileSync(page.filePath, 'utf-8')
+              const raw = await readFile(page.filePath, 'utf-8')
               const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/)
               sourceCommit = match?.[1] ?? ''
             } catch { /* file may not exist */ }
@@ -1986,7 +1985,7 @@ export function createMCPServer(
               page.relatedFiles ?? [],
               config.projectRoot
             )
-          })
+          }))
 
           const staleCount = results.filter(r => r.stale).length
           return {

@@ -75,7 +75,13 @@ export function serveCommand(): Command {
       }
       if (options.maxChunks !== undefined) {
         const parsed = parseInt(options.maxChunks, 10)
-        if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
+        if (!isNaN(parsed) && parsed >= 0) {
+          config.maxContextChunks = parsed
+        } else {
+          console.error(
+            `Ignored invalid --max-chunks value "${options.maxChunks}"; using default ${config.maxContextChunks}.`
+          )
+        }
       }
 
       // Health check for Ollama

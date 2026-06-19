@@ -46,7 +46,10 @@ export interface TopologySnapshot {
 }
 
 export class CommunityStore {
+  private static readonly SQLITE_PARAM_LIMIT = 900;
+
   private getCommunityForChunkStmt!: Database.Statement;
+  private getMembershipsByChunksStmt!: Database.Statement;
   private getCommunityStmt!: Database.Statement;
   private getAllCommunitiesStmt!: Database.Statement;
   private getTopSurprisesStmt!: Database.Statement;
@@ -113,6 +116,10 @@ export class CommunityStore {
 
     this.getCommunityForChunkStmt = this.db.prepare(
       `SELECT community_id FROM community_memberships WHERE chunk_id = ?`
+    );
+    const membershipPlaceholders = Array.from({ length: CommunityStore.SQLITE_PARAM_LIMIT }, () => "?").join(",");
+    this.getMembershipsByChunksStmt = this.db.prepare(
+      `SELECT chunk_id, community_id FROM community_memberships WHERE chunk_id IN (${membershipPlaceholders})`
     );
     this.getCommunityStmt = this.db.prepare(
       `SELECT id, node_count, cohesion, label, computed_at FROM communities WHERE id = ?`
@@ -186,6 +193,25 @@ export class CommunityStore {
   getCommunityForChunk(chunkId: string): string | undefined {
     const row = this.getCommunityForChunkStmt.get(chunkId) as { community_id: string } | undefined;
     return row?.community_id;
+  }
+
+  getMembershipsForChunks(chunkIds: string[]): Map<string, string> {
+    const result = new Map<string, string>();
+    if (chunkIds.length === 0) return result;
+    const limit = CommunityStore.SQLITE_PARAM_LIMIT;
+    for (let i = 0; i < chunkIds.length; i += limit) {
+      const batch = chunkIds.slice(i, i + limit);
+      const bindings: unknown[] = batch.slice();
+      while (bindings.length < limit) bindings.push(null);
+      const rows = this.getMembershipsByChunksStmt.all(...bindings) as Array<{
+        chunk_id: string;
+        community_id: string;
+      }>;
+      for (const row of rows) {
+        if (!result.has(row.chunk_id)) result.set(row.chunk_id, row.community_id);
+      }
+    }
+    return result;
   }
 
   getCommunityInfo(communityId: string): CommunityRecord | undefined {

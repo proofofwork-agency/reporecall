@@ -1,6 +1,7 @@
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
 import { existsSync, readdirSync, rmSync } from "fs";
 import { extname, basename, resolve, sep } from "path";
+import { promisify } from "util";
 import { watch, type FSWatcher } from "chokidar";
 import { getLogger } from "../../core/logger.js";
 import { writeManagedMemoryFile } from "../../memory/files.js";
@@ -8,6 +9,8 @@ import type { MemoryIndexer, MemoryIndexResult } from "../../memory/indexer.js";
 import type { MemorySearchResult, MemoryType } from "../../memory/types.js";
 import { resolveMemoryClass } from "../../memory/types.js";
 import type { MemoryStore } from "../../storage/memory-store.js";
+
+const execFileAsync = promisify(execFile);
 
 type MemoryFileEventType = "add" | "change" | "unlink";
 
@@ -286,7 +289,7 @@ export class MemoryRuntime {
   private async upsertWorkingMemory(input: ObservePromptInput): Promise<void> {
     if (!this.writableDir) return;
 
-    const branch = this.detectBranch();
+    const branch = await this.detectBranch();
     const scope = branch ? "branch" : "project";
     const topFiles = uniq([...(input.activeFiles ?? []), ...(input.topFiles ?? [])]).slice(0, 5);
     const topSymbols = uniq(input.topSymbols ?? []).slice(0, 8);
@@ -383,14 +386,14 @@ export class MemoryRuntime {
     }
   }
 
-  private detectBranch(): string | null {
+  private async detectBranch(): Promise<string | null> {
     if (!this.projectRoot) return null;
     try {
-      const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
         cwd: this.projectRoot,
         encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
+      });
+      const branch = stdout.trim();
       return branch && branch !== "HEAD" ? branch : null;
     } catch {
       return null;

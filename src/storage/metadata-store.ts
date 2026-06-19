@@ -392,6 +392,12 @@ export class MetadataStore {
     return this.communities.getCommunityForChunk(chunkId);
   }
 
+  /** Bulk variant of getCommunityForChunk — resolves many chunk ids in batched
+   * queries (vs N roundtrips). Used by the visualize/lens hot path. */
+  getMembershipsForChunks(chunkIds: string[]): Map<string, string> {
+    return this.communities.getMembershipsForChunks(chunkIds);
+  }
+
   getCommunityInfo(communityId: string): CommunityRecord | undefined {
     return this.communities.getCommunityInfo(communityId);
   }

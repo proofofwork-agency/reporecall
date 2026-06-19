@@ -7,10 +7,17 @@ import type {
 } from "./types.js";
 
 export class TargetStore {
+  private static readonly SQLITE_PARAM_LIMIT = 900;
+
   private replaceTargetStmt!: Database.Statement;
   private replaceAliasStmt!: Database.Statement;
   private deleteTargetsStmt!: Database.Statement;
   private deleteAliasesStmt!: Database.Statement;
+  private selectTargetByIdStmt!: Database.Statement;
+  private selectTargetsByFilePathStmt!: Database.Statement;
+  private selectTargetsByIdsStmt!: Database.Statement;
+  private selectTargetsBySubsystemStmt!: Database.Statement;
+  private selectAliasesByNormalizedStmt!: Database.Statement;
 
   constructor(private readonly db: Database.Database) {}
 
@@ -56,6 +63,30 @@ export class TargetStore {
     );
     this.deleteTargetsStmt = this.db.prepare(`DELETE FROM targets`);
     this.deleteAliasesStmt = this.db.prepare(`DELETE FROM target_aliases`);
+
+    const inPlaceholders = Array.from({ length: TargetStore.SQLITE_PARAM_LIMIT }, () => "?").join(",");
+    this.selectTargetByIdStmt = this.db.prepare(`SELECT * FROM targets WHERE id = ?`);
+    this.selectTargetsByFilePathStmt = this.db.prepare(
+      `SELECT * FROM targets WHERE file_path = ? ORDER BY confidence DESC`
+    );
+    this.selectTargetsByIdsStmt = this.db.prepare(
+      `SELECT * FROM targets WHERE id IN (${inPlaceholders})`
+    );
+    this.selectTargetsBySubsystemStmt = this.db.prepare(
+      `SELECT * FROM targets WHERE subsystem IN (${inPlaceholders}) ORDER BY confidence DESC`
+    );
+    this.selectAliasesByNormalizedStmt = this.db.prepare(
+      `SELECT
+         t.*,
+         a.alias,
+         a.normalized_alias,
+         a.source,
+         a.weight
+       FROM target_aliases a
+       JOIN targets t ON t.id = a.target_id
+       WHERE a.normalized_alias IN (${inPlaceholders})
+       ORDER BY a.weight DESC, t.confidence DESC, LENGTH(a.normalized_alias) DESC`
+    );
   }
 
   replaceAll(targets: StoredTarget[], aliases: StoredTargetAlias[]): void {
@@ -87,17 +118,19 @@ export class TargetStore {
   }
 
   findTargetById(id: string): StoredTarget | undefined {
-    const row = this.db.prepare(`SELECT * FROM targets WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const row = this.selectTargetByIdStmt.get(id) as Record<string, unknown> | undefined;
     return row ? this.mapTarget(row) : undefined;
   }
 
   getTargetsByIds(ids: string[]): StoredTarget[] {
     if (ids.length === 0) return [];
-    const placeholders = ids.map(() => "?").join(",");
-    const rows = this.db
-      .prepare(`SELECT * FROM targets WHERE id IN (${placeholders})`)
-      .all(...ids) as Array<Record<string, unknown>>;
-    return rows.map((row) => this.mapTarget(row));
+    const results: StoredTarget[] = [];
+    for (let i = 0; i < ids.length; i += TargetStore.SQLITE_PARAM_LIMIT) {
+      const batch = ids.slice(i, i + TargetStore.SQLITE_PARAM_LIMIT);
+      const rows = this.selectTargetsByIdsStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
+      results.push(...rows.map((row) => this.mapTarget(row)));
+    }
+    return results;
   }
 
   clearAll(): void {
@@ -113,58 +146,56 @@ export class TargetStore {
     kinds?: TargetKind[]
   ): ResolvedTargetAliasHit[] {
     if (normalizedAliases.length === 0) return [];
-    const aliasPlaceholders = normalizedAliases.map(() => "?").join(",");
-    const kindClause = kinds && kinds.length > 0
-      ? ` AND t.kind IN (${kinds.map(() => "?").join(",")})`
-      : "";
-    const rows = this.db
-      .prepare(
-        `SELECT
-           t.*,
-           a.alias,
-           a.normalized_alias,
-           a.source,
-           a.weight
-         FROM target_aliases a
-         JOIN targets t ON t.id = a.target_id
-         WHERE a.normalized_alias IN (${aliasPlaceholders})${kindClause}
-         ORDER BY a.weight DESC, t.confidence DESC, LENGTH(a.normalized_alias) DESC
-         LIMIT ?`
-      )
-      .all(
-        ...normalizedAliases,
-        ...(kinds ?? []),
-        limit
-      ) as Array<Record<string, unknown>>;
+    const kindSet = kinds && kinds.length > 0 ? new Set<TargetKind>(kinds) : null;
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < normalizedAliases.length; i += TargetStore.SQLITE_PARAM_LIMIT) {
+      const batch = normalizedAliases.slice(i, i + TargetStore.SQLITE_PARAM_LIMIT);
+      const batchRows = this.selectAliasesByNormalizedStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
+      rows.push(...batchRows);
+    }
 
-    return rows.map((row) => ({
-      target: this.mapTarget(row),
-      alias: row.alias as string,
-      normalizedAlias: row.normalized_alias as string,
-      source: row.source as StoredTargetAlias["source"],
-      weight: row.weight as number,
-    }));
+    const hits: ResolvedTargetAliasHit[] = [];
+    for (const row of rows) {
+      const target = this.mapTarget(row);
+      if (kindSet && !kindSet.has(target.kind)) continue;
+      hits.push({
+        target,
+        alias: row.alias as string,
+        normalizedAlias: row.normalized_alias as string,
+        source: row.source as StoredTargetAlias["source"],
+        weight: row.weight as number,
+      });
+    }
+
+    hits.sort((a, b) => {
+      if (b.weight !== a.weight) return b.weight - a.weight;
+      if (b.target.confidence !== a.target.confidence) return b.target.confidence - a.target.confidence;
+      return b.normalizedAlias.length - a.normalizedAlias.length;
+    });
+    return hits.slice(0, limit);
   }
 
   findTargetsByFilePath(filePath: string): StoredTarget[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM targets WHERE file_path = ? ORDER BY confidence DESC`)
-      .all(filePath) as Array<Record<string, unknown>>;
+    const rows = this.selectTargetsByFilePathStmt.all(filePath) as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapTarget(row));
   }
 
   findTargetsBySubsystem(subsystems: string[], limit = 25): StoredTarget[] {
     if (subsystems.length === 0) return [];
-    const placeholders = subsystems.map(() => "?").join(",");
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM targets
-         WHERE subsystem IN (${placeholders})
-         ORDER BY confidence DESC
-         LIMIT ?`
-      )
-      .all(...subsystems, limit) as Array<Record<string, unknown>>;
-    return rows.map((row) => this.mapTarget(row));
+    const results: StoredTarget[] = [];
+    for (let i = 0; i < subsystems.length; i += TargetStore.SQLITE_PARAM_LIMIT) {
+      const batch = subsystems.slice(i, i + TargetStore.SQLITE_PARAM_LIMIT);
+      const rows = this.selectTargetsBySubsystemStmt.all(...this.padToLimit(batch)) as Array<Record<string, unknown>>;
+      results.push(...rows.map((row) => this.mapTarget(row)));
+    }
+    results.sort((a, b) => b.confidence - a.confidence);
+    return results.slice(0, limit);
+  }
+
+  private padToLimit(values: string[]): unknown[] {
+    const bindings: unknown[] = values.slice();
+    while (bindings.length < TargetStore.SQLITE_PARAM_LIMIT) bindings.push(null);
+    return bindings;
   }
 
   private mapTarget(row: Record<string, unknown>): StoredTarget {

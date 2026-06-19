@@ -24,7 +24,7 @@ export interface PreToolUseHookInput {
 export interface PreToolUseHookOutput {
   hookSpecificOutput: {
     hookEventName: "PreToolUse";
-    permissionDecision: "allow" | "deny";
+    permissionDecision: "allow";
     permissionDecisionReason: string;
     additionalContext?: string;
   };

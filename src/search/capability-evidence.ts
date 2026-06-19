@@ -197,6 +197,40 @@ export function resolveCapabilityEvidence(input: {
   const entries = new Map<string, MutableEvidenceFile>();
   const seedFiles = new Set<string>();
 
+  const fileChunksCache = new Map<string, StoredChunk[]>();
+  const capabilityScoreCache = new Map<string, number>();
+  const familySignalCache = new Map<string, boolean>();
+
+  const cachedFileChunks = (filePath: string): StoredChunk[] => {
+    const cached = fileChunksCache.get(filePath);
+    if (cached) return cached;
+    const chunks = findFileChunks(metadata, filePath);
+    fileChunksCache.set(filePath, chunks);
+    return chunks;
+  };
+
+  const cachedCapabilityScore = (filePath: string): number => {
+    const cached = capabilityScoreCache.get(filePath);
+    if (cached !== undefined) return cached;
+    const value = scoreCapabilityFile(query, filePath, cachedFileChunks(filePath), families);
+    capabilityScoreCache.set(filePath, value);
+    return value;
+  };
+
+  const cachedFamilySignal = (filePath: string): boolean => {
+    const cached = familySignalCache.get(filePath);
+    if (cached !== undefined) return cached;
+    const value = hasPrimaryFamilySignal(query, filePath, cachedFileChunks(filePath), families);
+    familySignalCache.set(filePath, value);
+    return value;
+  };
+
+  const capabilityCache: CapabilityScoreCache = {
+    getFileChunks: cachedFileChunks,
+    getCapabilityScore: cachedCapabilityScore,
+    hasFamilySignal: cachedFamilySignal,
+  };
+
   const upsert = (
     filePath: string | undefined | null,
     score: number,
@@ -206,9 +240,9 @@ export function resolveCapabilityEvidence(input: {
   ) => {
     if (!filePath) return;
     if (!allowTests && isTestFile(filePath)) return;
-    const fileChunks = findFileChunks(metadata, filePath);
+    const fileChunks = cachedFileChunks(filePath);
     if (!fileChunks.some((chunk) => chunk.kind !== "file")) return;
-    const adjustedScore = score + scoreCapabilityFile(query, filePath, fileChunks, families);
+    const adjustedScore = score + cachedCapabilityScore(filePath);
     const existing = entries.get(filePath);
     if (!existing) {
       const next: MutableEvidenceFile = {
@@ -236,7 +270,7 @@ export function resolveCapabilityEvidence(input: {
   for (const chunk of topCodeChunks.slice(0, 12)) {
     if (
       (queryMode === "architecture" || queryMode === "change" || queryMode === "lookup")
-      && !hasPrimaryFamilySignal(query, chunk.filePath, findFileChunks(metadata, chunk.filePath), families)
+      && !cachedFamilySignal(chunk.filePath)
     ) {
       continue;
     }
@@ -255,7 +289,7 @@ export function resolveCapabilityEvidence(input: {
     }
   }
 
-  for (const filePath of findMandatoryFlowFiles(query, queryMode, metadata, families)) {
+  for (const filePath of findMandatoryFlowFiles(query, queryMode, metadata, families, capabilityCache)) {
     seedFiles.add(filePath);
     upsert(filePath, 80, "mandatory_flow_step", "mandatory_flow_step");
   }
@@ -472,11 +506,18 @@ function scoreGenericLayerFit(filePath: string, normalizedText: string): number 
   return score;
 }
 
+interface CapabilityScoreCache {
+  getFileChunks(filePath: string): StoredChunk[];
+  getCapabilityScore(filePath: string): number;
+  hasFamilySignal(filePath: string): boolean;
+}
+
 function findMandatoryFlowFiles(
   query: string,
   queryMode: QueryMode,
   metadata: CapabilityMetadata,
-  families: CapabilityFamilies
+  families: CapabilityFamilies,
+  cache: CapabilityScoreCache
 ): string[] {
   const files = getDistinctFilePaths(metadata);
   const primary = primaryCapabilityFamily(families);
@@ -489,9 +530,9 @@ function findMandatoryFlowFiles(
   return Array.from(files)
     .map((filePath) => ({
       filePath,
-      score: scoreCapabilityFile(query, filePath, findFileChunks(metadata, filePath), families),
+      score: cache.getCapabilityScore(filePath),
     }))
-    .filter((candidate) => hasPrimaryFamilySignal(query, candidate.filePath, findFileChunks(metadata, candidate.filePath), families))
+    .filter((candidate) => cache.hasFamilySignal(candidate.filePath))
     .filter((candidate) => candidate.score >= threshold)
     .sort((a, b) => b.score - a.score || a.filePath.localeCompare(b.filePath))
     .slice(0, limit)
@@ -764,14 +805,14 @@ function bestSource(sources: Set<CapabilitySelectionSource>): CapabilitySelectio
   for (const source of SOURCE_PRIORITY) {
     if (sources.has(source)) return source;
   }
-  return "direct_match";
+  throw new Error("bestSource: empty source set (unreachable — every evidence file seeds sources with >= 1 element)");
 }
 
 function bestReason(reasons: Set<CapabilitySelectionReason>): CapabilitySelectionReason {
   for (const reason of REASON_PRIORITY) {
     if (reasons.has(reason)) return reason;
   }
-  return "direct_match";
+  throw new Error("bestReason: empty reason set (unreachable — every evidence file seeds reasons with >= 1 element)");
 }
 
 function buildCapabilityMissingEvidence(
