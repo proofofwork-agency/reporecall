@@ -12,6 +12,12 @@ const loadedLanguages = new Map<string, Promise<Parser.Language | undefined>>();
 export async function initTreeSitter(): Promise<void> {
   if (!initPromise) {
     initPromise = Parser.init();
+    // If init fails, clear the cached promise so the next call retries
+    // instead of rethrowing the same rejection forever (mirrors how
+    // getLanguage deletes its entry on error).
+    initPromise.catch(() => {
+      initPromise = undefined;
+    });
   }
   return initPromise;
 }

@@ -584,7 +584,11 @@ function toProductArea(
   const supportingSymbols = unique(uniquePages.flatMap((page) => page.supportingSymbols)).slice(0, 12);
   const displaySummary = summarizeProductAreaDisplay(displayName, uniquePages);
   const avgConfidence = uniquePages.reduce((sum, page) => sum + page.confidence, 0) / Math.max(1, uniquePages.length);
-  const confidence = Math.max(0.55, Math.min(0.94, avgConfidence + Math.min(score * 0.01, 0.08)));
+  // Confidence reflects the actual evidence: a low average page confidence
+  // with little supporting score yields a low value, instead of being clamped
+  // up to a synthetic floor. The bonus is bounded so strong evidence can lift
+  // (but not inflate past) a sane ceiling.
+  const confidence = Math.max(0.2, Math.min(0.95, avgConfidence + Math.min(score * 0.01, 0.08)));
   const presentation = evaluateProductAreaPresentation({
     id,
     name,
@@ -763,7 +767,7 @@ function evaluateProductAreaPresentation(input: {
   };
 }
 
-function deriveBusinessDisplaySummary(input: {
+export function deriveBusinessDisplaySummary(input: {
   displayName: string;
   summary: string;
   businessOutcome: string;
@@ -782,10 +786,13 @@ function deriveBusinessDisplaySummary(input: {
 }
 
 function isTechnicalCapabilityLabel(value: string): boolean {
+  // Note: deliberately NOT matching bare camelCase identifiers. The word-boundary
+  // technical-suffix check below already catches genuine technical camelCase
+  // (e.g. "orderService" -> "order Service" -> "service"); a generic camelCase
+  // pattern would false-positive on legitimate business names like "productId".
   return /\b(?:backend|frontend):/i.test(value)
     || /`[^`]+`/.test(value)
     || /\b(?:service|controller|repository|handler|processor|provider|middleware|modal|store|query|string|parser|builder|factory|client)\b/i.test(splitTechnicalWords(value))
-    || /[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+/.test(value)
     || /\b[A-Za-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)\b/i.test(value);
 }
 
@@ -879,8 +886,13 @@ function isGenericPresentationSummary(value: string): boolean {
 function countDomainSignals(values: string[]): number {
   const tokens = new Set<string>();
   for (const value of values) {
+    // tokenize() yields single lowercase words, so a per-token membership test
+    // against the multi-word GENERIC_PRESENTATION_LABELS could never match.
+    // Guard at the whole-value level instead: a value that is itself a generic
+    // presentation label contributes no domain signal.
+    if (isGenericPresentationLabel(value)) continue;
     for (const token of tokenize(value)) {
-      if (!PRODUCT_AREA_GENERIC_TERMS.has(token) && !GENERIC_PRESENTATION_LABELS.has(token)) tokens.add(token);
+      if (!PRODUCT_AREA_GENERIC_TERMS.has(token)) tokens.add(token);
     }
   }
   return tokens.size;

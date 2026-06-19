@@ -24,3 +24,9 @@ test/.test-data-server-*/graphify-3/
 .vscode/
 coverage/
 *.tgz
+
+# Lockfiles: npm is canonical (package-lock.json); ignore pnpm
+pnpm-lock.yaml
+
+# Local MCP config (non-portable absolute paths) — copy from .mcp.json.example
+.mcp.json
