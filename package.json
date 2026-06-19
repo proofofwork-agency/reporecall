@@ -57,7 +57,7 @@
     "benchmark:memory": "vitest run test/benchmark/metrics.test.ts test/benchmark/memory-benchmark.test.ts test/daemon/memory-runtime.test.ts test/benchmark/live-memory-benchmark.test.ts",
     "benchmark:live-memory": "tsx scripts/benchmarks/memory-v1-live.ts",
     "smoke": "node scripts/smoke-test.mjs",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run lint && npm test -- --run && npm run build"
   },
   "engines": {
     "node": ">=20"

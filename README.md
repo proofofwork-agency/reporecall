@@ -26,6 +26,8 @@ reporecall serve         # Start daemon + file watcher
 reporecall lens --serve  # Open the architecture dashboard
 ```
 
+The package also exposes a `memory` CLI alias, which may collide with other global installs; `reporecall` is the canonical command name.
+
 That's it. Context is injected automatically into every Claude Code prompt via hooks, wiki pages regenerate as the code changes, and the lens dashboard is always one command away.
 
 ---
@@ -314,7 +316,7 @@ Configuration lives in `.memory/config.json`.
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `embeddingProvider` | `"keyword"` | Retrieval backend. `keyword` is local FTS-only. |
+| `embeddingProvider` | `"local"` | Retrieval backend. `local` uses Xenova/all-MiniLM-L6-v2 local vector embeddings; `keyword` is FTS-only with no vectors (also: `ollama`, `openai`). |
 | `wikiBudget` | `400` | Max tokens for wiki injection per prompt. |
 | `wikiMaxPages` | `3` | Max wiki pages injected per prompt. |
 | `memoryBudget` | `500` | Max tokens for memory injection per prompt. |
@@ -327,6 +329,8 @@ Configuration lives in `.memory/config.json`.
 | `topologyEnabled` | `true` | Run topology/community analysis after indexing. |
 | `topologyMaxChunks` | `50000` | Skip full topology graph construction above this indexed chunk count. |
 | `shutdownTimeoutMs` | `10000` | Graceful shutdown timeout in milliseconds. |
+
+This table lists common keys only; see `src/core/config.ts` for the full, authoritative list of configuration options and defaults.
 
 Assistant/client instruction files such as `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `.codex/**`, and `.mcp.json` are ignored by default as code evidence.
 

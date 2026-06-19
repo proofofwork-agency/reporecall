@@ -12,6 +12,17 @@ npm test -- --run
 
 Use `make ci-precheck` before pushing. It mirrors the CI gates that run on pull requests.
 
+## Development
+
+Reporecall requires Node.js `>=20` (declared in `package.json` `engines`). Canonical workflow:
+
+```bash
+npm ci            # install dependencies
+npm run lint      # type-check (tsc --noEmit)
+npm test -- --run # run the test suite (Vitest, single run)
+npm run build     # build with tsup
+```
+
 ## Pull Requests
 
 - Use one logical change per PR.

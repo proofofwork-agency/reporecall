@@ -16,3 +16,11 @@ claude-code-source-main
 .tmp/
 test/.test-data-server-*/
 test/.test-data-server-*/graphify-3/
+
+.env
+.env.*
+*.log
+.idea/
+.vscode/
+coverage/
+*.tgz
