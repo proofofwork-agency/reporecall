@@ -114,6 +114,13 @@ describe("loadConfig — default config", () => {
     expect(config.autoRefresh).toBe(true);
   });
 
+  it("ignores common test fixture directories by default", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.ignorePatterns).toContain("test/fixtures/**");
+    expect(config.ignorePatterns).toContain("tests/__fixtures__/**");
+    expect(config.ignorePatterns).toContain("spec/fixtures/**");
+  });
+
   it("includes the full current parser language surface in default extensions", () => {
     const config = loadConfig(tmpDir);
     for (const ext of [".cs", ".php", ".zig", ".lua", ".html", ".vue", ".toml"]) {

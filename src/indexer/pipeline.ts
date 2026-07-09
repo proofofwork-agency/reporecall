@@ -86,6 +86,9 @@ function estimateChunkTextBytes(chunk: {
 }
 
 export class IndexingPipeline {
+  private static readonly VACUUM_FREE_BYTES_THRESHOLD = 16 * 1024 * 1024;
+  private static readonly VACUUM_FREE_RATIO_THRESHOLD = 0.25;
+
   private config: MemoryConfig;
   private embedder: EmbeddingProvider;
   private metadata: MetadataStore;
@@ -112,6 +115,40 @@ export class IndexingPipeline {
   private writeIndexCompletionStats(now = new Date().toISOString()): void {
     this.metadata.setStat("lastIndexedAt", now);
     this.metadata.setStat("indexedCommit", resolveCurrentCommit(this.config.projectRoot) ?? "");
+  }
+
+  private async vacuumIfNeeded(reason: string): Promise<void> {
+    const before = this.metadata.getStorageStats();
+    const freeRatio = before.metadataDbPageBytes > 0
+      ? before.metadataDbFreeBytes / before.metadataDbPageBytes
+      : 0;
+    if (
+      before.metadataDbFreeBytes < IndexingPipeline.VACUUM_FREE_BYTES_THRESHOLD
+      && freeRatio < IndexingPipeline.VACUUM_FREE_RATIO_THRESHOLD
+    ) {
+      return;
+    }
+
+    const log = getLogger();
+    log.info(
+      {
+        reason,
+        metadataDbBytes: before.metadataDbBytes,
+        metadataDbFreeBytes: before.metadataDbFreeBytes,
+        targetAliasCount: before.targetAliasCount,
+      },
+      "SQLite metadata free pages above threshold; vacuuming"
+    );
+    await this.vacuum();
+    const after = this.metadata.getStorageStats();
+    log.info(
+      {
+        metadataDbBytes: after.metadataDbBytes,
+        metadataDbFreeBytes: after.metadataDbFreeBytes,
+        targetAliasCount: after.targetAliasCount,
+      },
+      "SQLite metadata compaction check complete"
+    );
   }
 
   private getFileBatchSize(): number {
@@ -610,6 +647,7 @@ export class IndexingPipeline {
         message: "No changes detected",
       });
       this.writeIndexCompletionStats();
+      await this.vacuumIfNeeded("no-change verification");
       return { filesProcessed: 0, chunksCreated: 0 };
     }
 
@@ -702,6 +740,7 @@ export class IndexingPipeline {
 
     this.rebuildTargetCatalog();
     this.writeIndexCompletionStats();
+    await this.vacuumIfNeeded("index completion");
 
     try {
       const conventions = analyzeConventions(this.metadata);
@@ -798,6 +837,7 @@ export class IndexingPipeline {
     }
     this.merkle.save();
     this.writeIndexCompletionStats();
+    await this.vacuumIfNeeded("incremental index completion");
 
     if (degradedFiles.size > 0) {
       log.error(

@@ -642,12 +642,13 @@ export function createMCPServer(
           const conventions = metadata.getConventions()
           const latency = metadata.getLatencyPercentiles()
           const lastIndexed = metadata.getStat('lastIndexedAt')
+          const storage = metadata.getStorageStats()
           return {
             content: [
               {
                 type: 'text' as const,
                 text: JSON.stringify(
-                  { ...stats, lastIndexedAt: lastIndexed, conventions, latency },
+                  { ...stats, lastIndexedAt: lastIndexed, conventions, latency, storage },
                   null,
                   2
                 )

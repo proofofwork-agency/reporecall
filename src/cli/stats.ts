@@ -35,6 +35,7 @@ export function statsCommand(): Command {
       let memoryStore: MemoryStore | undefined
       try {
         const stats = metadata.getStats()
+        const storageStats = metadata.getStorageStats()
         const lastIndexed = metadata.getStat('lastIndexedAt')
         const hooksCount = metadata.getStat('hooksFireCount') ?? '0'
         const totalTokens = metadata.getStat('totalTokensInjected') ?? '0'
@@ -117,6 +118,8 @@ export function statsCommand(): Command {
         )
         console.log(`  Languages:    ${langLines || 'none'}`)
         console.log(`  Storage:      ${formatBytes(storageBytes)}`)
+        console.log(`  Metadata DB:  ${formatBytes(storageStats.metadataDbBytes)} (${formatBytes(storageStats.metadataDbFreeBytes)} free)`)
+        console.log(`  Targets:      ${storageStats.targetCount.toLocaleString()} targets, ${storageStats.targetAliasCount.toLocaleString()} aliases`)
         console.log(`  Last indexed: ${timeSince}`)
         console.log(``)
 

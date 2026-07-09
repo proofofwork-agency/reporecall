@@ -79,6 +79,14 @@ function makeMockMetadata(overrides?: Partial<any>): any {
     getStats: () => ({ totalFiles: 5, totalChunks: 22, languages: { typescript: 22 } }),
     getStat: (_key: string) => "2025-01-01T00:00:00.000Z",
     setStat: () => {},
+    getStorageStats: () => ({
+      metadataDbBytes: 4096,
+      metadataDbPageBytes: 4096,
+      metadataDbFreeBytes: 0,
+      metadataDbUsedBytes: 4096,
+      targetCount: 3,
+      targetAliasCount: 12,
+    }),
     getConventions: () => null,
     getLatencyPercentiles: () => ({ avg: 12, p50: 10, p95: 25, count: 100 }),
     getAllChunks: () => [],
@@ -670,6 +678,10 @@ describe("MCP server tools (3G)", () => {
     expect(parsed).toHaveProperty("totalChunks");
     expect(parsed).toHaveProperty("lastIndexedAt");
     expect(parsed).toHaveProperty("latency");
+    expect(parsed.storage).toMatchObject({
+      metadataDbBytes: 4096,
+      targetAliasCount: 12,
+    });
     expect(parsed.totalFiles).toBe(5);
     expect(parsed.totalChunks).toBe(22);
   });

@@ -214,6 +214,11 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", "REPORECALL.md", ".mcp.json",
     ".codex", ".codex/**", ".claude", ".claude/**", ".agents", ".agents/**",
     ".cursor", ".cursor/**", ".continue", ".continue/**", ".playwright-mcp", ".playwright-mcp/**",
+    // Parser/test fixtures are intentionally heterogeneous and should not be
+    // indexed as first-class project evidence by default.
+    "test/fixtures", "test/fixtures/**", "tests/fixtures", "tests/fixtures/**",
+    "test/__fixtures__", "test/__fixtures__/**", "tests/__fixtures__", "tests/__fixtures__/**",
+    "spec/fixtures", "spec/fixtures/**", "specs/fixtures", "specs/fixtures/**",
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
