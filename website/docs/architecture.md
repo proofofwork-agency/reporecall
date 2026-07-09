@@ -6,7 +6,11 @@ sidebar_position: 6
 
 # Architecture
 
-Reporecall indexes a project locally and exposes source-grounded context through CLI commands, Claude Code hooks, and MCP tools. It is a repo-intelligence engine — it deliberately does **not** absorb provider proxying, model hosting, or editor-UI responsibilities.
+Reporecall is the **local-first, auto-injecting, self-aware-about-staleness context + memory layer**.
+
+It indexes a project locally and exposes source-grounded context through CLI commands, Claude Code hooks (primary), and a compact 6-tool MCP surface. It is a repo-intelligence engine — it deliberately does **not** absorb provider proxying, model hosting, or editor-UI responsibilities.
+
+The Trust Contract (freshness banners, indexedCommit, auto-refresh, explicit repair via `refresh_context`) is a core architectural principle.
 
 ## Layers
 

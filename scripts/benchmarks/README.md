@@ -28,6 +28,19 @@ Run the project-context audit against a target repository:
 npm run benchmark:project-context -- --project /path/to/repo --reporecall-only --output /tmp/reporecall-project-context
 ```
 
+## Token Savings + Trust Benchmark
+
+```bash
+npm run benchmark:tokens -- --project /path/to/repo
+```
+
+Reports:
+- Real freshness / trust contract data (`indexedCommit`, dirty files, banner)
+- Estimated token savings vs naive full-file baseline
+- Uses actual hook injection stats when an index exists
+
+See `trust-and-tokens.md` for methodology and how to contribute real measurements.
+
 This is the best fit for checking capability evidence behavior because it measures whether Reporecall selects the files needed to answer trace and architecture questions.
 
 Watch for:

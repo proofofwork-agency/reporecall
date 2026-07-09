@@ -7,6 +7,7 @@ import { isProcessAlive } from '../core/platform.js'
 import { MetadataStore } from '../storage/metadata-store.js'
 import { MemoryStore } from '../storage/memory-store.js'
 import { resolveMemoryStatus } from '../memory/types.js'
+import { banner, computeFreshness } from '../core/staleness.js'
 
 export function statsCommand(): Command {
   return new Command('stats')
@@ -112,6 +113,23 @@ export function statsCommand(): Command {
 
         console.log(`Reporecall`)
         console.log(``)
+
+        // === Trust / Freshness (prominent) ===
+        const freshness = computeFreshness(metadata, projectRoot)
+        const trustBanner = banner(freshness)
+        if (trustBanner) {
+          console.log(trustBanner)
+          console.log(``)
+        } else {
+          console.log('✅ Index freshness: FRESH')
+          console.log(``)
+        }
+        console.log(`Trust Contract:`)
+        console.log(`  indexedCommit: ${freshness.indexedCommit ?? 'unknown'}`)
+        console.log(`  current HEAD:  ${freshness.currentCommit ?? 'unknown'}`)
+        console.log(`  dirty files:   ${freshness.dirtyFiles ?? 'unknown'}`)
+        console.log(``)
+
         console.log(`Index:`)
         console.log(
           `  Chunks:       ${stats.totalChunks} across ${stats.totalFiles} files`

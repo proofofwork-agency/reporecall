@@ -261,27 +261,22 @@ export function initCommand(): Command {
       const MEMORY_MARKER = '<!-- reporecall -->'
       const MEMORY_SECTION = `
 ${MEMORY_MARKER}
-## Reporecall
+## Reporecall — Local Context + Memory Layer
 
-Reporecall can provide codebase context through Claude Code hooks and MCP tools. Treat Reporecall output as useful evidence, not authority:
+Reporecall is the auto-injecting, self-aware context layer for this project.
 
-1. **Check freshness first.** If injected context or an MCP response says the index is EMPTY or STALE, say so and refresh with \`refresh_context\` or \`reporecall index\` before relying on results.
-2. **Use injected context when it is fresh and relevant.** It may contain files, symbols, and call graphs for the query. Do not reread files only to duplicate context already shown, but verify with normal tools when evidence is incomplete or surprising.
-3. **Fill gaps with the right tool.** For multi-file questions, prefer Reporecall MCP \`search_context\` because it returns routed, token-budgeted context with compressed secondary evidence. Use \`search_code\` for raw hit lists or \`action=read_chunk\` source expansion, and \`explain_flow\` actions for navigation. Grep/Read/Glob remain appropriate for exact matches and sanity checks.
-4. **Notice hook failures.** If Claude reports that the Reporecall hook cannot reach the daemon, do not assume context was injected. Start \`reporecall serve\` or use MCP/CLI tools directly.
+It pushes high-quality evidence (code + wiki + graph + memory) into prompts via hooks.
 
-If the injected context is marked "low confidence", steps 2 and 3 are appropriate immediately.
+### Rules
+1. **Check freshness first.** Every response carries staleness info. If EMPTY or STALE, run \`refresh_context\` or \`reporecall index\`.
+2. **Read injected context first.** Only use tools for gaps.
+3. **Key surfaces**: Hooks (automatic), \`search_context\`, \`explain_flow\`, \`memory\`, \`get_stats\` / \`refresh_context\`.
 
-Use \`get_stats\` to inspect index freshness (indexed commit vs HEAD), storage footprint, and chunk/file counts when retrieval looks stale or incomplete.
+### Trust Contract
+Reporecall tells you when the context may be unreliable.
 
 ### Memory
-
-Reporecall maintains persistent project memory across sessions. Use the \`memory\` MCP tool:
-- \`action=store\` — Save important project context, decisions, or patterns for future sessions.
-- \`action=recall\` — Retrieve previously stored memories relevant to the current task.
-- \`action=forget\` — Remove outdated or incorrect memories.
-
-Memories are automatically injected alongside code context when relevant to the query.
+Use \`memory action=store|recall|list|forget|explain\`. Memories are auto-injected when relevant.
 ${MEMORY_MARKER}`
 
       let claudeMd = ''

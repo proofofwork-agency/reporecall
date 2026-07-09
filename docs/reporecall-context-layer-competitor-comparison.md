@@ -33,36 +33,48 @@ Reporecall is best positioned as a local context engine for coding agents:
 
 The main value is better context for agents, not model hosting or an AI editor UI.
 
-## Context Layers
+## The Trust Contract (Why Agents Can Rely on Us)
 
-Reporecall's current context stack:
+- Every hook injection and MCP result includes freshness metadata.
+- Explicit empty/stale banners + `refresh_context` as the universal fix.
+- `indexedCommit` + dirty file detection (not just "last indexed time").
+- Memory layer works even when the code index is empty.
+- Compact 6-tool surface after v0.8 (deliberate reduction in agent choice overload).
 
-| Layer | Purpose |
-| --- | --- |
-| Intent classifier | Routes prompts as `lookup`, `trace`, `bug`, `architecture`, `change`, or `skip`. |
-| Code retrieval | Uses local indexes and source chunks to find relevant implementation evidence. |
-| Graph evidence | Uses imports, callers, callees, topology, hubs, and communities. |
-| Wiki layer | Stores deterministic repo knowledge generated from topology and code evidence. |
-| Capability evidence | Selects concrete files for flows and architecture questions with `selectionSource`, `selectionReason`, and `wikiPagesUsed`. |
-| Business layer | Exposes `productAreas[]` with `areaKind`, `businessPages[]`, `productAreasUsed[]`, and `businessPagesUsed[]`. |
-| Memory layer | Stores durable facts, rules, decisions, feedback, and working context. |
-| Public surfaces | Claude hooks, compact MCP tools, `explain --json`, `lens --json`, and Lens HTML. |
+See `src/core/staleness.ts`, the daemon auto-refresh logic, and `src/daemon/mcp-server.ts`.
 
-## Competitor Matrix
+## Competitor Matrix (2026 Reality)
 
-| Tool | Context Layer | Memory / Rules | Code Graph | Business/Product Layer | Local-first | Best At |
-| --- | --- | --- | --- | --- | --- | --- |
-| Reporecall | Intent routing, local code chunks, graph, wiki, capability resolver, product areas | Persistent local memory, generated wiki, business pages | Imports, calls, topology, Lens | Yes: `productAreas[]`, `businessPages[]`, Lens/explain JSON | Yes | Supplying better repo context to agents |
-| Cursor | Editor context, codebase indexing, agents, MCP | Project rules, user rules, generated memories | Some codebase awareness | No first-class product-area layer | Partly | Integrated AI editor workflow |
-| Windsurf | IDE context, Cascade, local/remote indexing | Memories and rules | Codebase context engine | No first-class product-area layer | Partly; remote indexing exists for teams | AI IDE with agent workflow |
-| Continue | Context providers, codebase/search providers, MCP | Configurable assistants and rules | Depends on providers | No built-in product layer | Strong open-source angle | Customizable OSS agent stack |
-| Claude Code | Agent context, `CLAUDE.md`, hooks, MCP, skills | Memory files, `CLAUDE.md`, hooks, external MCP memory | Uses tools/LSP/MCP rather than owning a repo index | No built-in product-area export | Local agent, remote model | Autonomous coding agent |
-| Codex CLI | CLI agent can inspect repo, edit files, and run commands | Instruction files and MCP/tool setup | Tool-driven | No built-in product-area export | Local agent, remote model | Terminal coding agent |
-| GitHub Copilot | IDE/GitHub context, Enterprise codebase indexing | Custom instructions | Enterprise codebase indexing | No built-in business layer | No | Broad mainstream coding assistant |
-| Sourcegraph Cody | Sourcegraph Search API and context engine | Sourcegraph/enterprise context | Strong cross-repo code search | No built-in business layer | Enterprise/cloud oriented | Large-org code search plus AI |
-| Tabnine | IDE completions and chat grounded in codebase | Enterprise controls | Codebase-grounded assistance | No built-in business layer | Strong private/on-prem story | Secure enterprise assistant |
-| Qodo | PR/code-review context engine | Rules and governance | Multi-repo awareness on Enterprise | No product-area map | SaaS and enterprise options | AI code review and SDLC governance |
-| Greptile | Code review and chat with repo context | Custom context and learnings | Review-focused repo context | No product-area map | SaaS and enterprise options | AI code review with repository context |
+| Tool          | Retrieval + Compression      | Trust / Freshness Signals | Auto-Inject Hooks | Local + Zero-Infra | Adoption     | Notes |
+|---------------|------------------------------|---------------------------|-------------------|--------------------|--------------|-------|
+| **Reporecall** | Hybrid + intent + expand    | ✅ Full (banners + indexedCommit + auto-refresh) | ✅ Per-prompt    | ✅ Full           | 🔴 Nascent  | Best local bundle |
+| CodeGraph     | Graph + FTS                 | ✅ Banner                | ❌               | ✅                | 🟢 ~50k     | Closest narrative twin |
+| Cline         | Agentic file reads          | ⚠️ "always fresh" claim  | ❌               | ✅                | 🟢 64k      | Anti-index philosophy |
+| Cognee        | Graph KG                    | ⚠️                      | ✅               | ✅                | 🟡 + funding| Same quadrant threat |
+| Native Claude Code | Agentic grep             | ✅ (files are live)      | ✅ (it is the agent) | ✅             | 🌊 Default  | Biggest existential threat |
+| Augment       | Cloud semantic              | ✅ real-time             | ❌               | ❌                | 💰 $977M    | Different (cloud) model |
+
+**Key observation**: No other local OSS tool combines auto-injection + sophisticated compression + full trust signals + the complete stack.
+
+## Honest Assessment
+
+**We win on**:
+- Local determinism + full bundle
+- Auto-inject hooks (agents don't have to remember to call tools)
+- Explicit, unavoidable freshness honesty
+- Zero external infra for the core path
+
+**We lose on**:
+- Raw adoption and marketing volume
+- Funding and team size
+- Some memory sophistication (specialized memory tools go deeper)
+- Scale on enormous monorepos (some cloud tools win here)
+
+**Redundant for**:
+- Small/familiar repos (native grep + agent tools are fine)
+- Users who already love another context provider
+
+See also the full competitive positioning document for threat tiers and graveyard examples.
 
 ## Paid Tools
 

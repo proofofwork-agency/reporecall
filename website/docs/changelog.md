@@ -6,6 +6,19 @@ sidebar_position: 9
 
 # Changelog
 
+## v0.8.1 — Positioning, Trust & Distribution (2026-07-09)
+
+Patch release focused on making the product story match the engineering quality (per competitive analysis).
+
+- README and all docs now lead with **local-first, auto-injecting, self-aware context + memory layer** + Trust Contract.
+- Hooks positioned as primary UX.
+- `reporecall stats` / `get_stats` prominently show freshness.
+- New `npm run benchmark:tokens`.
+- New competitive positioning doc.
+- Full sync across README, CLAUDE.md, website/docs, competitor matrix.
+
+See root CHANGELOG for details.
+
 ## v0.8.0 — Trust-Contract Remediation (2026-07-09)
 
 A **breaking MCP surface change** focused on freshness honesty, leaner injected context, smaller storage, and less agent tool-choice confusion.

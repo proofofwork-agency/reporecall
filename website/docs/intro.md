@@ -6,9 +6,11 @@ sidebar_position: 1
 
 # Reporecall
 
-**Reporecall** is a local, offline-first codebase memory and retrieval layer for coding agents. It indexes a repository on your machine, classifies each codebase question by intent, and returns focused source context to Claude Code, Codex, and any MCP-compatible client through hooks, MCP tools, and CLI commands.
+**Reporecall** is the **local-first, auto-injecting, self-aware-about-staleness context + memory layer** for coding agents.
 
-It is a **context layer** — not an AI editor, a hosted model, or a PR-review SaaS. Its single job is to improve the context that your coding agent receives.
+It **automatically injects** high-quality, compressed evidence (code + wiki + graph + business + memory) into every Claude Code prompt via hooks, while being brutally honest about freshness.
+
+It is a **context layer** — not an AI editor or hosted model. Its job is to make the context your agent receives dramatically better, especially on large, high-churn, or unfamiliar codebases.
 
 ```text
  ____                                    _ _
@@ -27,14 +29,12 @@ Reporecall front-loads that work. It maintains a fresh index of your code, under
 
 ## Key features
 
-- **Intent-routed retrieval.** Every prompt is classified into one of six modes — `lookup`, `trace`, `bug`, `architecture`, `change`, or `skip` — and retrieval strategy adapts to the mode. Trace and architecture questions favor *file coverage across layers* (entry point, service, controller/handler, shared helpers) over raw chunk volume.
-- **Hybrid search.** Keyword (SQLite FTS) and semantic (vector) retrieval are fused with Reciprocal Rank Fusion (RRF), then expanded along the call/import graph.
-- **Call & import graph with topology analysis.** Reporecall records call edges and imports, then runs Louvain community detection, hub detection, and cross-module "surprise" scoring.
-- **Generated wiki.** Deterministic wiki pages are produced for communities, hubs, cross-module surprises, captured flows, and business capabilities.
-- **Persistent project memory.** Rules, facts, episodes, and working state survive across sessions and are injected alongside code context when relevant.
-- **Business-context export.** An additive, product-language view (`productAreas[]`, `businessPages[]`) for planning tools and dashboards, kept separate from core code retrieval.
-- **Architecture lens.** A portable single-file HTML dashboard plus a structured JSON export (`lens --json`) that external tools can consume without depending on Reporecall internals.
-- **Six-tool MCP surface.** A compact, action-based MCP toolset (see [MCP Tools](./mcp-tools.md)).
+- **Auto-injecting hooks (the killer UX).** Relevant context is **pushed** into every prompt via Claude Code hooks. The agent doesn't have to decide to call a tool.
+- **Explicit Trust Contract.** Every response carries staleness banners, `indexedCommit`, dirty file count, and repair guidance. Never silently stale.
+- **Intent-routed hybrid retrieval + compression.** Routes `lookup`/`trace`/`bug`/`architecture`/`change`/`skip`, then compresses with expand-on-demand (`search_code action=read_chunk`).
+- **Full local bundle.** Code + call graph + deterministic wiki + persistent memory + business areas + Lens — zero external services required by default.
+- **Six-tool MCP surface.** Deliberately compact and safe (`search_context`, `search_code`, `explain_flow`, `memory`, `refresh_context`, `get_stats`).
+- **Architecture Lens + exports.** Portable HTML dashboard + rich JSON for other tools.
 
 ## How it works (high level)
 

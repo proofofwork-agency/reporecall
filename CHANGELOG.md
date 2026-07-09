@@ -1,10 +1,40 @@
 # Changelog
 
+## [0.8.1] - 2026-07-09
+
+### Positioning, Trust & Distribution Improvements (toward 9/10)
+
+This patch focuses on making the strengths impossible to miss and addressing the competitive analysis feedback (engineering was already strong; positioning and communication were the gaps).
+
+- **README repositioned** as the "local-first, auto-injecting, self-aware-about-staleness context + memory layer". Hooks are the hero, Trust Contract is prominent with ASCII diagram, "when we shine" + "concede median repo" sections added, benchmark claims, and competitor table.
+- **package.json** updated with new description, expanded keywords (context-layer, auto-inject, trust-contract, etc.).
+- **Stats & get_stats enhanced**: `reporecall stats` and MCP `get_stats` now lead with explicit freshness/trust data (banner, indexedCommit, dirty files, level).
+- **New benchmark**: `npm run benchmark:tokens` (scripts/benchmarks/token-savings.ts) — reports real freshness + estimated token savings vs naive.
+- **Docs overhaul & sync**:
+  - New `docs/competitive-positioning-2026.md` (full rating, matrix, recs, action plan).
+  - Updated competitor comparison, CLAUDE.md (root + template in init), website/docs (intro, mcp-tools, changelog).
+  - Consistent "Trust Contract", hooks-first, concede language everywhere.
+- **CHANGELOG, release files** updated for 0.8.1.
+- **Other**: Improved benchmark docs, more examples, "Why Reporecall" table.
+
+These changes directly implement the strategic recommendations from the OSS coding agents research: out-communicate the bundle + trust, make hooks hero, concede easy cases, publish receipts.
+
 ## [0.8.0] - 2026-07-09
 
 Trust-contract remediation release. This is a breaking MCP surface change focused
 on freshness honesty, leaner injected context, smaller storage, and less agent
 tool-choice confusion.
+
+### Post-0.8 Positioning & Documentation Push (toward 9/10)
+
+- README, CLAUDE.md template, and docs overhauled to lead with the **local-first auto-injecting trust-contract bundle**.
+- Hooks positioned as the hero UX.
+- Explicit "when we shine / concede median repo" language.
+- New `docs/competitive-positioning-2026.md` one-pager + updated competitor matrix.
+- `reporecall stats` and `get_stats` now prominently surface freshness/trust data.
+- Added `npm run benchmark:tokens` + `scripts/benchmarks/token-savings.ts` (real freshness + estimated savings).
+- Website docs sources synced with new messaging.
+- Benchmark claims and "Why Reporecall" comparison table added.
 
 ### Breaking
 

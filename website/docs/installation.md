@@ -48,6 +48,7 @@ Run these from the root of the project you want to index.
 
 ```bash
 reporecall init
+reporecall serve   # starts daemon + watcher + auto-injects via hooks
 ```
 
 `init` writes project configuration only — it does **not** index code. It creates:

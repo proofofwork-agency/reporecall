@@ -6,7 +6,9 @@ sidebar_position: 4
 
 # MCP Tools
 
-As of **v0.8.0**, Reporecall exposes a deliberately compact MCP surface of **exactly six tools**. Older releases registered ~30 standalone tools; those were folded into action-based verbs (see [Changelog](./changelog.md) and the mapping at the bottom of this page). The reduced surface means less agent tool-choice confusion and a smaller prompt footprint.
+As of **v0.8.0**, Reporecall exposes a deliberately compact **6-tool** MCP surface. This is part of the Trust Contract: fewer choices, less confusion, and explicit staleness on every response.
+
+**Primary experience:** Claude Code hooks auto-inject context. Use MCP tools only for gaps.
 
 Start the server:
 
@@ -16,11 +18,11 @@ reporecall mcp --project .
 
 ## How a coding agent should use these
 
-Reporecall context is most valuable when the agent follows a priority chain rather than reaching for a tool first:
+1. **Answer from injected hook context first.**
+2. **Fill gaps** with `search_context` (best default), `search_code action=read_chunk`, or `explain_flow` actions.
+3. **Always check freshness** with `get_stats`. Run `refresh_context` when stale/empty.
 
-1. **Answer from injected context first.** When Claude Code hooks are active, relevant files, symbols, and call-graph evidence are already injected. Do not re-fetch what is already present.
-2. **Fill gaps with the right tool.** For multi-file questions, prefer **`search_context`** (routed, token-budgeted, compression-aware). Use **`search_code`** for raw hit lists or `action=read_chunk` source expansion, and **`explain_flow`** actions for navigation (callers, callees, imports, symbols, stack trees, seeds).
-3. **Check freshness.** If a response carries a staleness banner or `get_stats` shows the index is empty/stale, run `refresh_context` (or `reporecall index`) before trusting results.
+All read-only tools return a `staleness` object + banner when relevant.
 
 All read tools attach a `staleness` object (and a `banner` string when relevant) to their responses. Read tools short-circuit on an empty index with repair guidance — except `get_stats` and `memory`, which remain usable because memory is independent of the code index.
 
