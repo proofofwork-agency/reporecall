@@ -8,10 +8,11 @@ import { getLogger } from "../core/logger.js";
 interface MerkleFileEntry {
   hash: string;
   mtimeMs: number;
+  ctimeMs?: number;
 }
 
 interface MerkleState {
-  files: Record<string, string | MerkleFileEntry>; // relativePath -> contentHash (legacy) or { hash, mtimeMs }
+  files: Record<string, string | MerkleFileEntry>; // relativePath -> contentHash (legacy) or { hash, mtimeMs, ctimeMs? }
 }
 
 let hasherPromise: ReturnType<typeof xxhash> | undefined;
@@ -29,6 +30,11 @@ function entryHash(entry: string | MerkleFileEntry): string {
 /** Extract mtimeMs from a state entry (returns 0 for legacy string entries). */
 function entryMtime(entry: string | MerkleFileEntry): number {
   return typeof entry === "string" ? 0 : entry.mtimeMs;
+}
+
+/** Extract ctimeMs from a state entry (returns undefined for legacy/older entries). */
+function entryCtime(entry: string | MerkleFileEntry): number | undefined {
+  return typeof entry === "string" ? undefined : entry.ctimeMs;
 }
 
 export class MerkleTree {
@@ -86,11 +92,21 @@ export class MerkleTree {
         const existing = this.state.files[file.relativePath];
         const existingHash = existing ? entryHash(existing) : undefined;
         const existingMtime = existing ? entryMtime(existing) : 0;
+        const existingCtime = existing ? entryCtime(existing) : undefined;
 
-        // mtime pre-filter: if mtime hasn't changed, skip the expensive hash
+        // mtime+ctime pre-filter: skip the expensive hash only when BOTH the
+        // modification time and the inode-change time match. mtime alone is
+        // unreliable — `git checkout`, `touch -r`, and `cp`/rsync without
+        // `--times` can rewrite file contents while preserving mtime. ctime
+        // cannot be reset by userspace on POSIX, so it catches those cases.
         const stat = await fsPromises.stat(file.absolutePath);
-        if (existingHash && existingMtime > 0 && stat.mtimeMs === existingMtime) {
-          // mtime unchanged — file is assumed unmodified, skip hash computation
+        if (
+          existingHash
+          && existingMtime > 0
+          && stat.mtimeMs === existingMtime
+          && (existingCtime === undefined || stat.ctimeMs === existingCtime)
+        ) {
+          // mtime+ctime unchanged — file is assumed unmodified, skip hash computation
           continue;
         }
 
@@ -99,13 +115,13 @@ export class MerkleTree {
 
         if (!existingHash) {
           changes.push({ path: file.relativePath, type: "added", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs };
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
         } else if (existingHash !== hash) {
           changes.push({ path: file.relativePath, type: "modified", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs };
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
         } else {
-          // Content unchanged but mtime changed — update mtime cache
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs };
+          // Content unchanged but mtime/ctime changed — update cache
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
         }
       } catch (err) {
         getLogger().warn({ err, path: file.relativePath }, "File disappeared during scan, skipping");
@@ -135,6 +151,7 @@ export class MerkleTree {
     this.state.files[relativePath] = {
       hash: h.h64ToString(content),
       mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
     };
   }
 

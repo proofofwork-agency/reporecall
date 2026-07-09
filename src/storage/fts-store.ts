@@ -77,10 +77,13 @@ export class FTSStore {
        VALUES (?, ?, ?, ?, ?, ?)`
     );
     this.removeByFileStmt = this.db.prepare(`DELETE FROM chunks_fts WHERE raw_file_path = ?`);
+    // Columns: id(0), name(1), file_path(2), content(3), kind(4), raw_file_path(5)
+    // Weight name > content > kind; zero out path/id columns so low-cardinality
+    // kind and path fields don't distort BM25 relevance.
     this.searchStmt = this.db.prepare(
       `SELECT id, rank FROM chunks_fts
        WHERE chunks_fts MATCH ?
-       ORDER BY rank
+       ORDER BY bm25(chunks_fts, 0, 10, 0, 5, 0.1, 0)
        LIMIT ?`
     );
     this.countStmt = this.db.prepare(
@@ -258,7 +261,8 @@ export class FTSStore {
       }
       this._dfCache.set(term, row.cnt);
       return row.cnt;
-    } catch {
+    } catch (err) {
+      getLogger().warn({ err, term }, "FTS getDocFreq failed; treating term as absent");
       return 0;
     }
   }
@@ -270,7 +274,8 @@ export class FTSStore {
         rank: number;
       }>;
       return rows.map((r) => ({ id: r.id, rank: r.rank }));
-    } catch {
+    } catch (err) {
+      getLogger().warn({ err, query: ftsQuery }, "FTS query failed; returning empty results");
       return [];
     }
   }

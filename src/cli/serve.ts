@@ -28,6 +28,7 @@ import { MemoryRuntime } from '../daemon/memory/runtime.js'
 import { assertSqliteRuntimeHealthy } from '../storage/sqlite-utils.js'
 import { WikiGenerator } from '../wiki/generator.js'
 import { WikiAutoCapture } from '../wiki/auto-capture.js'
+import { clearFreshnessCache } from '../core/staleness.js'
 
 export function serveCommand(): Command {
   return new Command('serve')
@@ -75,7 +76,13 @@ export function serveCommand(): Command {
       }
       if (options.maxChunks !== undefined) {
         const parsed = parseInt(options.maxChunks, 10)
-        if (!isNaN(parsed) && parsed >= 0) config.maxContextChunks = parsed
+        if (!isNaN(parsed) && parsed >= 0) {
+          config.maxContextChunks = parsed
+        } else {
+          console.error(
+            `Ignored invalid --max-chunks value "${options.maxChunks}"; using default ${config.maxContextChunks}.`
+          )
+        }
       }
 
       // Health check for Ollama
@@ -314,6 +321,25 @@ export function serveCommand(): Command {
       // Start file watcher — re-probe FTS after each flush so that a recovery
       // re-index (e.g. after a corrupted startup) makes the server aware.
       const scheduler = new IndexScheduler(pipeline, rwLock)
+      const refreshIndexForDrift = async () => {
+        await rwLock.withWrite(async () => {
+          const result = await pipeline.indexAll()
+          clearFreshnessCache()
+          if (result.filesProcessed > 0 || result.chunksCreated > 0) {
+            console.log(
+              `Auto-refresh: ${result.filesProcessed} files processed, ${result.chunksCreated} chunks created`
+            )
+          } else {
+            console.log('Auto-refresh: index verified up to date')
+          }
+          try {
+            pipeline.getFTSStore().search('__probe__', 1)
+            ftsState.initialized = true
+          } catch {
+            // Still not ready
+          }
+        })
+      }
       const watcher = new FileWatcher(config, (changes) => {
         console.log(`File changes detected: ${changes.length} files`)
         scheduler.enqueue(changes)
@@ -338,6 +364,7 @@ export function serveCommand(): Command {
           get ftsInitialized() { return ftsState.initialized },
           debugMode: !!options.debug,
           get ftsStore() { return ftsState.initialized ? pipeline.getFTSStore() : undefined },
+          refreshIndex: refreshIndexForDrift,
           memorySearch: memorySearchInstance,
           memoryRuntime,
           memoryStore

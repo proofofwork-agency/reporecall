@@ -1,7 +1,8 @@
 name: Publish
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -17,6 +18,9 @@ jobs:
       - run: npm run lint
       - run: npm test -- --run
       - run: npm run build
+      - run: npm run smoke
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm pack --dry-run
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

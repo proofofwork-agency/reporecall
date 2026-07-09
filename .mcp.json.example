@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "reporecall": {
+      "command": "node",
+      "args": [
+        "./dist/memory.js",
+        "mcp",
+        "--project",
+        "${PROJECT_ROOT}"
+      ]
+    }
+  }
+}

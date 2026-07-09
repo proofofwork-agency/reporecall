@@ -118,7 +118,7 @@ if [ -n "$CLAUDE" ]; then
   RESULT1=$("$CLAUDE" -p --output-format text \
     "What MCP tools are exposed by the memory server? Return tool names as a comma-separated list." 2>/dev/null)
 
-  if echo "$RESULT1" | grep -q "search_code" && echo "$RESULT1" | grep -q "find_callees"; then
+  if echo "$RESULT1" | grep -q "search_code" && echo "$RESULT1" | grep -q "explain_flow"; then
     echo "[test1] PASS"
     echo "  Answer: $(echo "$RESULT1" | tail -1)"
     PASS=$((PASS + 1))
@@ -143,7 +143,7 @@ if [ -n "$CLAUDE" ]; then
     --append-system-prompt 'You have no tools available. Do not emit tool calls, XML tool blocks, or file reads. Answer only from hook-injected context. If the context is insufficient, reply exactly: Insufficient context.' \
     "What MCP tools are exposed by the memory server? Return tool names as a comma-separated list." 2>/dev/null)
 
-  if echo "$RESULT2" | grep -q "search_code" && echo "$RESULT2" | grep -q "find_callees"; then
+  if echo "$RESULT2" | grep -q "search_code" && echo "$RESULT2" | grep -q "explain_flow"; then
     echo "[test2] PASS"
     echo "  Answer: $(echo "$RESULT2" | tail -1)"
     PASS=$((PASS + 1))

@@ -127,7 +127,7 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
     callNodeTypes: ["call_expression"],
   },
   cpp: {
-    extensions: [".cpp", ".hpp", ".cc", ".cxx"],
+    extensions: [".cpp", ".hpp", ".cc", ".cxx", ".hh", ".hxx", ".hcc"],
     wasmName: "tree-sitter-cpp",
     extractableTypes: [
       "function_definition",
@@ -226,7 +226,10 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
   html: {
     extensions: [".html", ".htm"],
     wasmName: "tree-sitter-html",
-    extractableTypes: ["element"],
+    // Only chunk semantic top-level blocks that carry real content.
+    // The generic "element" node matches EVERY tag, which produced hundreds
+    // of junk <div>/<span> chunks per page.
+    extractableTypes: ["script_element", "style_element"],
     docstringTypes: ["comment"],
   },
   vue: {
@@ -257,4 +260,39 @@ export function getLanguageForExtension(
     }
   }
   return undefined;
+}
+
+/**
+ * Markers that are unambiguously C++ (the C grammar has no `namespace`,
+ * `template`, `class`, `std::`, scope resolution `::`, access specifiers, or
+ * C++ standard-library headers). C++ grammar is a near-superset of C, so a
+ * false positive (parsing real C as C++) is low-risk, while the reverse
+ * (parsing C++ with the C grammar) silently produces error nodes.
+ */
+const CPP_MARKER_RE =
+  /(?:\bnamespace\b|\btemplate\s*<|\bclass\s+[A-Za-z_]\w*|\bpublic:|\bprivate:|\bprotected:|\busing\s+namespace\b|\btypename\b|\bcout\b|\bcin\b|\bendl\b|\w+::\w|#include\s*<(?:vector|string|map|set|unordered_map|unordered_set|list|deque|queue|stack|tuple|array|bitset|memory|algorithm|functional|utility|regex|thread|mutex|atomic|chrono|iostream|fstream|sstream)>)/;
+
+/**
+ * Cheap content sniff: tests only the first ~4KB of a file for C++ markers.
+ */
+export function looksLikeCpp(content: string): boolean {
+  return CPP_MARKER_RE.test(content.slice(0, 4096));
+}
+
+/**
+ * Resolve a language from a file extension, optionally using content to
+ * disambiguate. `.h` headers map to C by default but are very commonly C++ in
+ * modern codebases; when content is supplied and looks like C++, the C++
+ * grammar is used instead to avoid silent parse errors.
+ */
+export function resolveLanguage(
+  ext: string,
+  content?: string
+): { language: string; config: LanguageConfig } | undefined {
+  const base = getLanguageForExtension(ext);
+  if (ext === ".h" && base?.language === "c" && content && looksLikeCpp(content)) {
+    const cpp = LANGUAGE_CONFIGS.cpp;
+    if (cpp) return { language: "cpp", config: cpp };
+  }
+  return base;
 }

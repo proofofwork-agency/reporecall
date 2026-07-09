@@ -4,5 +4,11 @@ export default defineConfig({
   test: {
     globals: false,
     testTimeout: 30000,
+    // Benchmark/stress tests under test/benchmark/* measure latency and memory
+    // and are unreliable when run concurrently with the rest of the suite
+    // (contention inflates p95/heap numbers and causes flaky failures). They
+    // are excluded from the default `npm test` run and executed in isolation
+    // via the dedicated `npm run benchmark:memory` / stress scripts.
+    exclude: ["**/node_modules/**", "**/dist/**", "test/benchmark/**"],
   },
 });

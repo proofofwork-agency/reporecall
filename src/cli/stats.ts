@@ -24,206 +24,218 @@ export function statsCommand(): Command {
         return
       }
 
-      const metadata = new MetadataStore(config.dataDir)
-      const stats = metadata.getStats()
-      const lastIndexed = metadata.getStat('lastIndexedAt')
-      const hooksCount = metadata.getStat('hooksFireCount') ?? '0'
-      const totalTokens = metadata.getStat('totalTokensInjected') ?? '0'
+      let metadata: MetadataStore
+      try {
+        metadata = new MetadataStore(config.dataDir)
+      } catch {
+        console.error('No index found. Run "reporecall index" first.')
+        process.exit(1)
+      }
 
-      // Calculate storage size
-      let storageBytes = 0
-      const files = ['metadata.db', 'fts.db']
-      for (const f of files) {
-        const p = resolve(config.dataDir, f)
-        if (existsSync(p)) storageBytes += statSync(p).size
-      }
-      const lanceDir = resolve(config.dataDir, 'lance')
-      if (existsSync(lanceDir)) {
-        storageBytes += dirSize(lanceDir)
-      }
-      const memoryDb = resolve(config.dataDir, 'memory-index', 'memories.db')
       let memoryStore: MemoryStore | undefined
-      let memoryFreshness: string | undefined
-      let memoryTotals: {
-        total: number
-        active: number
-        archived: number
-        superseded: number
-        pinned: number
-      } | undefined
-      if (existsSync(memoryDb)) {
-        storageBytes += statSync(memoryDb).size
-        try {
-          memoryStore = new MemoryStore(resolve(config.dataDir, 'memory-index'))
-          const memories = memoryStore.getAll()
-          const newest = memories.reduce((acc, memory) => {
-            const mtime = new Date(memory.fileMtime).getTime()
-            return Number.isFinite(mtime) && mtime > acc ? mtime : acc
-          }, 0)
-          if (newest > 0) {
-            memoryFreshness = formatTimeSince(new Date(newest))
+      try {
+        const stats = metadata.getStats()
+        const storageStats = metadata.getStorageStats()
+        const lastIndexed = metadata.getStat('lastIndexedAt')
+        const hooksCount = metadata.getStat('hooksFireCount') ?? '0'
+        const totalTokens = metadata.getStat('totalTokensInjected') ?? '0'
+
+        // Calculate storage size
+        let storageBytes = 0
+        const files = ['metadata.db', 'fts.db']
+        for (const f of files) {
+          const p = resolve(config.dataDir, f)
+          if (existsSync(p)) storageBytes += statSync(p).size
+        }
+        const lanceDir = resolve(config.dataDir, 'lance')
+        if (existsSync(lanceDir)) {
+          storageBytes += dirSize(lanceDir)
+        }
+        const memoryDb = resolve(config.dataDir, 'memory-index', 'memories.db')
+        let memoryFreshness: string | undefined
+        let memoryTotals: {
+          total: number
+          active: number
+          archived: number
+          superseded: number
+          pinned: number
+        } | undefined
+        if (existsSync(memoryDb)) {
+          storageBytes += statSync(memoryDb).size
+          try {
+            memoryStore = new MemoryStore(resolve(config.dataDir, 'memory-index'))
+            const memories = memoryStore.getAll()
+            const newest = memories.reduce((acc, memory) => {
+              const mtime = new Date(memory.fileMtime).getTime()
+              return Number.isFinite(mtime) && mtime > acc ? mtime : acc
+            }, 0)
+            if (newest > 0) {
+              memoryFreshness = formatTimeSince(new Date(newest))
+            }
+            memoryTotals = memories.reduce(
+              (acc, memory) => {
+                acc.total += 1
+                const status = resolveMemoryStatus(memory)
+                if (status === 'archived') acc.archived += 1
+                else if (status === 'superseded') acc.superseded += 1
+                else acc.active += 1
+                if (memory.pinned) acc.pinned += 1
+                return acc
+              },
+              { total: 0, active: 0, archived: 0, superseded: 0, pinned: 0 }
+            )
+          } catch {
+            memoryStore = undefined
           }
-          memoryTotals = memories.reduce(
-            (acc, memory) => {
-              acc.total += 1
-              const status = resolveMemoryStatus(memory)
-              if (status === 'archived') acc.archived += 1
-              else if (status === 'superseded') acc.superseded += 1
-              else acc.active += 1
-              if (memory.pinned) acc.pinned += 1
-              return acc
-            },
-            { total: 0, active: 0, archived: 0, superseded: 0, pinned: 0 }
+        }
+
+        // Format languages
+        const totalChunks = stats.totalChunks || 1
+        const langLines = Object.entries(stats.languages)
+          .map(
+            ([lang, count]) =>
+              `${lang} (${((count / totalChunks) * 100).toFixed(0)}%)`
           )
-        } catch {
-          memoryStore = undefined
-        }
-      }
+          .join(', ')
 
-      // Format languages
-      const totalChunks = stats.totalChunks || 1
-      const langLines = Object.entries(stats.languages)
-        .map(
-          ([lang, count]) =>
-            `${lang} (${((count / totalChunks) * 100).toFixed(0)}%)`
-        )
-        .join(', ')
+        // Time since last indexed
+        const timeSince = lastIndexed
+          ? formatTimeSince(new Date(lastIndexed))
+          : 'never'
 
-      // Time since last indexed
-      const timeSince = lastIndexed
-        ? formatTimeSince(new Date(lastIndexed))
-        : 'never'
+        const chunksServed = metadata.getStat('chunksServed') ?? '0'
+        const latency = metadata.getLatencyPercentiles()
 
-      const chunksServed = metadata.getStat('chunksServed') ?? '0'
-      const latency = metadata.getLatencyPercentiles()
+        const tokensInjected = parseInt(totalTokens, 10)
+        const chunksServedNum = parseInt(chunksServed, 10)
+        const hooksNum = parseInt(hooksCount, 10)
 
-      const tokensInjected = parseInt(totalTokens, 10)
-      const chunksServedNum = parseInt(chunksServed, 10)
-      const hooksNum = parseInt(hooksCount, 10)
-
-      console.log(`Reporecall`)
-      console.log(``)
-      console.log(`Index:`)
-      console.log(
-        `  Chunks:       ${stats.totalChunks} across ${stats.totalFiles} files`
-      )
-      console.log(`  Languages:    ${langLines || 'none'}`)
-      console.log(`  Storage:      ${formatBytes(storageBytes)}`)
-      console.log(`  Last indexed: ${timeSince}`)
-      console.log(``)
-
-      console.log(`Session Stats:`)
-      console.log(`  Hooks fired:         ${hooksCount}`)
-      console.log(
-        `  Chunks served:       ${Number(chunksServed).toLocaleString()}`
-      )
-      console.log(
-        `  Tokens injected:     ${Number(totalTokens).toLocaleString()}`
-      )
-      if (hooksNum > 0) {
-        const avgTokensPerQuery = Math.round(tokensInjected / hooksNum)
-        console.log(
-          `  Avg tokens/query:    ${avgTokensPerQuery.toLocaleString()}`
-        )
-      }
-      if (chunksServedNum > 0 && hooksNum > 0) {
-        const avgChunksPerQuery = (chunksServedNum / hooksNum).toFixed(1)
-        console.log(`  Avg chunks/query:    ${avgChunksPerQuery}`)
-      }
-      // Memory stats
-      const memoriesInjected = metadata.getStat('memoriesInjected') ?? '0'
-      const memoryTokensInjected = metadata.getStat('memoryTokensInjected') ?? '0'
-      const memoryHitCount = metadata.getStat('memoryHitCount') ?? '0'
-      const memoryHitNum = parseInt(memoryHitCount, 10)
-      const memoriesInjectedNum = parseInt(memoriesInjected, 10)
-      const memoryTokensNum = parseInt(memoryTokensInjected, 10)
-
-      if (memoryHitNum > 0 || existsSync(resolve(config.dataDir, 'memory-index', 'memories.db'))) {
+        console.log(`Reporecall`)
         console.log(``)
-        console.log(`Memory:`)
-        console.log(`  Queries with memory:  ${memoryHitCount}${hooksNum > 0 ? ` (${((memoryHitNum / hooksNum) * 100).toFixed(0)}% hit rate)` : ''}`)
-        console.log(`  Memories injected:    ${Number(memoriesInjected).toLocaleString()}`)
-        console.log(`  Memory tokens:        ${Number(memoryTokensInjected).toLocaleString()}`)
-        if (memoryHitNum > 0) {
-          console.log(`  Avg tokens/hit:       ${Math.round(memoryTokensNum / memoryHitNum).toLocaleString()}`)
-          console.log(`  Avg memories/hit:     ${(memoriesInjectedNum / memoryHitNum).toFixed(1)}`)
+        console.log(`Index:`)
+        console.log(
+          `  Chunks:       ${stats.totalChunks} across ${stats.totalFiles} files`
+        )
+        console.log(`  Languages:    ${langLines || 'none'}`)
+        console.log(`  Storage:      ${formatBytes(storageBytes)}`)
+        console.log(`  Metadata DB:  ${formatBytes(storageStats.metadataDbBytes)} (${formatBytes(storageStats.metadataDbFreeBytes)} free)`)
+        console.log(`  Targets:      ${storageStats.targetCount.toLocaleString()} targets, ${storageStats.targetAliasCount.toLocaleString()} aliases`)
+        console.log(`  Last indexed: ${timeSince}`)
+        console.log(``)
+
+        console.log(`Session Stats:`)
+        console.log(`  Hooks fired:         ${hooksCount}`)
+        console.log(
+          `  Chunks served:       ${Number(chunksServed).toLocaleString()}`
+        )
+        console.log(
+          `  Tokens injected:     ${Number(totalTokens).toLocaleString()}`
+        )
+        if (hooksNum > 0) {
+          const avgTokensPerQuery = Math.round(tokensInjected / hooksNum)
+          console.log(
+            `  Avg tokens/query:    ${avgTokensPerQuery.toLocaleString()}`
+          )
         }
-        if (memoryFreshness) {
-          console.log(`  Freshness:            newest update ${memoryFreshness} ago`)
+        if (chunksServedNum > 0 && hooksNum > 0) {
+          const avgChunksPerQuery = (chunksServedNum / hooksNum).toFixed(1)
+          console.log(`  Avg chunks/query:    ${avgChunksPerQuery}`)
         }
-        if (memoryTotals) {
-          console.log(`  Inventory:            ${memoryTotals.total} total (${memoryTotals.active} active, ${memoryTotals.archived} archived, ${memoryTotals.superseded} superseded, ${memoryTotals.pinned} pinned)`)
-        }
-        const classTokens = [
-          ['rule', metadata.getStat('memoryTokens_rule'), metadata.getStat('memoryCount_rule')],
-          ['working', metadata.getStat('memoryTokens_working'), metadata.getStat('memoryCount_working')],
-          ['fact', metadata.getStat('memoryTokens_fact'), metadata.getStat('memoryCount_fact')],
-          ['episode', metadata.getStat('memoryTokens_episode'), metadata.getStat('memoryCount_episode')],
-        ] as const
-        if (classTokens.some(([, tokens, count]) => Number(tokens ?? '0') > 0 || Number(count ?? '0') > 0)) {
-          console.log(`  Avg tokens/class:`)
-          for (const [label, tokens, count] of classTokens) {
-            const countNum = Number(count ?? '0')
-            const tokenNum = Number(tokens ?? '0')
-            if (countNum > 0) {
-              console.log(`    ${label}: ${Math.round(tokenNum / countNum).toLocaleString()} tokens`)
+        // Memory stats
+        const memoriesInjected = metadata.getStat('memoriesInjected') ?? '0'
+        const memoryTokensInjected = metadata.getStat('memoryTokensInjected') ?? '0'
+        const memoryHitCount = metadata.getStat('memoryHitCount') ?? '0'
+        const memoryHitNum = parseInt(memoryHitCount, 10)
+        const memoriesInjectedNum = parseInt(memoriesInjected, 10)
+        const memoryTokensNum = parseInt(memoryTokensInjected, 10)
+
+        if (memoryHitNum > 0 || existsSync(resolve(config.dataDir, 'memory-index', 'memories.db'))) {
+          console.log(``)
+          console.log(`Memory:`)
+          console.log(`  Queries with memory:  ${memoryHitCount}${hooksNum > 0 ? ` (${((memoryHitNum / hooksNum) * 100).toFixed(0)}% hit rate)` : ''}`)
+          console.log(`  Memories injected:    ${Number(memoriesInjected).toLocaleString()}`)
+          console.log(`  Memory tokens:        ${Number(memoryTokensInjected).toLocaleString()}`)
+          if (memoryHitNum > 0) {
+            console.log(`  Avg tokens/hit:       ${Math.round(memoryTokensNum / memoryHitNum).toLocaleString()}`)
+            console.log(`  Avg memories/hit:     ${(memoriesInjectedNum / memoryHitNum).toFixed(1)}`)
+          }
+          if (memoryFreshness) {
+            console.log(`  Freshness:            newest update ${memoryFreshness}`)
+          }
+          if (memoryTotals) {
+            console.log(`  Inventory:            ${memoryTotals.total} total (${memoryTotals.active} active, ${memoryTotals.archived} archived, ${memoryTotals.superseded} superseded, ${memoryTotals.pinned} pinned)`)
+          }
+          const classTokens = [
+            ['rule', metadata.getStat('memoryTokens_rule'), metadata.getStat('memoryCount_rule')],
+            ['working', metadata.getStat('memoryTokens_working'), metadata.getStat('memoryCount_working')],
+            ['fact', metadata.getStat('memoryTokens_fact'), metadata.getStat('memoryCount_fact')],
+            ['episode', metadata.getStat('memoryTokens_episode'), metadata.getStat('memoryCount_episode')],
+          ] as const
+          if (classTokens.some(([, tokens, count]) => Number(tokens ?? '0') > 0 || Number(count ?? '0') > 0)) {
+            console.log(`  Avg tokens/class:`)
+            for (const [label, tokens, count] of classTokens) {
+              const countNum = Number(count ?? '0')
+              const tokenNum = Number(tokens ?? '0')
+              if (countNum > 0) {
+                console.log(`    ${label}: ${Math.round(tokenNum / countNum).toLocaleString()} tokens`)
+              }
             }
           }
+          const memoryCompactionCount = metadata.getStat('memoryCompactionCount') ?? '0'
+          const memoryArchivedCount = metadata.getStat('memoryArchivedCount') ?? '0'
+          const memorySupersededCount = metadata.getStat('memorySupersededCount') ?? '0'
+          if (Number(memoryCompactionCount) > 0 || Number(memoryArchivedCount) > 0 || Number(memorySupersededCount) > 0) {
+            console.log(`  Compaction:`)
+            console.log(`    Runs: ${memoryCompactionCount}`)
+            console.log(`    Archived: ${memoryArchivedCount}`)
+            console.log(`    Superseded: ${memorySupersededCount}`)
+          }
         }
-        const memoryCompactionCount = metadata.getStat('memoryCompactionCount') ?? '0'
-        const memoryArchivedCount = metadata.getStat('memoryArchivedCount') ?? '0'
-        const memorySupersededCount = metadata.getStat('memorySupersededCount') ?? '0'
-        if (Number(memoryCompactionCount) > 0 || Number(memoryArchivedCount) > 0 || Number(memorySupersededCount) > 0) {
-          console.log(`  Compaction:`)
-          console.log(`    Runs: ${memoryCompactionCount}`)
-          console.log(`    Archived: ${memoryArchivedCount}`)
-          console.log(`    Superseded: ${memorySupersededCount}`)
+
+        if (latency.count > 0) {
+          console.log(``)
+          console.log(`Search Latency (${latency.count} queries):`)
+          console.log(`  Avg:  ${latency.avg}ms`)
+          console.log(`  p50:  ${latency.p50}ms`)
+          console.log(`  p95:  ${latency.p95}ms`)
         }
-      }
 
-      if (latency.count > 0) {
-        console.log(``)
-        console.log(`Search Latency (${latency.count} queries):`)
-        console.log(`  Avg:  ${latency.avg}ms`)
-        console.log(`  p50:  ${latency.p50}ms`)
-        console.log(`  p95:  ${latency.p95}ms`)
-      }
+        // Route breakdown (intent-based modes since v0.4.0)
+        const routeSkip = metadata.getStat('route_skip_count') ?? '0'
+        const routeLookup = metadata.getStat('route_lookup_count') ?? '0'
+        const routeTrace = metadata.getStat('route_trace_count') ?? '0'
+        const routeBug = metadata.getStat('route_bug_count') ?? '0'
+        const routeArch = metadata.getStat('route_architecture_count') ?? '0'
+        const routeChange = metadata.getStat('route_change_count') ?? '0'
+        const totalRoutes = [routeSkip, routeLookup, routeTrace, routeBug, routeArch, routeChange]
+          .reduce((s, v) => s + parseInt(v, 10), 0)
+        if (totalRoutes > 0) {
+          console.log(``)
+          console.log(`Query Mode Breakdown:`)
+          console.log(`  skip:          ${routeSkip}`)
+          console.log(`  lookup:        ${routeLookup}`)
+          console.log(`  trace:         ${routeTrace}`)
+          console.log(`  bug:           ${routeBug}`)
+          console.log(`  architecture:  ${routeArch}`)
+          console.log(`  change:        ${routeChange}`)
+        }
 
-      // Route breakdown (intent-based modes since v0.4.0)
-      const routeSkip = metadata.getStat('route_skip_count') ?? '0'
-      const routeLookup = metadata.getStat('route_lookup_count') ?? '0'
-      const routeTrace = metadata.getStat('route_trace_count') ?? '0'
-      const routeBug = metadata.getStat('route_bug_count') ?? '0'
-      const routeArch = metadata.getStat('route_architecture_count') ?? '0'
-      const routeChange = metadata.getStat('route_change_count') ?? '0'
-      const totalRoutes = [routeSkip, routeLookup, routeTrace, routeBug, routeArch, routeChange]
-        .reduce((s, v) => s + parseInt(v, 10), 0)
-      if (totalRoutes > 0) {
-        console.log(``)
-        console.log(`Query Mode Breakdown:`)
-        console.log(`  skip:          ${routeSkip}`)
-        console.log(`  lookup:        ${routeLookup}`)
-        console.log(`  trace:         ${routeTrace}`)
-        console.log(`  bug:           ${routeBug}`)
-        console.log(`  architecture:  ${routeArch}`)
-        console.log(`  change:        ${routeChange}`)
-      }
-
-      // Check daemon status
-      const pidPath = resolve(config.dataDir, 'daemon.pid')
-      if (existsSync(pidPath)) {
-        const pid = readFileSync(pidPath, 'utf-8').trim()
-        if (isProcessAlive(parseInt(pid, 10))) {
-          console.log(`\nDaemon: running (PID ${pid})`)
+        // Check daemon status
+        const pidPath = resolve(config.dataDir, 'daemon.pid')
+        if (existsSync(pidPath)) {
+          const pid = readFileSync(pidPath, 'utf-8').trim()
+          if (isProcessAlive(parseInt(pid, 10))) {
+            console.log(`\nDaemon: running (PID ${pid})`)
+          } else {
+            console.log(`\nDaemon: not running (stale PID file)`)
+          }
         } else {
-          console.log(`\nDaemon: not running (stale PID file)`)
+          console.log(`\nDaemon: not running`)
         }
-      } else {
-        console.log(`\nDaemon: not running`)
+      } finally {
+        metadata.close()
+        memoryStore?.close()
       }
-
-      metadata.close()
-      memoryStore?.close()
     })
 }
 

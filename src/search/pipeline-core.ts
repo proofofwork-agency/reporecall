@@ -19,6 +19,7 @@ import type { SearchResult, SearchOptions } from "./types.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
 import { classifyIntent } from "./intent.js";
 import type { StoredChunk } from "../storage/types.js";
+import { chunkToSearchResult } from "./shared/mappers.js";
 
 // ── Scoring constants ────────────────────────────────────────────────
 export const IMPL_BOOST = 1.25;
@@ -60,6 +61,7 @@ export class RetrievalPipeline {
   private fts: FTSStore;
   private metadata: MetadataStore;
   private config: MemoryConfig;
+  private lock?: ReadWriteLock;
   private queryEmbedCache = new Map<string, EmbeddingVector>();
 
   constructor(opts: RetrievalPipelineConfig) {
@@ -68,17 +70,37 @@ export class RetrievalPipeline {
     this.fts = opts.ftsStore;
     this.metadata = opts.metadata;
     this.config = opts.config;
+    // Previously this field was declared in the config interface but silently
+    // dropped here, giving callers a false guarantee of concurrency safety.
+    this.lock = opts.lock;
+  }
+
+  /** Run fn under the read lock when one is configured; otherwise run it directly. */
+  private async withReadLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock ? this.lock.withRead(fn) : fn();
+  }
+
+  /** Run fn under the write lock when one is configured; otherwise run it directly. */
+  private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock ? this.lock.withWrite(fn) : fn();
   }
 
   // ── Store hot-swap (used after re-index) ─────────────────────────
-  updateStores(
+  /**
+   * Swap the underlying stores. Runs under the write lock (when configured) so
+   * that in-flight `retrieve` calls cannot observe a half-swapped set of stores
+   * (old vectors/fts read alongside new metadata, causing chunk-id mismatches).
+   */
+  async updateStores(
     vectors: VectorStore,
     fts: FTSStore,
     metadata: MetadataStore
-  ): void {
-    this.vectors = vectors;
-    this.fts = fts;
-    this.metadata = metadata;
+  ): Promise<void> {
+    await this.withWriteLock(async () => {
+      this.vectors = vectors;
+      this.fts = fts;
+      this.metadata = metadata;
+    });
   }
 
   // ── Accessors (for callers that need the underlying stores) ──────
@@ -102,11 +124,16 @@ export class RetrievalPipeline {
     vectorResults: Array<{ id: string; score: number }>;
     keywordResults: Array<{ id: string; rank: number }>;
   }> {
-    const [vectorResults, keywordResults] = await Promise.all([
-      isKeywordMode ? Promise.resolve([]) : this.vectorSearch(query, 50),
-      this.keywordSearch(query, 50),
-    ]);
-    return { vectorResults, keywordResults };
+    // Hold the read lock for the duration of both searches so a concurrent
+    // updateStores() cannot swap the stores between the vector and keyword
+    // reads (which would yield mismatched chunk-id spaces).
+    return this.withReadLock(async () => {
+      const [vectorResults, keywordResults] = await Promise.all([
+        isKeywordMode ? Promise.resolve([]) : this.vectorSearch(query, 50),
+        this.keywordSearch(query, 50),
+      ]);
+      return { vectorResults, keywordResults };
+    });
   }
 
   // ── Vector search (with LRU embedding cache) ────────────────────
@@ -251,8 +278,12 @@ export class RetrievalPipeline {
     const rankedIds = new Set(ranked.map((r) => r.id));
     const topN = options?.graphTopN ?? 10;
     const top10 = ranked.slice(0, topN);
-    const discoveredNames = new Set<string>();
-    const nameScoreMap = new Map<string, number>();
+    // Bug fix: keep caller and callee names in separate sets. Previously both
+    // were merged into one set fed to findChunksByNames with a score map that
+    // only covered callee targets, so caller-named chunks got the wrong
+    // (top-score) fallback. Now only callee target names drive that lookup.
+    const calleeNames = new Set<string>();
+    const calleeScoreMap = new Map<string, number>();
 
     for (const item of top10) {
       const name = maps.chunkNames.get(item.id);
@@ -263,7 +294,6 @@ export class RetrievalPipeline {
 
       for (const caller of callers) {
         if (!rankedIds.has(caller.chunkId)) {
-          discoveredNames.add(caller.callerName);
           ranked.push({
             id: caller.chunkId,
             score: item.score * this.config.graphDiscountFactor,
@@ -273,19 +303,19 @@ export class RetrievalPipeline {
       }
 
       for (const callee of callees) {
-        discoveredNames.add(callee.targetName);
-        const existing = nameScoreMap.get(callee.targetName) ?? 0;
-        nameScoreMap.set(callee.targetName, Math.max(existing, item.score));
+        calleeNames.add(callee.targetName);
+        const existing = calleeScoreMap.get(callee.targetName) ?? 0;
+        calleeScoreMap.set(callee.targetName, Math.max(existing, item.score));
       }
     }
 
-    if (discoveredNames.size > 0) {
+    if (calleeNames.size > 0) {
       const calleeChunks = this.metadata.findChunksByNames(
-        Array.from(discoveredNames)
+        Array.from(calleeNames)
       );
       for (const chunk of calleeChunks) {
         if (!rankedIds.has(chunk.id)) {
-          const triggerScore = nameScoreMap.get(chunk.name) ?? top10[0]?.score ?? 0;
+          const triggerScore = calleeScoreMap.get(chunk.name) ?? top10[0]?.score ?? 0;
           ranked.push({
             id: chunk.id,
             score: triggerScore * this.config.graphDiscountFactor,
@@ -379,18 +409,6 @@ export class RetrievalPipeline {
 
   // ── Convert a StoredChunk to a SearchResult ─────────────────────
   chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 }

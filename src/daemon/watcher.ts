@@ -7,6 +7,10 @@ import { loadMemoryIgnore } from "../core/project.js";
 import { getLogger } from "../core/logger.js";
 
 const MAX_PENDING = 10_000;
+// Hard upper bound on how long a burst of events can be coalesced before a
+// flush is forced. Without this, sustained activity (builds, git checkouts)
+// keeps resetting the trailing-edge debounce timer and the callback never fires.
+const MAX_WAIT_MS = 5_000;
 
 export type WatcherCallback = (
   changes: Array<{ path: string; type: "add" | "change" | "unlink" }>
@@ -20,6 +24,7 @@ export class FileWatcher {
     type: "add" | "change" | "unlink";
   }> = [];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private maxWaitTimer: ReturnType<typeof setTimeout> | undefined;
   private callback: WatcherCallback;
 
   constructor(config: MemoryConfig, callback: WatcherCallback) {
@@ -76,22 +81,45 @@ export class FileWatcher {
 
       this.pendingChanges.push({ path: relPath, type: eventType });
 
-      // Debounce
+      // Trailing-edge debounce: coalesce rapid bursts. The maxWaitTimer guards
+      // against indefinite postponement under sustained activity by forcing a
+      // flush after MAX_WAIT_MS regardless of ongoing events.
       if (this.debounceTimer) clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(() => {
         const changes = [...this.pendingChanges];
         this.pendingChanges = [];
         this.callback(changes);
       }, this.config.debounceMs);
+      if (!this.maxWaitTimer) {
+        this.maxWaitTimer = setTimeout(() => {
+          this.maxWaitTimer = undefined;
+          if (this.debounceTimer) {
+            clearTimeout(this.debounceTimer);
+            this.debounceTimer = undefined;
+          }
+          if (this.pendingChanges.length > 0) {
+            const changes = [...this.pendingChanges];
+            this.pendingChanges = [];
+            this.callback(changes);
+          }
+        }, MAX_WAIT_MS);
+      }
     };
 
     this.watcher.on("add", (p) => handleEvent("add", p));
     this.watcher.on("change", (p) => handleEvent("change", p));
     this.watcher.on("unlink", (p) => handleEvent("unlink", p));
+
+    // Persistent error handler so chokidar errors (EMFILE, EACCES) are logged
+    // instead of crashing the process as unhandled exceptions.
+    this.watcher.on("error", (err: unknown) => {
+      getLogger().warn({ err }, "FileWatcher error (non-fatal)");
+    });
   }
 
   async stop(): Promise<void> {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
     await this.watcher?.close();
   }
 }

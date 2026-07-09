@@ -41,6 +41,12 @@ export class ReadWriteLock {
   }
 
   private releaseRead(): void {
+    // Detect underflow from a double releaseRead()/unbalanced release: a
+    // negative reader count would silently break the readers===0 hand-off
+    // condition and stall the lock forever.
+    if (this.readers <= 0) {
+      throw new Error("ReadWriteLock.releaseRead: readers underflow (unbalanced release)");
+    }
     this.readers--;
     if (this.readers === 0 && this.writerQueue.length > 0) {
       this.writing = true;
@@ -62,6 +68,9 @@ export class ReadWriteLock {
   }
 
   private releaseWrite(): void {
+    if (!this.writing) {
+      throw new Error("ReadWriteLock.releaseWrite: not writing (unbalanced release)");
+    }
     this.writing = false;
     // Writer-preferring: prioritize queued writers over readers
     if (this.writerQueue.length > 0) {

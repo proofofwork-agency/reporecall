@@ -14,6 +14,30 @@ export interface RankedItem {
   score: number;
 }
 
+const MATCH_BOOST_CEILING = 8;
+
+function splitBoundaryTokens(text: string): string[] {
+  return text
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .toLowerCase()
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+function variantMatchesText(
+  variant: string,
+  boundaryTokens: Set<string>,
+  lowerText: string
+): boolean {
+  if (variant.length <= 4) {
+    return boundaryTokens.has(variant);
+  }
+  return lowerText.includes(variant);
+}
+
 export function reciprocalRankFusion(
   vectorResults: Array<{ id: string; score: number }>,
   keywordResults: Array<{ id: string; rank: number }>,
@@ -37,8 +61,11 @@ export function reciprocalRankFusion(
     chunkLineRanges?: Map<string, { startLine: number; endLine: number }>;
   }
 ): RankedItem[] {
-  const { vectorWeight, keywordWeight, recencyWeight, k, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, testFileMode, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
+  const { vectorWeight, keywordWeight, recencyWeight, chunkDates, activeFiles, chunkFilePaths, chunkKinds, codeBoostFactor, chunkNames, testPenaltyFactor, testFileMode, anonymousPenaltyFactor, queryTerms, expandedQueryTerms, broadQuery, chunkLineRanges } =
     options;
+  // Guard k: a non-positive or non-finite value would yield Infinity/negative RRF
+  // scores. Fall back to the canonical RRF constant (60).
+  const k = options.k > 0 && Number.isFinite(options.k) ? options.k : 60;
   const scores = new Map<string, RankedItem>();
 
   // Vector scores — standard RRF: 1/(k + rank) with 1-indexed rank
@@ -77,8 +104,13 @@ export function reciprocalRankFusion(
     for (const [id, item] of scores) {
       const dateStr = chunkDates.get(id);
       if (dateStr) {
-        const age = now - new Date(dateStr).getTime();
-        const recencyScore = Math.max(0, 1 - age / ninetyDays);
+        const time = new Date(dateStr).getTime();
+        // A single malformed date yields NaN, which propagates through the
+        // score and corrupts the final sort (NaN comparators are non-transitive,
+        // scrambling the whole result set). Skip such entries instead.
+        if (!Number.isFinite(time)) continue;
+        const age = now - time;
+        const recencyScore = Math.min(1, Math.max(0, 1 - age / ninetyDays));
         item.score += recencyWeight * recencyScore;
         item.indexedAt = dateStr;
       }
@@ -157,8 +189,12 @@ export function reciprocalRankFusion(
 
     if (terms.length > 0) {
       for (const [id, item] of scores) {
-        const filePath = (chunkFilePaths.get(id) ?? "").toLowerCase();
-        const chunkName = (chunkNames?.get(id) ?? "").toLowerCase();
+        const rawFilePath = chunkFilePaths.get(id) ?? "";
+        const rawChunkName = chunkNames?.get(id) ?? "";
+        const filePath = rawFilePath.toLowerCase();
+        const chunkName = rawChunkName.toLowerCase();
+        const pathTokens = new Set(splitBoundaryTokens(rawFilePath));
+        const nameTokens = new Set(splitBoundaryTokens(rawChunkName));
 
         let matchCount = 0;
         let matchedWeight = 0;
@@ -169,7 +205,10 @@ export function reciprocalRankFusion(
 
         for (const term of expandedTerms) {
           const variants = getQueryTermVariants(term.term);
-          if (variants.some((variant) => filePath.includes(variant) || chunkName.includes(variant))) {
+          if (variants.some((variant) =>
+            variantMatchesText(variant, pathTokens, filePath)
+            || variantMatchesText(variant, nameTokens, chunkName)
+          )) {
             matchCount++;
             matchedWeight += term.weight;
             matchBoost *= camelTerms.has(term.term) ? 1.7 : term.term.length >= 8 ? 1.45 : term.weight >= 0.7 ? 1.3 : 1.18;
@@ -178,6 +217,8 @@ export function reciprocalRankFusion(
             if (!term.generic) onlyGenericMatches = false;
           }
         }
+
+        matchBoost = Math.min(matchBoost, MATCH_BOOST_CEILING);
 
         if (matchCount > 0) {
           const coverageRatio = matchedWeight / totalExpandedWeight;

@@ -14,6 +14,8 @@ import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
 import type { HookDebugRecord } from "../search/types.js";
 import type { MemoryRuntime } from "./memory/runtime.js";
+import { banner, clearFreshnessCache, computeFreshness, type IndexFreshness } from "../core/staleness.js";
+import { countTokens } from "../search/context-assembler.js";
 import {
   SessionStartBodySchema,
   PromptContextBodySchema,
@@ -61,10 +63,6 @@ setInterval(() => {
   }
 }, RATE_LIMIT_CLEANUP_INTERVAL_MS).unref();
 
-export function resetHookSessionState(): void {
-  hookSessionState.clear();
-}
-
 export function resetRateLimitMap(): void {
   rateLimitMap.clear();
 }
@@ -108,6 +106,17 @@ const ASSIGNMENT_LINE_RE =
 const CALLISH_LINE_RE =
   /^(?:\([^)]*\)|[^\s(][^\s]*)\s*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\([^)]*\)\s*$/;
 
+const MAX_SANITIZED_QUERY_CHARS = 1200;
+
+const CODE_IDENTIFIER_STOP_WORDS = new Set([
+  "abstract", "async", "await", "boolean", "break", "case", "catch", "class", "const", "continue",
+  "default", "def", "delete", "do", "else", "enum", "except", "export", "extends", "false",
+  "finally", "for", "from", "function", "if", "import", "in", "include", "interface", "let",
+  "new", "null", "package", "private", "protected", "public", "return", "static", "string",
+  "switch", "this", "throw", "true", "try", "type", "undefined", "using", "value", "var", "void",
+  "while", "with",
+]);
+
 function looksLikeCodeLine(trimmed: string): boolean {
   if (CODE_LINE_RE.test(trimmed)) return true;
   if (ASSIGNMENT_LINE_RE.test(trimmed)) return true;
@@ -122,6 +131,41 @@ function looksLikeCodeLine(trimmed: string): boolean {
   }
 
   return false;
+}
+
+function shouldDropCodeIdentifierHints(trimmed: string): boolean {
+  if (/^#(?:include|define)\b/.test(trimmed)) return true;
+  if (/^import\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)+/.test(trimmed)) return true;
+  if (/^[A-Z_][A-Z0-9_]*\s*=/.test(trimmed)) return true;
+  if (/^(?:subprocess\.|print\(|raise\s+SystemExit\b|if\s+not\s+[A-Z_]\w*\b)/.test(trimmed)) return true;
+  return false;
+}
+
+function extractIdentifierHints(text: string): string[] {
+  const hints: string[] = [];
+  const seen = new Set<string>();
+  const withoutStringLiterals = text.replace(/(["'])(?:\\.|(?!\1).)*\1/g, " ");
+  const identifierMatches = withoutStringLiterals.match(/[A-Za-z_$][A-Za-z0-9_$]*(?:(?:[./]|::)[A-Za-z_$][A-Za-z0-9_$]*)*/g) ?? [];
+  for (const match of identifierMatches) {
+    const normalized = match.replace(/^[_$]+|[_$]+$/g, "");
+    if (!normalized) continue;
+    const lower = normalized.toLowerCase();
+    if (CODE_IDENTIFIER_STOP_WORDS.has(lower)) continue;
+    const meaningful =
+      normalized.includes("/")
+      || normalized.includes(".")
+      || normalized.includes("::")
+      || /[a-z][A-Z]/.test(normalized)
+      || /^[A-Z][A-Za-z0-9_$]{2,}$/.test(normalized)
+      || normalized.length >= 5;
+    if (!meaningful) continue;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      hints.push(normalized);
+    }
+    if (hints.length >= 80) break;
+  }
+  return hints;
 }
 
 export function sanitizeQuery(raw: string): string {
@@ -146,13 +190,19 @@ export function sanitizeQuery(raw: string): string {
     })
     .join("\n");
 
-  // 1. Strip backtick-fenced code blocks (``` ... ```) which may contain
-  //    multi-line code embedded in an otherwise natural-language prompt.
-  //    This handles both ```lang\n...\n``` and bare ```\n...\n```.
-  const withoutFencedBlocks = withoutBoilerplate.replace(/```[\s\S]*?```/g, " ");
+  // 1. Collapse backtick-fenced code blocks into path/symbol hints. Full code
+  //    lines are still removed, but identifiers remain searchable.
+  const withoutFencedBlocks = withoutBoilerplate.replace(/```[\s\S]*?```/g, (block) => {
+    const body = block
+      .replace(/^```[^\n]*\n?/, "")
+      .replace(/```$/, "");
+    return ` ${extractIdentifierHints(body).join(" ")} `;
+  });
 
-  // 2. Strip inline code spans (`...`) that may contain code fragments
-  const withoutInlineCode = withoutFencedBlocks.replace(/`[^`]*`/g, " ");
+  // 2. Collapse inline code spans (`...`) into useful identifiers.
+  const withoutInlineCode = withoutFencedBlocks.replace(/`([^`]*)`/g, (_match, code: string) => {
+    return ` ${extractIdentifierHints(code).join(" ")} `;
+  });
 
   // 3. Process line-by-line, SKIPPING (not breaking at) code-like lines.
   //    The old implementation used `break` which meant code on line 2 would
@@ -163,15 +213,23 @@ export function sanitizeQuery(raw: string): string {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    // Skip lines that look like code
-    if (looksLikeCodeLine(trimmed)) continue;
+    const identifierHints = extractIdentifierHints(trimmed);
+    if (looksLikeCodeLine(trimmed)) {
+      if (!shouldDropCodeIdentifierHints(trimmed) && identifierHints.length > 0) {
+        cleanLines.push(identifierHints.join(" "));
+      }
+      continue;
+    }
     // Skip lines that are mostly non-alphanumeric (likely code/symbols)
     const alphaCount = (trimmed.match(/[a-zA-Z]/g) ?? []).length;
-    if (trimmed.length > 4 && alphaCount / trimmed.length < 0.3) continue;
+    if (trimmed.length > 4 && alphaCount / trimmed.length < 0.3) {
+      if (identifierHints.length > 0) cleanLines.push(identifierHints.join(" "));
+      continue;
+    }
     cleanLines.push(trimmed);
   }
 
-  return cleanLines.join(" ").slice(0, 500).trim();
+  return cleanLines.join(" ").replace(/\s+/g, " ").slice(0, MAX_SANITIZED_QUERY_CHARS).trim();
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -240,8 +298,10 @@ function withTimeout(
   endpoint?: string
 ): Promise<void> {
   const abortController = new AbortController();
+  let timedOut = false;
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
+      timedOut = true;
       abortController.abort();
       if (!res.writableEnded) {
         json(res, { error: "Request timeout", code: "TIMEOUT", endpoint, timeoutMs }, 504);
@@ -252,11 +312,17 @@ function withTimeout(
     handler(abortController.signal)
       .then(() => {
         clearTimeout(timer);
-        resolve();
+        // If the handler resolved AFTER a timeout, the client already received
+        // a 504 and any writes it performed hit an ended response — treat as
+        // a no-op rather than resolving a second time.
+        if (!timedOut) resolve();
       })
       .catch((err) => {
         clearTimeout(timer);
-        reject(err);
+        // Swallow errors raised after a timeout (e.g. a handler attempting
+        // json() on an already-ended response throws ERR_HTTP_HEADERS_SENT).
+        // These are consequences of the timeout, not independent failures.
+        if (!timedOut) reject(err);
       });
   });
 }
@@ -274,6 +340,7 @@ export interface DaemonServerOptions {
   ftsInitialized?: boolean;
   debugMode?: boolean;
   ftsStore?: import("../storage/fts-store.js").FTSStore;
+  refreshIndex?: () => Promise<void>;
   memorySearch?: import("../memory/search.js").MemorySearch;
   memoryRuntime?: MemoryRuntime;
   memoryStore?: import("../storage/memory-store.js").MemoryStore;
@@ -307,9 +374,53 @@ export function createDaemonServer(
   const metrics = new MetricsCollector((msg) => log.info(msg));
 
   const hookLog = new RotatingLog(hookLogPath);
+  let serverClosed = false;
   function logHook(message: string): void {
+    if (serverClosed) return;
     const timestamp = new Date().toISOString().slice(11, 19);
     hookLog.append(`[${timestamp}] ${message}\n`).catch((e) => log.warn({ err: e }, "hook log write failed"));
+  }
+
+  let autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let autoRefreshInFlight = false;
+  let autoRefreshQueued = false;
+
+  function scheduleAutoRefresh(freshness: IndexFreshness, requestId: string): void {
+    if (serverClosed) return;
+    if (config.autoRefresh === false || !liveOptions.refreshIndex) return;
+    if (autoRefreshTimer) return;
+
+    autoRefreshTimer = setTimeout(() => {
+      autoRefreshTimer = undefined;
+      void runAutoRefresh(freshness, requestId);
+    }, config.debounceMs);
+    autoRefreshTimer.unref?.();
+  }
+
+  async function runAutoRefresh(freshness: IndexFreshness, requestId: string): Promise<void> {
+    if (serverClosed) return;
+    if (autoRefreshInFlight) {
+      autoRefreshQueued = true;
+      return;
+    }
+
+    autoRefreshInFlight = true;
+    log.warn({ requestId, freshness }, "reporecall index stale; scheduling background auto-refresh");
+    logHook(`[${requestId}] AUTO_REFRESH start reason=${JSON.stringify(freshness)}`);
+    try {
+      await liveOptions.refreshIndex?.();
+      clearFreshnessCache();
+      if (!serverClosed) logHook(`[${requestId}] AUTO_REFRESH complete`);
+    } catch (err) {
+      log.warn({ err, requestId }, "reporecall background auto-refresh failed");
+      logHook(`[${requestId}] AUTO_REFRESH failed error=${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      autoRefreshInFlight = false;
+      if (autoRefreshQueued) {
+        autoRefreshQueued = false;
+        scheduleAutoRefresh(freshness, requestId);
+      }
+    }
   }
 
   const server = createServer(async (req, res) => {
@@ -546,7 +657,8 @@ export function createDaemonServer(
                 .filter((f: unknown) => typeof f === "string" && f.length < 1024)
                 .slice(0, 100);
             }
-          } catch {
+          } catch (err) {
+            log.warn({ err }, "prompt-context body JSON parse failed; falling back to raw body as query");
             query = body;
           }
 
@@ -604,6 +716,61 @@ export function createDaemonServer(
               } : {}),
             });
             return;
+          }
+
+          const freshness = computeFreshness(metadata, config.projectRoot);
+          const freshnessBanner = banner(freshness);
+          if (freshness.level === "empty") {
+            if (sessionKey) hookSessionState.delete(sessionKey);
+            log.warn({ requestId, freshness }, "prompt-context skipped because reporecall index is empty");
+            metadata.incrementRouteStat("skip");
+            const emptyAdditionalContext = freshnessBanner ?? "";
+            const emptyTokenCount = countTokens(emptyAdditionalContext);
+            const emptyDebug: HookDebugRecord = {
+              queryMode: "skip",
+              intentType: { isCodeQuery: false, needsNavigation: false },
+              skipReason: "empty index",
+              injectedTokenCount: emptyTokenCount,
+              injectedChunkCount: 0,
+              seedCandidate: null,
+              confidence: null,
+              latencyMs: 0,
+              query: rawQuery,
+              sanitizedQuery: query,
+            };
+            logHook(`[${requestId}] SKIP reason="empty index" debug=${JSON.stringify(emptyDebug)}`);
+            if (debugMode) {
+              res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
+                requestId,
+                hookEventName: "UserPromptSubmit",
+                queryMode: "skip",
+                chunks: 0,
+                tokens: emptyTokenCount,
+                elapsedMs: 0,
+                skipReason: "empty index",
+                staleness: freshness,
+              })));
+            }
+            json(res, {
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: emptyAdditionalContext,
+              },
+              ...(debugMode ? {
+                _debug: {
+                  queryMode: "skip" as const,
+                  tokensInjected: emptyTokenCount,
+                  chunksInjected: 0,
+                  skipReason: "empty index",
+                  latencyMs: 0,
+                  staleness: freshness,
+                },
+              } : {}),
+            });
+            return;
+          }
+          if (freshness.level === "stale") {
+            scheduleAutoRefresh(freshness, requestId);
           }
 
           // Classify intent — skip retrieval entirely for non-code queries
@@ -762,12 +929,19 @@ export function createDaemonServer(
           }
 
           const elapsed = Date.now() - startTime;
+          const hookContextBody = promptContext.advisoryText
+            ? `${promptContext.advisoryText}\n\n${context.text}`
+            : context.text;
+          const hookAdditionalContext = freshnessBanner
+            ? `${freshnessBanner}\n\n${hookContextBody}`
+            : hookContextBody;
+          const injectedTokenCount = countTokens(hookAdditionalContext);
 
           const debugRecord: HookDebugRecord = {
             queryMode,
             intentType: { isCodeQuery: intent.isCodeQuery, needsNavigation: intent.needsNavigation },
             skipReason: null,
-            injectedTokenCount: context.tokenCount,
+            injectedTokenCount,
             injectedChunkCount: context.chunks.length,
             seedCandidate,
             confidence: seedConfidence,
@@ -790,6 +964,7 @@ export function createDaemonServer(
             dominantFamily: promptContext.dominantFamily,
             familyConfidence: promptContext.familyConfidence,
             deferredReason: promptContext.deferredReason,
+            compression: context.compression,
           };
 
           const memTok = promptContext.memoryTokenCount ?? 0;
@@ -805,7 +980,7 @@ export function createDaemonServer(
             queryMode,
             activeFilesCount: activeFiles?.length ?? 0,
             chunkCount: context.chunks.length,
-            tokenCount: context.tokenCount,
+            tokenCount: injectedTokenCount,
             topChunks: context.chunks.slice(0, 5).map(c => ({
               path: c.filePath, name: c.name, score: +c.score.toFixed(3),
             })),
@@ -822,7 +997,7 @@ export function createDaemonServer(
 
           const resolvedBudget = resolveContextBudget(config.contextBudget, totalChunks);
           logHook(
-            `[${requestId}] BUDGET ${context.tokenCount} / ${resolvedBudget} tokens (${((context.tokenCount / resolvedBudget) * 100).toFixed(1)}%)${config.contextBudget === 0 ? " [auto]" : ""}`
+            `[${requestId}] BUDGET ${injectedTokenCount} / ${resolvedBudget} tokens (${((injectedTokenCount / resolvedBudget) * 100).toFixed(1)}%)${config.contextBudget === 0 ? " [auto]" : ""}`
           );
 
           // Stats update: all reads and writes are synchronous (better-sqlite3),
@@ -830,7 +1005,7 @@ export function createDaemonServer(
           metadata.recordLatency(elapsed);
           metadata.incrementRouteStat(queryMode);
           metadata.incrementStat("hooksFireCount");
-          metadata.incrementStat("totalTokensInjected", context.tokenCount);
+          metadata.incrementStat("totalTokensInjected", injectedTokenCount);
           metadata.incrementStat("chunksServed", context.chunks.length);
           metadata.incrementStat(`memoryRoute_${promptContext.memoryRoute ?? "M0"}_count`);
           if (promptContext.memoryTokenCount && promptContext.memoryTokenCount > 0) {
@@ -877,10 +1052,6 @@ export function createDaemonServer(
             });
           }
 
-          const hookAdditionalContext = promptContext.advisoryText
-            ? `${promptContext.advisoryText}\n\n${context.text}`
-            : context.text;
-
           if (debugMode) {
             res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
               requestId,
@@ -888,7 +1059,7 @@ export function createDaemonServer(
               queryMode,
               memoryRoute: promptContext.memoryRoute ?? "M0",
               chunks: context.chunks.length,
-              tokens: context.tokenCount,
+              tokens: injectedTokenCount,
               elapsedMs: elapsed,
               deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
               contextStrength: promptContext.contextStrength,
@@ -918,7 +1089,7 @@ export function createDaemonServer(
             ...(debugMode ? {
               _debug: {
                 queryMode,
-                tokensInjected: context.tokenCount,
+                tokensInjected: injectedTokenCount,
                 chunksInjected: context.chunks.length,
                 deliveryMode: promptContext.deliveryMode ?? context.deliveryMode ?? "code_context",
                 contextStrength: promptContext.contextStrength,
@@ -929,6 +1100,7 @@ export function createDaemonServer(
                 dominantFamily: promptContext.dominantFamily,
                 familyConfidence: promptContext.familyConfidence,
                 deferredReason: promptContext.deferredReason,
+                compression: context.compression,
                 queryClassification: intent,
                 latencyMs: elapsed,
                 ...(seedCandidate ? { seedCandidate, seedConfidence } : {}),
@@ -961,7 +1133,8 @@ export function createDaemonServer(
               return;
             }
             parsed = validation.data as Record<string, unknown>;
-          } catch {
+          } catch (err) {
+            log.warn({ err }, "pre-tool-use body JSON parse failed; continuing with empty context");
             parsed = {};
           }
 
@@ -1029,6 +1202,13 @@ export function createDaemonServer(
         { error: "Internal server error", code, requestId, ...context },
         500
       );
+    }
+  });
+  server.on("close", () => {
+    serverClosed = true;
+    if (autoRefreshTimer) {
+      clearTimeout(autoRefreshTimer);
+      autoRefreshTimer = undefined;
     }
   });
 

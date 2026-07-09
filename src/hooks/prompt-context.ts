@@ -146,6 +146,7 @@ async function buildDeepRouteContext(
   query: string,
   search: HybridSearch,
   budget: number,
+  config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
   seedResult?: SeedResult
@@ -154,7 +155,17 @@ async function buildDeepRouteContext(
   if (baseContext.routeStyle === "concept") {
     return baseContext;
   }
-  return assembleDeepRouteContext(baseContext.chunks, budget, query);
+  return assembleDeepRouteContext(baseContext.chunks, budget, query, compressionOptionsFromConfig(config));
+}
+
+function compressionOptionsFromConfig(config: MemoryConfig) {
+  return {
+    contextCompressionEnabled: config.contextCompressionEnabled,
+    contextCompressionMode: config.contextCompressionMode,
+    contextCompressionPreserveTopChunks: config.contextCompressionPreserveTopChunks,
+    contextCompressionMinChunkTokens: config.contextCompressionMinChunkTokens,
+    contextCompressionTargetRatio: config.contextCompressionTargetRatio,
+  };
 }
 
 function scoreTraceContextCoherence(query: string, context: AssembledContext): number {
@@ -185,7 +196,6 @@ function buildTraceSelectedFiles(
   seedResult: SeedResult
 ): Array<{ filePath: string; selectionSource: string }> {
   const queryTerms = tokenizeQueryTerms(query);
-  const families = inferTraceHintFamilies(queryTerms);
   const selected = new Map<string, string>();
 
   const addFile = (filePath: string | undefined | null, source: string) => {
@@ -217,12 +227,12 @@ function buildTraceSelectedFiles(
   for (const filePath of Array.from(selected.keys()).slice(0, 6)) {
     const imports = typeof metadata.getImportsForFile === "function" ? metadata.getImportsForFile(filePath) : [];
     for (const record of imports) {
-      addCandidate(record.resolvedPath, scoreTraceHintPath(queryTerms, families, record.resolvedPath ?? "", record.importedName));
+      addCandidate(record.resolvedPath, scoreTraceHintPath(queryTerms, record.resolvedPath ?? "", record.importedName));
     }
     const importers = typeof metadata.findImporterFiles === "function" ? metadata.findImporterFiles(filePath) : [];
     for (const importer of importers.slice(0, 20)) {
       const chunks = typeof metadata.findChunksByFilePath === "function" ? metadata.findChunksByFilePath(importer) : [];
-      addCandidate(importer, scoreTraceHintFile(queryTerms, families, importer, chunks));
+      addCandidate(importer, scoreTraceHintFile(queryTerms, importer, chunks));
     }
   }
 
@@ -235,12 +245,12 @@ function buildTraceSelectedFiles(
       chunksByFile.set(chunk.filePath, existing);
     }
     for (const [filePath, fileChunks] of chunksByFile.entries()) {
-      addCandidate(filePath, scoreTraceHintFile(queryTerms, families, filePath, fileChunks));
+      addCandidate(filePath, scoreTraceHintFile(queryTerms, filePath, fileChunks));
     }
   }
 
   const hintLimit = context.chunks.length <= 2 ? 4 : 3;
-  const threshold = families.auth || families.billing || families.generation || families.upload ? 18 : 24;
+  const threshold = 24;
   const rankedHints = Array.from(adjacencyCandidates.entries())
     .filter(([, score]) => score >= threshold)
     .sort((a, b) => b[1] - a[1])
@@ -250,49 +260,22 @@ function buildTraceSelectedFiles(
   return Array.from(selected.entries()).map(([filePath, selectionSource]) => ({ filePath, selectionSource }));
 }
 
-function inferTraceHintFamilies(queryTerms: string[]) {
-  return {
-    auth: queryTerms.some((term) => /^auth|token|session|login|signin|credential|callback|redirect|protect/.test(term)),
-    generation: queryTerms.some((term) => /^image|generate|generation|render|asset|regen/.test(term)),
-    billing: queryTerms.some((term) => /^bill|checkout|portal|subscription|invoice|payment|credit|customer|pricing|plan/.test(term)),
-    upload: queryTerms.some((term) => /^upload|storage|media|signed|bucket|file/.test(term)),
-  };
-}
-
 function scoreTraceHintPath(
   queryTerms: string[],
-  families: ReturnType<typeof inferTraceHintFamilies>,
   filePath: string,
   symbolName?: string
 ): number {
-  return scoreTraceHintFile(queryTerms, families, filePath, [], symbolName);
+  return scoreTraceHintFile(queryTerms, filePath, [], symbolName);
 }
 
 function scoreTraceHintFile(
   queryTerms: string[],
-  families: ReturnType<typeof inferTraceHintFamilies>,
   filePath: string,
   chunks: StoredChunk[],
   symbolName?: string
 ): number {
-  const contentPreview = chunks.slice(0, 3).map((chunk) => chunk.content.slice(0, 800)).join(" ");
   const symbolText = chunks.map((chunk) => `${chunk.name} ${chunk.parentName ?? ""}`).join(" ");
   let score = countQueryMatches(queryTerms, filePath, symbolName, symbolText) * 10;
-
-  if (families.auth) {
-    if (/(auth|callback|protected|session|login|signin|redirect|token)/i.test(`${filePath} ${symbolName ?? ""} ${symbolText}`)) score += 22;
-    if (/(^|\/)app\.(tsx|jsx|ts|js)$/i.test(filePath) && /(auth|protected|callback|route|navigate)/i.test(contentPreview)) score += 22;
-  }
-  if (families.billing) {
-    if (/(billing|checkout|portal|subscription|invoice|payment|customer|credit|pricing|plan)/i.test(`${filePath} ${symbolName ?? ""} ${symbolText}`)) score += 22;
-    if (/(^|\/)billing\.(tsx|jsx|ts|js)$/i.test(filePath)) score += 12;
-  }
-  if (families.generation) {
-    if (/(generate|generation|render|image|asset|regener)/i.test(`${filePath} ${symbolName ?? ""} ${symbolText}`)) score += 22;
-  }
-  if (families.upload) {
-    if (/(upload|storage|media|signed|bucket|file|request|auth)/i.test(`${filePath} ${symbolName ?? ""} ${symbolText}`)) score += 20;
-  }
   if (/(?:^|\/)(tests?|specs?|e2e|mocks?)\//i.test(filePath)) score -= 60;
   return score;
 }
@@ -330,6 +313,7 @@ export async function handlePromptContextDetailed(
     query,
     search,
     codeBudget,
+    config,
     activeFiles,
     signal,
     queryMode,
@@ -417,7 +401,12 @@ export async function handlePromptContextDetailed(
         scoreFloorRatio: 0.05,
         query,
         factExtractors: config.factExtractors,
-        compressionRank: 3,
+        compressionRank: config.contextCompressionPreserveTopChunks,
+        contextCompressionEnabled: config.contextCompressionEnabled,
+        contextCompressionMode: config.contextCompressionMode,
+        contextCompressionPreserveTopChunks: config.contextCompressionPreserveTopChunks,
+        contextCompressionMinChunkTokens: config.contextCompressionMinChunkTokens,
+        contextCompressionTargetRatio: config.contextCompressionTargetRatio,
       });
       context = {
         ...hydratedContext,
@@ -512,7 +501,9 @@ export async function handlePromptContextDetailed(
   const missingEvidenceForReturn = uniqueStrings([
     ...(codeResult.missingEvidence ?? []),
     ...(capabilityEvidence?.missingEvidence ?? []),
+    ...inferVanishedSelectedFileEvidence(selectedFilesForReturn, context ?? null, metadata),
   ]);
+  const selectedFilePathsForAdvisory = selectedFilesForReturn.map((file) => file.filePath);
 
   return {
     context: context ?? null,
@@ -529,7 +520,13 @@ export async function handlePromptContextDetailed(
       ...(codeResult.recommendedNextReads ?? []),
       ...selectedFilesForReturn.slice(0, 3).map((file) => file.filePath),
     ]),
-    advisoryText: codeResult.advisoryText,
+    advisoryText: buildReporecallAdvisory(
+      codeResult.resolvedQueryMode,
+      codeResult.contextStrength ?? "weak",
+      selectedFilePathsForAdvisory,
+      missingEvidenceForReturn,
+      context?.compression
+    ),
     memoryRoute: memoryContext?.route ?? "M0",
     memoryTokenCount: memoryContext?.tokenCount ?? 0,
     memoryCount: memoryContext?.memories.length ?? 0,
@@ -560,6 +557,29 @@ export async function handlePromptContextDetailed(
     productAreasUsed,
     businessPagesUsed,
   };
+}
+
+function inferVanishedSelectedFileEvidence(
+  selectedFiles: NonNullable<PromptContextResult["selectedFiles"]>,
+  context: AssembledContext | null,
+  metadata?: MetadataStore
+): string[] {
+  if (!metadata || typeof metadata.findChunksByFilePath !== "function") return [];
+  const emittedFiles = new Set(context?.chunks.map((chunk) => chunk.filePath) ?? []);
+  const issues: string[] = [];
+  for (const file of selectedFiles) {
+    if (emittedFiles.has(file.filePath)) continue;
+    try {
+      const chunks = metadata.findChunksByFilePath(file.filePath);
+      if (chunks.length === 0) {
+        issues.push(`Selected evidence for ${file.filePath} is no longer present in the index; run refresh_context before relying on it.`);
+      }
+    } catch {
+      issues.push(`Selected evidence for ${file.filePath} could not be verified in the index; run refresh_context if it looks stale.`);
+    }
+    if (issues.length >= 3) break;
+  }
+  return issues;
 }
 
 async function searchMemories(
@@ -614,6 +634,7 @@ async function resolveCodeContext(
   query: string,
   search: HybridSearch,
   codeBudget: number,
+  config: MemoryConfig,
   activeFiles?: string[],
   signal?: AbortSignal,
   queryMode?: QueryMode,
@@ -681,7 +702,7 @@ async function resolveCodeContext(
       const augmentedTree = augmentFlowTreeWithRelatedSeeds(tree, resolvedSeeds, query);
 
       if (augmentedTree.nodeCount <= 1) {
-        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
         const diagnostics = getBroadDiagnostics();
         return finalizePromptContextResult(query, {
           context,
@@ -694,9 +715,9 @@ async function resolveCodeContext(
         });
       }
 
-      const flowContext = assembleFlowContext(augmentedTree, metadata, codeBudget, query);
+      const flowContext = assembleFlowContext(augmentedTree, metadata, codeBudget, query, compressionOptionsFromConfig(config));
       if (flowContext.chunks.length === 0 || !flowContext.text.trim()) {
-        const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+        const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
         const diagnostics = getBroadDiagnostics();
         return finalizePromptContextResult(query, {
           context,
@@ -709,7 +730,7 @@ async function resolveCodeContext(
         });
       }
 
-      const deepContext = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+      const deepContext = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
       const flowScore = scoreTraceContextCoherence(query, flowContext);
       const deepScore = scoreTraceContextCoherence(query, deepContext);
       if (deepScore > flowScore * 1.1) {
@@ -733,7 +754,7 @@ async function resolveCodeContext(
       });
     }
 
-    const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, resolvedSeeds);
+    const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, resolvedSeeds);
     const diagnostics = getBroadDiagnostics();
     return finalizePromptContextResult(query, {
       context,
@@ -746,7 +767,7 @@ async function resolveCodeContext(
     });
   }
 
-  const context = await buildDeepRouteContext(query, search, codeBudget, activeFiles, signal, seedResult);
+  const context = await buildDeepRouteContext(query, search, codeBudget, config, activeFiles, signal, seedResult);
   const diagnostics = getBroadDiagnostics();
   return finalizePromptContextResult(query, {
     context,
@@ -791,7 +812,7 @@ function finalizePromptContextResult(
     executionSurface,
     missingEvidence,
     recommendedNextReads,
-    advisoryText: buildReporecallAdvisory(result.resolvedQueryMode, contextStrength, selectedFiles, missingEvidence),
+    advisoryText: buildReporecallAdvisory(result.resolvedQueryMode, contextStrength, selectedFiles, missingEvidence, context?.compression),
   };
 }
 
@@ -830,7 +851,6 @@ function scorePromptSelectedFile(
   const terms = tokenizeQueryTerms(query)
     .map((term) => normalizeTargetText(term))
     .filter((term) => term.length >= 3 && !STOP_WORDS.has(term));
-  const lowerQuery = query.toLowerCase();
   const text = normalizeTargetText(`${file.filePath} ${file.selectionSource} ${file.selectionReason ?? ""}`);
   let score = 0;
   for (const term of terms) {
@@ -844,21 +864,6 @@ function scorePromptSelectedFile(
   if (source === "wiki_capability") score += 48;
   if (source === "trace_seed") score += 18;
   if (source === "trace_hint") score += 6;
-
-  if (/\b(auth|authentication|login|session|protected|redirect|callback|guard|provider|token)\b/i.test(lowerQuery)) {
-    if (/\b(auth|login|session|protected|redirect|callback|guard|provider|token)\b/.test(text)) score += 34;
-  }
-  if (/\b(upload|media|storage|bucket|request auth|storage write)\b/i.test(lowerQuery)) {
-    if (/\b(upload|storage|media|bucket|request|shared|helper|auth|write)\b/.test(text)) score += 34;
-    if (/\b(login|signin|signup|protected|redirect|callback)\b/.test(text) && !/\b(upload|storage|media|bucket|request)\b/.test(text)) score -= 30;
-  }
-  if (/\b(generate|generation|image|asset|render)\b/i.test(lowerQuery)) {
-    if (/\b(generate|generation|image|asset|render|controller|handler|store|hook)\b/.test(text)) score += 34;
-  }
-  if (/\b(billing|checkout|portal|subscription|invoice|payment|pricing|plan)\b/i.test(lowerQuery)) {
-    if (/\b(billing|checkout|portal|subscription|invoice|payment|credit|plan|service|controller)\b/.test(text)) score += 34;
-    if (/\b(auth|login|protected|redirect|callback)\b/.test(text) && !/\b(billing|checkout|portal|subscription|invoice|payment|credit|plan)\b/.test(text)) score -= 30;
-  }
   if (isNoiseLikeFlowSeed(file.filePath)) score -= 100;
   return score;
 }
@@ -924,7 +929,8 @@ function buildReporecallAdvisory(
   queryMode: QueryMode,
   contextStrength: "sufficient" | "partial" | "weak",
   selectedFiles: string[],
-  missingEvidence: string[]
+  missingEvidence: string[],
+  compression?: AssembledContext["compression"]
 ): string | undefined {
   if (selectedFiles.length === 0) return undefined;
   const lines = [
@@ -938,6 +944,11 @@ function buildReporecallAdvisory(
     lines.push("Start from these files first. If you need more evidence, prefer narrow targeted reads instead of broad codebase exploration.");
   } else {
     lines.push("The injected context is weak. If you expand, prefer the listed files first and keep exploration narrow.");
+  }
+  if (compression?.compressedChunks) {
+    lines.push(
+      `Compressed ${compression.compressedChunks} secondary chunks, saving ${compression.tokensSaved} tokens. Use Reporecall MCP search_code with action=read_chunk and chunkId for full source.`
+    );
   }
   if (missingEvidence.length > 0) {
     lines.push(`Missing evidence: ${missingEvidence.join(" ")}`);
@@ -1104,21 +1115,6 @@ async function searchWikiPages(
       topCodeSymbols: context.topCodeSymbols,
     });
     const includeBusinessPagesForEvidence = shouldUseCapabilityEvidence(context.queryMode ?? "lookup");
-    if (includeBusinessPagesForEvidence) {
-      for (const capabilityQuery of inferCapabilityWikiQueries(query)) {
-        const capabilityResults = await memorySearch.search(capabilityQuery, {
-          limit: 2,
-          types: ["wiki"],
-          statuses: ["active"],
-          minConfidence: 0.5,
-        });
-        for (const result of capabilityResults) {
-          if (!rawResults.some((existing) => existing.id === result.id || existing.name === result.name)) {
-            rawResults.unshift(result);
-          }
-        }
-      }
-    }
     const evidenceResults = includeBusinessPagesForEvidence
       ? rawResults
       : rawResults.filter((result) => !isBusinessWikiResult(result));
@@ -1139,24 +1135,6 @@ async function searchWikiPages(
     getLogger().warn({ err }, "Wiki search failed — continuing without wiki context");
     return null;
   }
-}
-
-function inferCapabilityWikiQueries(query: string): string[] {
-  const normalized = normalizeTargetText(query);
-  const queries: string[] = [];
-  if (/\b(auth|authentication|authorization|login|signin|signup|signout|session|oauth|protected|redirect|callback|credential)\b/.test(normalized)) {
-    queries.push("business user authentication");
-  }
-  if (/\b(billing|checkout|portal|subscription|invoice|payment|credit|pricing|plan|customer)\b/.test(normalized)) {
-    queries.push("business credits billing pricing");
-  }
-  if (/\b(image|generation|generate|render|asset|storyboard|regenerate)\b/.test(normalized)) {
-    queries.push("business media generation request");
-  }
-  if (/\b(upload|storage|media upload|bucket|signed url|storage write|request auth)\b/.test(normalized)) {
-    queries.push("business media upload");
-  }
-  return queries;
 }
 
 function mergeCapabilitySelectedFiles(

@@ -1,6 +1,5 @@
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { StoredChunk } from "../storage/types.js";
-import type { MemorySearchResult } from "../memory/types.js";
 import type { QueryMode } from "./intent.js";
 import type { SearchResult } from "./types.js";
 import { isTestFile, textMatchesQueryTerm, tokenizeQueryTerms, STOP_WORDS, GENERIC_BROAD_TERMS, GENERIC_QUERY_ACTION_TERMS } from "./utils.js";
@@ -45,7 +44,7 @@ export interface CapabilityEvidenceResult {
 
 type CapabilityMetadata = Partial<Pick<
   MetadataStore,
-  "findChunksByFilePath" | "getAllChunks" | "getImportsForFile" | "findImporterFiles" | "findCallers" | "findCallees" | "findCalleesForChunk"
+  "findChunksByFilePath" | "getAllChunks" | "getChunksLightweight" | "getImportsForFile" | "findImporterFiles" | "findCallers" | "findCallees" | "findCalleesForChunk"
 >>;
 
 interface MutableEvidenceFile extends CapabilityEvidenceFile {
@@ -198,6 +197,40 @@ export function resolveCapabilityEvidence(input: {
   const entries = new Map<string, MutableEvidenceFile>();
   const seedFiles = new Set<string>();
 
+  const fileChunksCache = new Map<string, StoredChunk[]>();
+  const capabilityScoreCache = new Map<string, number>();
+  const familySignalCache = new Map<string, boolean>();
+
+  const cachedFileChunks = (filePath: string): StoredChunk[] => {
+    const cached = fileChunksCache.get(filePath);
+    if (cached) return cached;
+    const chunks = findFileChunks(metadata, filePath);
+    fileChunksCache.set(filePath, chunks);
+    return chunks;
+  };
+
+  const cachedCapabilityScore = (filePath: string): number => {
+    const cached = capabilityScoreCache.get(filePath);
+    if (cached !== undefined) return cached;
+    const value = scoreCapabilityFile(query, filePath, cachedFileChunks(filePath), families);
+    capabilityScoreCache.set(filePath, value);
+    return value;
+  };
+
+  const cachedFamilySignal = (filePath: string): boolean => {
+    const cached = familySignalCache.get(filePath);
+    if (cached !== undefined) return cached;
+    const value = hasPrimaryFamilySignal(query, filePath, cachedFileChunks(filePath), families);
+    familySignalCache.set(filePath, value);
+    return value;
+  };
+
+  const capabilityCache: CapabilityScoreCache = {
+    getFileChunks: cachedFileChunks,
+    getCapabilityScore: cachedCapabilityScore,
+    hasFamilySignal: cachedFamilySignal,
+  };
+
   const upsert = (
     filePath: string | undefined | null,
     score: number,
@@ -207,9 +240,9 @@ export function resolveCapabilityEvidence(input: {
   ) => {
     if (!filePath) return;
     if (!allowTests && isTestFile(filePath)) return;
-    const fileChunks = findFileChunks(metadata, filePath);
+    const fileChunks = cachedFileChunks(filePath);
     if (!fileChunks.some((chunk) => chunk.kind !== "file")) return;
-    const adjustedScore = score + scoreCapabilityFile(query, filePath, fileChunks, families);
+    const adjustedScore = score + cachedCapabilityScore(filePath);
     const existing = entries.get(filePath);
     if (!existing) {
       const next: MutableEvidenceFile = {
@@ -237,7 +270,7 @@ export function resolveCapabilityEvidence(input: {
   for (const chunk of topCodeChunks.slice(0, 12)) {
     if (
       (queryMode === "architecture" || queryMode === "change" || queryMode === "lookup")
-      && !hasPrimaryFamilySignal(query, chunk.filePath, findFileChunks(metadata, chunk.filePath), families)
+      && !cachedFamilySignal(chunk.filePath)
     ) {
       continue;
     }
@@ -256,7 +289,7 @@ export function resolveCapabilityEvidence(input: {
     }
   }
 
-  for (const filePath of findMandatoryFlowFiles(query, queryMode, metadata, families)) {
+  for (const filePath of findMandatoryFlowFiles(query, queryMode, metadata, families, capabilityCache)) {
     seedFiles.add(filePath);
     upsert(filePath, 80, "mandatory_flow_step", "mandatory_flow_step");
   }
@@ -275,9 +308,9 @@ export function resolveCapabilityEvidence(input: {
     for (const callee of metadata.findCalleesForChunk?.(chunk.id, 8) ?? []) {
       upsert(callee.targetFilePath ?? callee.filePath, 22, "call_neighbor", "call_neighbor");
     }
-    for (const callee of metadata.findCallees?.(chunk.name, 8) ?? []) {
-      upsert(callee.targetFilePath ?? callee.filePath, 18, "call_neighbor", "call_neighbor");
-    }
+    // Bug fix: removed redundant unscoped `findCallees(chunk.name, 8)` — it
+    // pulled callees from ANY file with a matching symbol name (cross-file
+    // contamination), duplicating the chunk-scoped findCalleesForChunk above.
   }
 
   const files = Array.from(entries.values())
@@ -315,10 +348,6 @@ export function hydrateCapabilityEvidenceFiles(
     hydrated.push(storedChunkToSearchResult(chunk, Math.max(0.2, file.score / 100), file));
   }
   return hydrated;
-}
-
-export function isBusinessWikiPage(page: Pick<MemorySearchResult, "name" | "content" | "filePath">): boolean {
-  return page.name.startsWith("business-") || /^---[\s\S]*?\npageType:\s*"?business"?/m.test(page.content);
 }
 
 function inferCapabilityFamilies(query: string): CapabilityFamilies {
@@ -477,14 +506,20 @@ function scoreGenericLayerFit(filePath: string, normalizedText: string): number 
   return score;
 }
 
+interface CapabilityScoreCache {
+  getFileChunks(filePath: string): StoredChunk[];
+  getCapabilityScore(filePath: string): number;
+  hasFamilySignal(filePath: string): boolean;
+}
+
 function findMandatoryFlowFiles(
   query: string,
   queryMode: QueryMode,
   metadata: CapabilityMetadata,
-  families: CapabilityFamilies
+  families: CapabilityFamilies,
+  cache: CapabilityScoreCache
 ): string[] {
-  const files = new Set<string>();
-  for (const chunk of getAllChunks(metadata)) files.add(chunk.filePath);
+  const files = getDistinctFilePaths(metadata);
   const primary = primaryCapabilityFamily(families);
   const broad = queryMode === "architecture" || queryMode === "change" || /\b(full|from|through|which\s+files?|all\s+files?|flow|workflow|end[- ]?to[- ]?end)\b/i.test(query);
   if (!primary) {
@@ -495,9 +530,9 @@ function findMandatoryFlowFiles(
   return Array.from(files)
     .map((filePath) => ({
       filePath,
-      score: scoreCapabilityFile(query, filePath, findFileChunks(metadata, filePath), families),
+      score: cache.getCapabilityScore(filePath),
     }))
-    .filter((candidate) => hasPrimaryFamilySignal(query, candidate.filePath, findFileChunks(metadata, candidate.filePath), families))
+    .filter((candidate) => cache.hasFamilySignal(candidate.filePath))
     .filter((candidate) => candidate.score >= threshold)
     .sort((a, b) => b.score - a.score || a.filePath.localeCompare(b.filePath))
     .slice(0, limit)
@@ -509,8 +544,7 @@ function findQueryAnchoredFlowFiles(
   metadata: CapabilityMetadata,
   limit: number
 ): string[] {
-  const files = new Set<string>();
-  for (const chunk of getAllChunks(metadata)) files.add(chunk.filePath);
+  const files = getDistinctFilePaths(metadata);
   const candidates = Array.from(files)
     .map((filePath) => {
       const chunks = findFileChunks(metadata, filePath);
@@ -716,8 +750,17 @@ function findFileChunks(metadata: CapabilityMetadata, filePath: string): StoredC
   return metadata.findChunksByFilePath?.(filePath) ?? [];
 }
 
-function getAllChunks(metadata: CapabilityMetadata): StoredChunk[] {
-  return metadata.getAllChunks?.() ?? [];
+// Hot-path: enumerate unique file paths WITHOUT loading chunk content. The
+// lightweight projection excludes `content`, avoiding the largest avoidable
+// I/O on the per-query path. Falls back to getAllChunks() if unavailable.
+function getDistinctFilePaths(metadata: CapabilityMetadata): Set<string> {
+  const files = new Set<string>();
+  if (metadata.getChunksLightweight) {
+    for (const chunk of metadata.getChunksLightweight()) files.add(chunk.filePath);
+  } else {
+    for (const chunk of metadata.getAllChunks?.() ?? []) files.add(chunk.filePath);
+  }
+  return files;
 }
 
 function selectBestChunkForEvidence(chunks: StoredChunk[]): StoredChunk | null {
@@ -729,7 +772,8 @@ function selectBestChunkForEvidence(chunks: StoredChunk[]): StoredChunk | null {
     if (aExport !== bExport) return bExport - aExport;
     const aSpan = a.endLine - a.startLine;
     const bSpan = b.endLine - b.startLine;
-    return aSpan - bSpan || a.startLine - b.startLine;
+    // Bug fix: pick the most substantial chunk (descending span), not the smallest.
+    return bSpan - aSpan || a.startLine - b.startLine;
   })[0] ?? null;
 }
 
@@ -761,14 +805,14 @@ function bestSource(sources: Set<CapabilitySelectionSource>): CapabilitySelectio
   for (const source of SOURCE_PRIORITY) {
     if (sources.has(source)) return source;
   }
-  return "direct_match";
+  throw new Error("bestSource: empty source set (unreachable — every evidence file seeds sources with >= 1 element)");
 }
 
 function bestReason(reasons: Set<CapabilitySelectionReason>): CapabilitySelectionReason {
   for (const reason of REASON_PRIORITY) {
     if (reasons.has(reason)) return reason;
   }
-  return "direct_match";
+  throw new Error("bestReason: empty reason set (unreachable — every evidence file seeds reasons with >= 1 element)");
 }
 
 function buildCapabilityMissingEvidence(

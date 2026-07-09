@@ -7,8 +7,9 @@ import { basename } from "path";
 import { readFileSync } from "fs";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import type { MemoryStore } from "../storage/memory-store.js";
-import { buildAdjacencyGraph } from "../analysis/graph-builder.js";
-import { buildProductAreas, deriveBusinessDisplayName, evaluateBusinessPresentation } from "../business/product-areas.js";
+import { buildAdjacencyGraph, type GraphNode } from "../analysis/graph-builder.js";
+import { buildProductAreas, deriveBusinessDisplayName, deriveBusinessDisplaySummary, evaluateBusinessPresentation } from "../business/product-areas.js";
+import { slugify, extractSectionText, extractBulletSection, humanizeSlug } from "../core/strings.js";
 import type {
   DashboardData,
   DashboardMeta,
@@ -55,6 +56,13 @@ export function extractDashboardData(
     ? buildAdjacencyGraph(metadata)
     : { nodes: new Map(), adjacency: new Map(), nodeCount: 0, edgeCount: 0 };
 
+  // Index graph nodes by name+file (first match wins, mirroring Array.find order)
+  const nodeByNameFile = new Map<string, GraphNode>();
+  for (const gn of graph.nodes.values()) {
+    const key = `${gn.name}\x00${gn.filePath}`;
+    if (!nodeByNameFile.has(key)) nodeByNameFile.set(key, gn);
+  }
+
   // --- Communities ---
   const rawCommunities = metadata.getAllCommunities(maxCommunities);
   const allChunks = includeGraphDetails ? metadata.getAllChunks() : [];
@@ -62,12 +70,26 @@ export function extractDashboardData(
   // Build chunk→community and community→chunks maps (use chunk.id for DB lookup)
   const chunkCommunityMap = new Map<string, string>();
   const communityChunks = new Map<string, Array<{ name: string; filePath: string; kind: string }>>();
-  for (const chunk of allChunks) {
-    const cid = metadata.getCommunityForChunk(chunk.id);
-    if (cid) {
-      chunkCommunityMap.set(chunk.name, cid);
-      if (!communityChunks.has(cid)) communityChunks.set(cid, []);
-      communityChunks.get(cid)!.push(chunk);
+  if (allChunks.length > 0) {
+    const hasBulkMemberships =
+      typeof (metadata as {
+        getMembershipsForChunks?: (chunkIds: string[]) => Map<string, string>;
+      }).getMembershipsForChunks === "function";
+    // Call as a method on `metadata` so `this` stays bound. Pulling the function
+    // off the object and invoking it unbound loses `this`, which crashes inside
+    // the store (`this.communities` is undefined).
+    const membershipMap = hasBulkMemberships
+      ? metadata.getMembershipsForChunks(allChunks.map((chunk) => chunk.id))
+      : null;
+    for (const chunk of allChunks) {
+      const cid = membershipMap
+        ? membershipMap.get(chunk.id)
+        : metadata.getCommunityForChunk(chunk.id);
+      if (cid) {
+        chunkCommunityMap.set(chunk.name, cid);
+        if (!communityChunks.has(cid)) communityChunks.set(cid, []);
+        communityChunks.get(cid)!.push(chunk);
+      }
     }
   }
 
@@ -112,10 +134,7 @@ export function extractDashboardData(
         name: m.name,
         kind: m.kind,
         filePath: m.filePath,
-        degree: graph.nodes.get(
-          // Find the graph node by name match
-          Array.from(graph.nodes.values()).find((gn) => gn.name === m.name && gn.filePath === m.filePath)?.chunkId ?? ""
-        )?.degree ?? 0,
+        degree: nodeByNameFile.get(`${m.name}\x00${m.filePath}`)?.degree ?? 0,
       }))
       .sort((a, b) => b.degree - a.degree);
 
@@ -206,8 +225,8 @@ export function extractDashboardData(
   const rawSurprises = metadata.getTopSurprises(maxSurprises);
   const surprises: SurpriseViz[] = rawSurprises.map((s) => {
     // Resolve chunk names and files
-    const srcNode = Array.from(graph.nodes.values()).find((n) => n.chunkId === s.sourceChunkId);
-    const tgtNode = Array.from(graph.nodes.values()).find((n) => n.chunkId === s.targetChunkId);
+    const srcNode = graph.nodes.get(s.sourceChunkId);
+    const tgtNode = graph.nodes.get(s.targetChunkId);
 
     return {
       sourceName: srcNode?.name ?? s.sourceChunkId,
@@ -254,7 +273,7 @@ export function extractDashboardData(
         relatedSymbols: page.relatedSymbols ?? [],
         relatedFiles: page.relatedFiles ?? [],
         confidence: page.confidence ?? 0,
-        sourceCommit: "", // extracted from frontmatter on disk, not stored in DB
+        sourceCommit: readFrontmatterSourceCommit(page.filePath),
       };
 
       wikiPages.push(wikiPage);
@@ -268,6 +287,9 @@ export function extractDashboardData(
     }
   }
   const productAreas = buildProductAreas(businessPages);
+
+  // Set of wiki node names for O(1) edge endpoint filtering
+  const wikiNodeNames = new Set(wikiGraphNodes.map((n) => n.name));
 
   // --- Meta ---
   const meta: DashboardMeta = {
@@ -300,8 +322,7 @@ export function extractDashboardData(
     wikiPages,
     wikiGraphNodes,
     wikiGraphEdges: wikiGraphEdges.filter((edge) =>
-      wikiGraphNodes.some((node) => node.name === edge.source) &&
-      wikiGraphNodes.some((node) => node.name === edge.target)
+      wikiNodeNames.has(edge.source) && wikiNodeNames.has(edge.target)
     ),
     businessPages,
     productAreas,
@@ -347,6 +368,16 @@ function readFrontmatterPageType(filePath: string): string | null {
   }
 }
 
+function readFrontmatterSourceCommit(filePath: string): string {
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
+    return match?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
   const capability = firstNonEmpty(extractSectionText(page.content, "Capability"), humanizeSlug(page.name));
   const businessTerms = extractBulletSection(page.content, "Business terms");
@@ -360,7 +391,7 @@ function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
     dataConcepts,
     supportingSymbols: page.relatedSymbols,
   });
-  const displaySummary = deriveBusinessDisplaySummary(displayName, page.summary, businessOutcome, userActions, dataConcepts);
+  const displaySummary = deriveBusinessDisplaySummary({ displayName, summary: page.summary, businessOutcome, userActions, dataConcepts });
   const presentation = evaluateBusinessPresentation({
     name: page.name,
     capability,
@@ -403,85 +434,7 @@ function toBusinessPageViz(page: WikiPageViz): BusinessPageViz {
   };
 }
 
-function deriveBusinessDisplaySummary(
-  displayName: string,
-  summary: string,
-  businessOutcome: string,
-  userActions: string[],
-  dataConcepts: string[]
-): string {
-  const outcome = cleanBusinessText(businessOutcome);
-  if (outcome) return `${displayName}: ${outcome}`;
-  const action = userActions.map(cleanBusinessText).find(Boolean);
-  if (action) return `${displayName}: Users can ${lowercaseSentence(action)}.`;
-  const cleanSummary = cleanBusinessText(summary);
-  if (cleanSummary) return cleanSummary;
-  const concepts = dataConcepts.map(cleanBusinessText).filter(Boolean).slice(0, 3);
-  if (concepts.length > 0) return `${displayName}: Supports ${concepts.join(", ")}.`;
-  return `${displayName}: Product behavior inferred from code evidence.`;
-}
-
-function cleanBusinessText(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/`[^`\s]*\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)(?::\d+(?:-\d+)?)?`/gi, "the product implementation")
-    .replace(/\b(?:src|apps|packages|backend|frontend)\/[A-Za-z0-9_./-]+/gi, "the product implementation")
-    .replace(/\b(?:backend|frontend):\s*/gi, "")
-    .replace(/\b[A-Za-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)\b/gi, "the product implementation")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function lowercaseSentence(value: string): string {
-  if (!value) return value;
-  return `${value[0]!.toLowerCase()}${value.slice(1).replace(/\.$/, "")}`;
-}
-
-function extractSectionText(content: string, heading: string): string {
-  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
-  if (!match?.[1]) return "";
-  return match[1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("- "))
-    .join(" ")
-    .trim();
-}
-
-function extractBulletSection(content: string, heading: string): string[] {
-  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
-  if (!match?.[1]) return [];
-  return match[1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim())
-    .filter((line) => line.length > 0);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function humanizeSlug(name: string): string {
-  return name
-    .replace(/^business-/, "")
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : part)
-    .join(" ");
-}
-
 function firstNonEmpty(primary: string, fallback: string): string {
   return primary.trim() || fallback;
 }
 
-function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}

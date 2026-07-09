@@ -40,4 +40,21 @@ describe("VectorStore corruption recovery", () => {
     const results = await store.search(new Array(384).fill(0), 10);
     expect(results).toEqual([]);
   });
+
+  it("deletes many files in bounded batches", async () => {
+    const store = new VectorStore(mkdtempSync(join(tmpdir(), "vs-test-")), 384);
+    const predicates: string[] = [];
+    (store as any).getTable = async () => ({
+      delete: async (predicate: string) => {
+        predicates.push(predicate);
+      },
+    });
+
+    await store.removeByFiles(Array.from({ length: 60 }, (_, i) => `src/file-${i}.ts`));
+
+    expect(predicates).toHaveLength(3);
+    expect(predicates[0].match(/filePath =/g)).toHaveLength(25);
+    expect(predicates[1].match(/filePath =/g)).toHaveLength(25);
+    expect(predicates[2].match(/filePath =/g)).toHaveLength(10);
+  });
 });

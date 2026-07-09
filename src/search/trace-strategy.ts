@@ -7,7 +7,6 @@
 
 import type { SearchResult } from "./types.js";
 import type { ExpandedQueryTerm } from "./utils.js";
-import type { StoredChunk } from "../storage/types.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import {
   expandQueryTerms,
@@ -17,26 +16,14 @@ import {
   tokenizeQueryTerms,
 } from "./utils.js";
 import { normalizeTargetText } from "./targets.js";
+import { TRACE_NOISE_TERMS, ADJACENT_WORKFLOW_FAMILIES } from "./shared/workflow-families.js";
+import { chunkToSearchResult, isImplementationPath } from "./shared/mappers.js";
+
+export { TRACE_NOISE_TERMS } from "./shared/workflow-families.js";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-export const TRACE_NOISE_TERMS = new Set([
-  "path", "page", "pages", "include", "includes", "including",
-  "start", "first", "then", "full", "intent",
-]);
-
-const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
-  auth: ["routing", "permissions"],
-  routing: ["auth", "permissions"],
-  billing: ["auth", "generation"],
-  storage: ["auth", "generation"],
-  generation: ["storage", "queue", "billing", "workflow"],
-  queue: ["generation"],
-  workflow: ["generation", "queue"],
-  bot: ["webhook", "daemon"],
-};
 
 const MODE_EXPLICIT_LOGGING_RE =
   /\b(log|logger|logging|audit|instrument|instrumentation|telemetry|metrics?)\b/i;
@@ -46,32 +33,6 @@ const MODE_EXPLICIT_WEBHOOK_RE =
 // ---------------------------------------------------------------------------
 // Helpers shared with the extraction pipeline
 // ---------------------------------------------------------------------------
-
-function chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-  return {
-    id: chunk.id,
-    score,
-    filePath: chunk.filePath,
-    name: chunk.name,
-    kind: chunk.kind,
-    startLine: chunk.startLine,
-    endLine: chunk.endLine,
-    content: chunk.content,
-    docstring: chunk.docstring,
-    parentName: chunk.parentName,
-    language: chunk.language ?? "",
-  };
-}
-
-function isImplementationPath(
-  filePath: string,
-  implementationPaths?: string[],
-): boolean {
-  const lowerPath = filePath.toLowerCase();
-  const implPaths = implementationPaths ?? ["src/", "lib/", "bin/"];
-  if (implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-  return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
-}
 
 // ---------------------------------------------------------------------------
 // Focused expanded terms (trace mode)

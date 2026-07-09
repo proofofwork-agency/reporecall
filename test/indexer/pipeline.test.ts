@@ -64,6 +64,38 @@ describe("metadata store", () => {
     expect(stats.languages.typescript).toBe(1);
   });
 
+  it("exposes storage size and target alias counts", () => {
+    store.replaceAllTargets(
+      [
+        {
+          id: "symbol:c1",
+          kind: "symbol",
+          canonicalName: "fn1",
+          normalizedName: "fn1",
+          filePath: "src/foo.ts",
+          ownerChunkId: "c1",
+          confidence: 0.9,
+        },
+      ],
+      [
+        {
+          targetId: "symbol:c1",
+          alias: "fn1",
+          normalizedAlias: "fn1",
+          source: "symbol",
+          weight: 1,
+        },
+      ]
+    );
+
+    const storage = store.getStorageStats();
+    expect(storage.metadataDbBytes).toBeGreaterThan(0);
+    expect(storage.metadataDbPageBytes).toBeGreaterThan(0);
+    expect(storage.metadataDbFreeBytes).toBeGreaterThanOrEqual(0);
+    expect(storage.targetCount).toBe(1);
+    expect(storage.targetAliasCount).toBe(1);
+  });
+
   it("should remove file and its chunks", () => {
     store.upsertFile("src/foo.ts", "abc");
     store.upsertChunk({

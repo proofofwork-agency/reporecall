@@ -136,13 +136,16 @@ export class HybridSearch {
 
   // ── Store hot-swap (after re-index) ─────────────────────────────
 
-  updateStores(
+  async updateStores(
     vectors: VectorStore,
     fts: FTSStore,
     metadata: MetadataStore
-  ): void {
+  ): Promise<void> {
     this._fts = fts;
-    this.pipeline.updateStores(vectors, fts, metadata);
+    // Await the pipeline swap so it completes (under the write lock) before we
+    // propagate to the strategy stores. bugStrategy/archStrategy swaps are
+    // synchronous reference assignments.
+    await this.pipeline.updateStores(vectors, fts, metadata);
     this.bugStrategy.updateStores(metadata, fts);
     this.archStrategy.updateStores(metadata, fts);
   }
@@ -273,6 +276,11 @@ export class HybridSearch {
           scoreFloorRatio: 0,
           query,
           factExtractors: this.config.factExtractors,
+          contextCompressionEnabled: this.config.contextCompressionEnabled,
+          contextCompressionMode: this.config.contextCompressionMode,
+          contextCompressionPreserveTopChunks: this.config.contextCompressionPreserveTopChunks,
+          contextCompressionMinChunkTokens: this.config.contextCompressionMinChunkTokens,
+          contextCompressionTargetRatio: this.config.contextCompressionTargetRatio,
         }
       );
     }
@@ -373,7 +381,14 @@ export class HybridSearch {
         scoreFloorRatio: isBroadWorkflow ? 0.25 : queryMode === "bug" ? 0.05 : 0.7,
         query,
         factExtractors: this.config.factExtractors,
-        compressionRank: isBroadWorkflow ? 2 : queryMode === "bug" ? 2 : 3,
+        compressionRank: isBroadWorkflow || queryMode === "bug"
+          ? this.config.contextCompressionPreserveTopChunks
+          : 3,
+        contextCompressionEnabled: this.config.contextCompressionEnabled,
+        contextCompressionMode: this.config.contextCompressionMode,
+        contextCompressionPreserveTopChunks: this.config.contextCompressionPreserveTopChunks,
+        contextCompressionMinChunkTokens: this.config.contextCompressionMinChunkTokens,
+        contextCompressionTargetRatio: this.config.contextCompressionTargetRatio,
       }
     );
 

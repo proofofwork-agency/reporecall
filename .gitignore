@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .memory/
+.engram/
 reports
 .claude/
 .demo/
@@ -16,5 +17,16 @@ claude-code-source-main
 test/.test-data-server-*/
 test/.test-data-server-*/graphify-3/
 
-# Local MCP config (machine-specific absolute paths); copy from .mcp.json.example
+.env
+.env.*
+*.log
+.idea/
+.vscode/
+coverage/
+*.tgz
+
+# Lockfiles: npm is canonical (package-lock.json); ignore pnpm
+pnpm-lock.yaml
+
+# Local MCP config (non-portable absolute paths) — copy from .mcp.json.example
 .mcp.json

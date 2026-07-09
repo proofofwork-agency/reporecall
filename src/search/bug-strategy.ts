@@ -30,6 +30,12 @@ import {
   type ExecutionSurfaceBias,
 } from "./utils.js";
 import { normalizeTargetText } from "./targets.js";
+import {
+  ADJACENT_WORKFLOW_FAMILIES,
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  TRACE_NOISE_TERMS,
+} from "./shared/workflow-families.js";
+import { chunkToSearchResult, isImplementationPath } from "./shared/mappers.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -117,19 +123,6 @@ export const BUG_SUBJECT_TAG_RULES: Array<{ tag: string; pattern: RegExp; relate
 
 const MODE_EXPLICIT_LOGGING_RE = /\b(log|logger|logging|audit|instrument|instrumentation|telemetry|metrics?)\b/i;
 const MODE_EXPLICIT_WEBHOOK_RE = /\b(webhook|signature|payload|delivery|event)\b/i;
-
-const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
-  auth: ["routing", "permissions"],
-  routing: ["auth", "permissions"],
-  billing: ["auth"],
-  storage: ["auth"],
-  generation: ["storage"],
-};
-
-const INVENTORY_GENERIC_TARGET_ALIAS_TERMS = new Set(["route", "routes", "router", "routing", "navigation"]);
-
-// Imported via re-export so the trace noise set is only needed internally
-const TRACE_NOISE_TERMS = new Set(["path", "page", "pages", "include", "includes", "including", "start", "first", "then", "full", "intent"]);
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -699,35 +692,65 @@ export class BugStrategy {
     const structuralSupportResults = this.buildBugStructuralSupportResults(subjectProfile);
     const seedResults = this.buildBugSeedResults(seedResult, subjectProfile);
     const keywordResults = this.buildBugKeywordResults(results, subjectProfile);
-    const strongKeywordAnchorResults = keywordResults.filter((result) => {
-      const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
+    // Precompute tags, features, and signals per candidate to avoid repeated
+    // per-filter metadata lookups and signal recomputation.
+    const tagCache = new Map<string, string[]>();
+    const featureCache = new Map<string, ChunkFeature | undefined>();
+    const signalCache = new Map<string, BugCandidateSignals>();
+    {
+      const candidateIds = Array.from(new Set<string>([
+        ...keywordResults.map((r) => r.id),
+        ...semanticSeedResults.map((r) => r.id),
+        ...results.map((r) => r.id),
+      ]));
+      for (const tag of this.metadata.getChunkTagsByIds(candidateIds)) {
+        const list = tagCache.get(tag.chunkId);
+        if (list) list.push(tag.tag); else tagCache.set(tag.chunkId, [tag.tag]);
+      }
+      for (const feature of this.metadata.getChunkFeaturesByIds(candidateIds)) {
+        featureCache.set(feature.chunkId, feature);
+      }
+    }
+    const getTagsForResult = (result: SearchResult): string[] => {
+      let tags = tagCache.get(result.id);
+      if (tags === undefined) {
+        tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
+        tagCache.set(result.id, tags);
+      }
+      return tags;
+    };
+    const getFeatureForResult = (result: SearchResult): ChunkFeature | undefined => {
+      if (featureCache.has(result.id)) return featureCache.get(result.id);
       const feature = this.metadata.getChunkFeaturesByIds([result.id])[0];
-      const signals = this.getBugCandidateSignals(
-        { filePath: result.filePath, name: result.name, content: result.content },
-        subjectProfile,
-        tags
-      );
+      featureCache.set(result.id, feature);
+      return feature;
+    };
+    const getSignalsForResult = (result: SearchResult): BugCandidateSignals => {
+      let signals = signalCache.get(result.id);
+      if (signals === undefined) {
+        signals = this.getBugCandidateSignals(
+          { filePath: result.filePath, name: result.name, content: result.content },
+          subjectProfile,
+          getTagsForResult(result)
+        );
+        signalCache.set(result.id, signals);
+      }
+      return signals;
+    };
+    const strongKeywordAnchorResults = keywordResults.filter((result) => {
+      const signals = getSignalsForResult(result);
+      const feature = getFeatureForResult(result);
       return this.isStrongBugAnchorCandidate(result, signals, feature, subjectProfile);
     });
     const strongSemanticAnchorResults = semanticSeedResults.filter((result) => {
-      const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-      const feature = this.metadata.getChunkFeaturesByIds([result.id])[0];
-      const signals = this.getBugCandidateSignals(
-        { filePath: result.filePath, name: result.name, content: result.content },
-        subjectProfile,
-        tags
-      );
+      const signals = getSignalsForResult(result);
+      const feature = getFeatureForResult(result);
       return this.isStrongBugAnchorCandidate(result, signals, feature, subjectProfile);
     });
     const filteredSemanticSeedResults = strongKeywordAnchorResults.length > 0
       ? semanticSeedResults.filter((result) => {
-          const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-          const feature = this.metadata.getChunkFeaturesByIds([result.id])[0];
-          const signals = this.getBugCandidateSignals(
-            { filePath: result.filePath, name: result.name, content: result.content },
-            subjectProfile,
-            tags
-          );
+          const signals = getSignalsForResult(result);
+          const feature = getFeatureForResult(result);
           return signals.pathNameTermMatches > 0
             || signals.primaryTagMatches > 0
             || this.isStrongBugAnchorCandidate(result, signals, feature, subjectProfile);
@@ -757,36 +780,18 @@ export class BugStrategy {
     const neighborIds = new Set(neighborResults.map((result) => result.id));
     const anchoredSemanticSeedIds = new Set(
       semanticSeedResults
-        .filter((result) => {
-          const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-          const signals = this.getBugCandidateSignals(
-            { filePath: result.filePath, name: result.name, content: result.content },
-            subjectProfile,
-            tags
-          );
-          return this.hasBugAnchorSignals(signals);
-        })
+        .filter((result) => this.hasBugAnchorSignals(getSignalsForResult(result)))
         .map((result) => result.id)
     );
     const keywordFocused = keywordResults.filter((result) => {
-      const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-      const signals = this.getBugCandidateSignals(
-        { filePath: result.filePath, name: result.name, content: result.content },
-        subjectProfile,
-        tags
-      );
+      const signals = getSignalsForResult(result);
       return signals.pathNameTermMatches > 0
         || signals.primaryTagMatches > 0
         || signals.implementationMatches > 0
         || signals.runtimeMatches > 0;
     });
     const genericDomainResults = results.filter((result) => {
-      const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-      const signals = this.getBugCandidateSignals(
-        { filePath: result.filePath, name: result.name, content: result.content },
-        subjectProfile,
-        tags
-      );
+      const signals = getSignalsForResult(result);
       if (subjectProfile.primaryTags.size === 0) {
         return signals.literalMatches + signals.semanticMatches + signals.implementationMatches + signals.runtimeMatches > 0
           || signals.runtimeGateOverlap;
@@ -814,13 +819,8 @@ export class BugStrategy {
         const lowerContent = result.content.toLowerCase();
         const combined = `${lowerPath} ${lowerName} ${lowerContent.slice(0, 1200)}`;
         const fileBase = lowerPath.split("/").pop() ?? lowerPath;
-        const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
         const feature = featureMap.get(result.id);
-        const signals = this.getBugCandidateSignals(
-          { filePath: result.filePath, name: result.name, content: result.content },
-          subjectProfile,
-          tags
-        );
+        const signals = getSignalsForResult(result);
         const candidateFamilies = this.getBugCandidateFamilies(result);
         const matchedPrimaryFamilyCount = Array.from(candidateFamilies).filter((family) =>
           subjectProfile.primaryTags.has(family)
@@ -1274,15 +1274,7 @@ export class BugStrategy {
     const selected: SearchResult[] = [];
     const seenFiles = new Set<string>();
     const primaryAnchorResults = keywordResults
-      .filter((result) => {
-        const tags = this.metadata.getChunkTagsByIds([result.id]).map((tag) => tag.tag);
-        const signals = this.getBugCandidateSignals(
-          { filePath: result.filePath, name: result.name, content: result.content },
-          subjectProfile,
-          tags
-        );
-        return this.hasBugAnchorSignals(signals);
-      })
+      .filter((result) => this.hasBugAnchorSignals(getSignalsForResult(result)))
       .filter((result) => result.kind.includes("function") || result.kind.includes("method"))
       .slice(0, 2);
     const anchorGateNames = Array.from(new Set(
@@ -1636,12 +1628,16 @@ export class BugStrategy {
     const cappedPromoted = this.isBugBackendRequestPrompt(subjectProfile)
       ? promoted.slice(0, 1)
       : promoted;
-    const final = cappedPromoted.map((result, index) => {
-      const normalizedScore = Math.max(1, 3 - index * 0.2);
+    const final = cappedPromoted.map((result) => {
+      // Bug fix: preserve the real multiplicative evidence score instead of
+      // overwriting it with a linear rank-based value (was Math.max(1, 3 - i*0.2)).
+      // Downstream (assembleContext) only uses the score as a ratio relative to
+      // the top result, so absolute values don't matter — the real signal must
+      // survive. hookScore is bumped to at least the real score for consumers
+      // that read it.
       return {
         ...result,
-        score: normalizedScore,
-        hookScore: Math.max(result.hookScore ?? 0, normalizedScore),
+        hookScore: Math.max(result.hookScore ?? 0, result.score),
       };
     });
     return final;
@@ -2828,10 +2824,7 @@ export class BugStrategy {
   }
 
   private isImplementationPath(filePath: string): boolean {
-    const lowerPath = filePath.toLowerCase();
-    const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
-    if (implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-    return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
+    return isImplementationPath(filePath, this.config.implementationPaths ?? ["src/", "lib/", "bin/"]);
   }
 
   private detectWorkflowLayers(lowerPath: string, lowerName: string): string[] {
@@ -2863,19 +2856,7 @@ export class BugStrategy {
   }
 
   private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 
   private mergeBroadResults(targetResults: SearchResult[], results: SearchResult[]): SearchResult[] {

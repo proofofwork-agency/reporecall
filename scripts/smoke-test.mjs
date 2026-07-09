@@ -408,37 +408,47 @@ await (async () => {
   });
   send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
 
+  // v0.8.0 public MCP surface = six tools. The standalone navigation, memory, and
+  // business tools were folded into action-based tools (search_code, explain_flow,
+  // memory). A JSON-RPC protocol error (unregistered tool or invalid params) always
+  // fails; a graceful in-tool "no data" result is acceptable for data-dependent
+  // action calls (abortOk), which a fresh keyword-indexed project may legitimately
+  // return.
   const tools = [
-    ['search_code',      { query: 'hybrid search retrieval' },                   false],
-    ['get_stats',        {},                                                      false],
-    ['find_callers',     { functionName: 'classifyIntent' },                     false],
-    ['find_callees',     { functionName: 'classifyIntent' },                     false],
-    ['resolve_seed',     { query: 'how does intent classifier work' },           false],
-    ['build_stack_tree', { seed: 'classifyIntent', direction: 'both', depth: 2 }, false],
-    ['get_imports',      { filePath: 'src/daemon/intent.ts' },                  false],
-    ['get_symbol',       { name: 'classifyIntent' },                             false],
-    ['explain_flow',     { query: 'how does intent classifier route queries' },  false],
-    ['list_product_areas', {},                                                   false],
-    ['business_context_query', { query: 'search indexing workflow' },            false],
-    ['refresh_context',   { includeStats: true },                                false],
-    ['get_lens_data',     { includeWikiContent: false, includeGraph: false },    false],
-    ['index_codebase',   {},                                                      false],
-    // clear_index with confirm:false — graceful abort, not a crash
-    ['clear_index',      { confirm: false },                                     true /* abortOk */],
+    // Primary retrieval
+    ['search_context',   { query: 'hybrid search retrieval' },                                                   false],
+    ['search_code',      { query: 'hybrid search retrieval' },                                                   false],
+    ['search_code',      { action: 'read_chunk', filePath: 'src/daemon/intent.ts', startLine: 1, endLine: 20 },  true],
+    // Flow navigation (folded into explain_flow actions)
+    ['explain_flow',     { query: 'how does intent classifier route queries' },                                  false],
+    ['explain_flow',     { action: 'callers', functionName: 'classifyIntent' },                                  true],
+    ['explain_flow',     { action: 'callees', functionName: 'classifyIntent' },                                  true],
+    ['explain_flow',     { action: 'resolve_seed', query: 'how does intent classifier work' },                   true],
+    ['explain_flow',     { action: 'stack_tree', seed: 'classifyIntent', direction: 'both', maxDepth: 2 },       true],
+    ['explain_flow',     { action: 'imports', filePath: 'src/daemon/intent.ts' },                                true],
+    ['explain_flow',     { action: 'symbol', name: 'classifyIntent' },                                           true],
+    // Memory (folded into memory actions)
+    ['memory',           { action: 'list' },                                                                     true],
+    ['memory',           { action: 'recall', query: 'search indexing workflow' },                                true],
+    // Freshness + stats
+    ['refresh_context',  { includeStats: true },                                                                 false],
+    ['get_stats',        {},                                                                                      false],
   ];
 
   for (const [tool, args, abortOk] of tools) {
+    const name = args.action ? `mcp ${tool} ${args.action}` : `mcp ${tool}`;
     try {
       const res = await call('tools/call', { name: tool, arguments: args });
-      const isErr = res.result?.isError || res.error;
-      // abortOk: any response (including an error message) counts as pass
-      if (abortOk || !isErr) {
-        pass(`mcp ${tool}`);
+      if (res.error) {
+        // Protocol error: tool not registered or invalid params — always a failure.
+        fail(name, JSON.stringify(res.error).slice(0, 140));
+      } else if (res.result?.isError && !abortOk) {
+        fail(name, (res.result?.content?.[0]?.text || '').slice(0, 140));
       } else {
-        fail(`mcp ${tool}`, JSON.stringify(res.error || res.result?.content?.[0]?.text?.slice(0, 120)));
+        pass(name);
       }
     } catch (e) {
-      fail(`mcp ${tool}`, e.message);
+      fail(name, e.message);
     }
   }
 

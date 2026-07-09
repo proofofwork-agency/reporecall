@@ -1,6 +1,6 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Local codebase memory, intent-routed retrieval, generated wiki, and MCP tools for coding agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -48,8 +48,8 @@
     "dev": "tsup --watch",
     "test": "vitest",
     "lint": "tsc --noEmit",
-    "benchmark": "tsx benchmark.ts",
-    "benchmark:external": "tsx benchmark-external.ts",
+    "benchmark": "tsx scripts/benchmarks/benchmark.ts",
+    "benchmark:external": "tsx scripts/benchmarks/benchmark-external.ts",
     "benchmark:project-context": "tsx scripts/benchmarks/project-context-audit.ts",
     "benchmark:production": "tsx scripts/benchmarks/production-gate.ts",
     "stress:large-repo": "tsx scripts/benchmarks/large-repo-stress.ts",
@@ -57,13 +57,17 @@
     "benchmark:memory": "vitest run test/benchmark/metrics.test.ts test/benchmark/memory-benchmark.test.ts test/daemon/memory-runtime.test.ts test/benchmark/live-memory-benchmark.test.ts",
     "benchmark:live-memory": "tsx scripts/benchmarks/memory-v1-live.ts",
     "smoke": "node scripts/smoke-test.mjs",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run lint && npm test -- --run && npm run build"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "hono": "4.12.26",
+    "protobufjs": "7.6.3"
   },
   "license": "MIT",
   "dependencies": {

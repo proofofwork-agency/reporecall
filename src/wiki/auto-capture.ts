@@ -1,11 +1,12 @@
 /**
  * Auto-capture wiki pages from MCP tool results.
  *
- * When explain_flow or build_stack_tree completes, the result
+ * When explain_flow completes, the result
  * is automatically saved as a wiki page for future sessions.
  */
 
 import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
 import { writeManagedMemoryFile, safeMemorySlug } from "../memory/files.js";
 import type { MemoryIndexer } from "../memory/indexer.js";
 import type { MemoryStore } from "../storage/memory-store.js";
@@ -51,8 +52,8 @@ export class WikiAutoCapture {
 
     // Check if page already exists and is fresh enough
     const existing = this.store.getByName(slug);
-    if (existing) {
-      const existingCommit = this.extractSourceCommit(existing.content);
+    if (existing && sourceCommit && existing.filePath) {
+      const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
       if (existingCommit === sourceCommit) return null; // No code changes since last capture
     }
 
@@ -95,7 +96,7 @@ export class WikiAutoCapture {
   }
 
   /**
-   * Capture a build_stack_tree result as a wiki page.
+   * Capture an explain_flow stack_tree result as a wiki page.
    */
   async captureTreeResult(
     query: string,
@@ -110,8 +111,8 @@ export class WikiAutoCapture {
     const sourceCommit = this.getHeadCommit();
 
     const existing = this.store.getByName(slug);
-    if (existing) {
-      const existingCommit = this.extractSourceCommit(existing.content);
+    if (existing && sourceCommit && existing.filePath) {
+      const existingCommit = this.extractSourceCommitFromFile(existing.filePath);
       if (existingCommit === sourceCommit) return null;
     }
 
@@ -138,7 +139,7 @@ export class WikiAutoCapture {
       relatedFiles: relatedFiles.slice(0, 20),
       relatedSymbols: relatedSymbols.slice(0, 20),
       confidence: 0.75,
-      reason: "Auto-captured from build_stack_tree result",
+      reason: "Auto-captured from explain_flow stack_tree result",
       pageType: "exploration",
       sourceLayer: "llm-enriched",
       links: allLinks,
@@ -149,7 +150,7 @@ export class WikiAutoCapture {
     await this.indexer.indexFile(filePath);
     this.store.setWikiLinks(slug, allLinks);
 
-    getLogger().info({ slug, seedName }, "Wiki page auto-captured from build_stack_tree");
+    getLogger().info({ slug, seedName }, "Wiki page auto-captured from explain_flow stack_tree");
     return slug;
   }
 
@@ -165,8 +166,15 @@ export class WikiAutoCapture {
     }
   }
 
-  private extractSourceCommit(content: string): string | undefined {
-    const match = content.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
-    return match?.[1];
+  // Read sourceCommit from the raw memory file on disk (frontmatter is stripped
+  // from the in-memory content, so scraping existing.content never matched).
+  private extractSourceCommitFromFile(filePath: string): string | undefined {
+    try {
+      const raw = readFileSync(filePath, "utf-8");
+      const match = raw.match(/sourceCommit:\s*"?([a-f0-9]+)"?/);
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
   }
 }

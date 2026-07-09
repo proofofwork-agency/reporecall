@@ -34,6 +34,18 @@ import {
   textMatchesQueryTerm,
   tokenizeQueryTerms,
 } from "./utils.js";
+import {
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  INVENTORY_STRUCTURAL_TERMS,
+  ADJACENT_WORKFLOW_FAMILIES,
+} from "./shared/workflow-families.js";
+import { chunkToSearchResult, isImplementationPath } from "./shared/mappers.js";
+
+export {
+  INVENTORY_GENERIC_TARGET_ALIAS_TERMS,
+  INVENTORY_STRUCTURAL_TERMS,
+  ADJACENT_WORKFLOW_FAMILIES,
+} from "./shared/workflow-families.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -41,33 +53,8 @@ import {
 
 export const BROAD_PHRASE_GENERIC_TERMS = GENERIC_BROAD_TERMS;
 
-export const INVENTORY_GENERIC_TARGET_ALIAS_TERMS = new Set([
-  "route", "routes", "router", "routing", "navigation",
-]);
-
 export const BROAD_INVENTORY_RE =
   /\b(?:which|what|list|show)\s+files\b|\bfiles?\s+(?:implement|handle|power|control|cover)\b/i;
-
-export const INVENTORY_STRUCTURAL_TERMS = new Set([
-  "which",
-  "what",
-  "list",
-  "show",
-  "file",
-  "files",
-  "implement",
-  "implements",
-  "handle",
-  "handles",
-  "power",
-  "powers",
-  "control",
-  "controls",
-  "cover",
-  "covers",
-  "full",
-  "entire",
-]);
 
 export const SUBSYSTEM_INVENTORY_FAMILIES = new Set(["search"]);
 
@@ -79,16 +66,6 @@ export const STRICT_WORKFLOW_FAMILY_COHESION = new Set([
   "generation",
   "workflow",
 ]);
-
-export const ADJACENT_WORKFLOW_FAMILIES: Record<string, string[]> = {
-  auth: ["routing", "permissions"],
-  routing: ["auth", "permissions"],
-  billing: ["auth", "generation"],
-  storage: ["auth", "generation"],
-  generation: ["storage", "queue", "billing", "workflow"],
-  queue: ["generation", "workflow"],
-  workflow: ["generation", "queue"],
-};
 
 // ---------------------------------------------------------------------------
 // Types / interfaces
@@ -618,6 +595,7 @@ export class ArchitectureStrategy {
       && orderedSelectedFiles.length < Math.min(maxContextChunks, 4)
     ) {
       const orderedSeen = new Set(orderedSelectedFiles.map((candidate) => candidate.filePath));
+      const orderedSelectedLayers = new Set(orderedSelectedFiles.flatMap((item) => item.layers));
       const supplementalAuthRoutingFiles = this.mergeBroadFileCandidates(
         [...scopedFileCandidates],
         [...fileCandidates]
@@ -635,8 +613,8 @@ export class ArchitectureStrategy {
           const bText = normalizeTargetText(`${b.filePath} ${b.primary.result.name}`);
           const aBackbone = /\b(callback|redirect|protected|guard|pending|destination)\b/.test(aText) ? 120 : 0;
           const bBackbone = /\b(callback|redirect|protected|guard|pending|destination)\b/.test(bText) ? 120 : 0;
-          const aLayerDiversity = a.layers.some((layer) => !orderedSelectedFiles.flatMap((item) => item.layers).includes(layer)) ? 30 : 0;
-          const bLayerDiversity = b.layers.some((layer) => !orderedSelectedFiles.flatMap((item) => item.layers).includes(layer)) ? 30 : 0;
+          const aLayerDiversity = a.layers.some((layer) => !orderedSelectedLayers.has(layer)) ? 30 : 0;
+          const bLayerDiversity = b.layers.some((layer) => !orderedSelectedLayers.has(layer)) ? 30 : 0;
           return (bBackbone + bLayerDiversity + b.score) - (aBackbone + aLayerDiversity + a.score);
         })
         .slice(0, Math.min(maxContextChunks, 4) - orderedSelectedFiles.length);
@@ -687,15 +665,13 @@ export class ArchitectureStrategy {
     };
 
     if (deferredReason) {
-      return results;
+      return [];
     }
-    return finalChunks.length > 0
-      ? finalChunks.map((candidate) => ({
-          ...candidate.result,
-          hookScore: candidate.score,
-          score: Math.max(candidate.result.score, candidate.score),
-        }))
-      : results;
+    return finalChunks.map((candidate) => ({
+      ...candidate.result,
+      hookScore: candidate.score,
+      score: Math.max(candidate.result.score, candidate.score),
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -830,15 +806,12 @@ export class ArchitectureStrategy {
       deferredReason: deferredReason ?? undefined,
     };
 
-    return selectedChunks.length > 0
-      ? selectedChunks.map((candidate) => ({
-          ...candidate.result,
-          hookScore: candidate.score,
-          score: Math.max(candidate.result.score, candidate.score),
-        }))
-      : candidates
-          .slice(0, Math.min(maxContextChunks, 8))
-          .map((candidate) => candidate.result);
+    if (deferredReason) return [];
+    return selectedChunks.map((candidate) => ({
+      ...candidate.result,
+      hookScore: candidate.score,
+      score: Math.max(candidate.result.score, candidate.score),
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -1870,7 +1843,9 @@ export class ArchitectureStrategy {
         : 1.0;
       const chunks = this.selectConceptChunks(
         bundle.symbols,
-        Math.min(bundle.symbols.length, Math.max(bundle.maxChunks ?? 4, 6))
+        // Bug fix: Math.min (not Math.max) so a small configured maxChunks is
+        // honored rather than silently bumped to 6.
+        Math.min(bundle.symbols.length, Math.min(bundle.maxChunks ?? 4, 6))
       );
 
       for (let index = 0; index < chunks.length; index++) {
@@ -1919,8 +1894,10 @@ export class ArchitectureStrategy {
     const byPath = new Map<string, BroadFileCandidate>();
     for (const bundle of bundles) {
       const chunks = this.selectConceptChunks(
+        // Bug fix: Math.min (not Math.max) so a small configured maxChunks is
+        // honored rather than silently bumped to 6.
         bundle.symbols,
-        Math.min(bundle.symbols.length, Math.max(bundle.maxChunks ?? 4, 6))
+        Math.min(bundle.symbols.length, Math.min(bundle.maxChunks ?? 4, 6))
       );
       const hitsByPath = new Map<string, number>();
       for (const chunk of chunks) {
@@ -2530,26 +2507,11 @@ export class ArchitectureStrategy {
   // -------------------------------------------------------------------------
 
   private chunkToSearchResult(chunk: StoredChunk, score: number): SearchResult {
-    return {
-      id: chunk.id,
-      score,
-      filePath: chunk.filePath,
-      name: chunk.name,
-      kind: chunk.kind,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      content: chunk.content,
-      docstring: chunk.docstring,
-      parentName: chunk.parentName,
-      language: chunk.language ?? "",
-    };
+    return chunkToSearchResult(chunk, score);
   }
 
   private isImplementationPath(filePath: string): boolean {
-    const lowerPath = filePath.toLowerCase();
-    const implPaths = this.config.implementationPaths ?? ["src/", "lib/", "bin/"];
-    if (implPaths.some((prefix) => lowerPath.startsWith(prefix.toLowerCase()))) return true;
-    return /(?:^|\/)(src|lib|bin|app|server|api|functions|handlers|controllers|services|supabase)\//.test(lowerPath);
+    return isImplementationPath(filePath, this.config.implementationPaths ?? ["src/", "lib/", "bin/"]);
   }
 
   private getMatchedConceptBundles(query: string): CompiledConceptBundle[] {

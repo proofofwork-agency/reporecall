@@ -94,8 +94,12 @@ export function searchCommand(): Command {
             console.log('')
           }
           console.log(context.text)
+          const compressionSuffix = context.compression?.compressedChunks
+            ? `, ${context.compression.compressedChunks} compacted, ${context.compression.tokensSaved} tokens saved`
+            : ''
           console.log(
             `\n(${context.chunks.length} chunks, ${context.tokenCount} tokens` +
+            compressionSuffix +
             (memContext.memories.length > 0 ? `, ${memContext.memories.length} memories, ${memContext.tokenCount} mem tokens` : '') +
             ')'
           )

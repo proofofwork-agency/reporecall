@@ -1,3 +1,6 @@
+import { escapeRegExp } from "../core/strings.js";
+import { splitIdentifierTokens } from "./targets.js";
+
 /**
  * Common English stop words shared across search modules.
  * Union of words from seed.ts and ranker.ts to avoid duplicate definitions.
@@ -21,7 +24,6 @@ export const STOP_WORDS = new Set([
 ]);
 
 const CODE_DELIMITER_RE = /[^a-z0-9_./-]+/;
-const CAMEL_BOUNDARY_RE = /(?<!^)(?=[A-Z])/g;
 const TEST_PATH_RE =
   /(?:^|\/)(test|tests|spec|__tests__|__fixtures__|fixtures|benchmark|examples|e2e|cypress|playwright|integration)\//;
 const TEST_FILE_RE = /\.(test|spec|e2e)\.[^.]+$/;
@@ -552,14 +554,6 @@ const CONCEPT_FAMILIES: ConceptFamilyDefinition[] = [
   },
 ];
 
-function splitIdentifierTokens(value: string): string[] {
-  return value
-    .replace(CAMEL_BOUNDARY_RE, " ")
-    .toLowerCase()
-    .split(CODE_DELIMITER_RE)
-    .filter(Boolean);
-}
-
 /**
  * Checks if a file path is a test/spec/fixture/benchmark/example file.
  */
@@ -825,18 +819,41 @@ export function getQueryTermVariants(term: string): string[] {
 /**
  * Returns true when text contains the raw query term or one of its code-facing variants.
  */
-export function textMatchesQueryTerm(text: string, term: string): boolean {
-  const normalizedText = text
+const VARIANT_REGEX_CACHE = new Map<string, RegExp>();
+const MAX_VARIANT_REGEX_CACHE = 500;
+
+function getVariantBoundaryRegex(lowerVariant: string): RegExp {
+  const cached = VARIANT_REGEX_CACHE.get(lowerVariant);
+  if (cached) return cached;
+  if (VARIANT_REGEX_CACHE.size >= MAX_VARIANT_REGEX_CACHE) VARIANT_REGEX_CACHE.clear();
+  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(lowerVariant)}(?=$|[^a-z0-9])`, "i");
+  VARIANT_REGEX_CACHE.set(lowerVariant, pattern);
+  return pattern;
+}
+
+const NORMALIZED_TEXT_CACHE = new Map<string, string>();
+const MAX_NORMALIZED_TEXT_CACHE = 1000;
+
+function normalizeMatchText(text: string): string {
+  if (NORMALIZED_TEXT_CACHE.has(text)) return NORMALIZED_TEXT_CACHE.get(text)!;
+  if (NORMALIZED_TEXT_CACHE.size >= MAX_NORMALIZED_TEXT_CACHE) NORMALIZED_TEXT_CACHE.clear();
+  const normalized = text
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .replace(/[^a-zA-Z0-9]+/g, " ")
     .toLowerCase()
     .trim();
+  NORMALIZED_TEXT_CACHE.set(text, normalized);
+  return normalized;
+}
+
+export function textMatchesQueryTerm(text: string, term: string): boolean {
+  const normalizedText = normalizeMatchText(text);
   const compactText = normalizedText.replace(/\s+/g, "");
 
   return getQueryTermVariants(term).some((variant) => {
     const lowerVariant = variant.toLowerCase();
-    const boundaryPattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(lowerVariant)}(?=$|[^a-z0-9])`, "i");
+    const boundaryPattern = getVariantBoundaryRegex(lowerVariant);
     if (boundaryPattern.test(normalizedText)) return true;
 
     const compactVariant = lowerVariant.replace(/[^a-z0-9]+/g, "");
@@ -845,6 +862,3 @@ export function textMatchesQueryTerm(text: string, term: string): boolean {
   });
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}

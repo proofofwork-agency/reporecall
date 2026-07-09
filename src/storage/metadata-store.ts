@@ -1,5 +1,5 @@
 import { resolve, dirname } from "path";
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, statSync } from "fs";
 import type Database from "better-sqlite3";
 import type {
   ChunkScoringInfo,
@@ -57,6 +57,7 @@ export type {
  */
 export class MetadataStore {
   private db: Database.Database;
+  private dbPath: string;
   private chunks: ChunkStore;
   private callEdges: CallEdgeStore;
   private stats: StatsStore;
@@ -68,6 +69,7 @@ export class MetadataStore {
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
+    this.dbPath = dbPath;
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = openSqliteWithRecovery(dbPath);
     this.chunks = new ChunkStore(this.db);
@@ -96,10 +98,12 @@ export class MetadataStore {
 
   removeFile(path: string): void {
     this.db.transaction(() => {
+      const chunkIds = this.getChunkIdsForFile(path);
       this.chunks.removeFile(path);
       this.callEdges.removeCallEdgesForFile(path);
       this.imports.removeImportsForFile(path);
       this.semantic.removeByFile(path);
+      this.cascadeDeleteFileGraphData(path, chunkIds);
     })();
   }
 
@@ -107,10 +111,12 @@ export class MetadataStore {
     if (paths.length === 0) return;
     this.db.transaction(() => {
       for (const path of paths) {
+        const chunkIds = this.getChunkIdsForFile(path);
         this.chunks.removeFile(path);
         this.callEdges.removeCallEdgesForFile(path);
         this.imports.removeImportsForFile(path);
         this.semantic.removeByFile(path);
+        this.cascadeDeleteFileGraphData(path, chunkIds);
       }
     })();
   }
@@ -121,9 +127,40 @@ export class MetadataStore {
 
   removeChunksForFile(filePath: string): void {
     this.db.transaction(() => {
+      const chunkIds = this.getChunkIdsForFile(filePath);
       this.chunks.removeChunksForFile(filePath);
       this.semantic.removeByFile(filePath);
+      this.cascadeDeleteFileGraphData(filePath, chunkIds);
     })();
+  }
+
+  // Capture chunk ids for a file before the chunks rows are deleted, so graph
+  // rows keyed by chunk_id can be cleaned up in the same transaction.
+  private getChunkIdsForFile(filePath: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT id FROM chunks WHERE file_path = ?`)
+      .all(filePath) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  // Cascade-delete targets (by file_path) and topology rows (by chunk_id) that
+  // would otherwise be orphaned when a file/chunks are removed. Must run inside
+  // the caller's transaction. target_aliases cascade via FK ON DELETE CASCADE.
+  private cascadeDeleteFileGraphData(filePath: string, chunkIds: string[]): void {
+    this.db.prepare(`DELETE FROM targets WHERE file_path = ?`).run(filePath);
+    if (chunkIds.length === 0) return;
+    const placeholders = chunkIds.map(() => "?").join(",");
+    this.db
+      .prepare(`DELETE FROM community_memberships WHERE chunk_id IN (${placeholders})`)
+      .run(...chunkIds);
+    this.db
+      .prepare(`DELETE FROM community_god_nodes WHERE chunk_id IN (${placeholders})`)
+      .run(...chunkIds);
+    this.db
+      .prepare(
+        `DELETE FROM community_surprises WHERE source_chunk_id IN (${placeholders}) OR target_chunk_id IN (${placeholders})`
+      )
+      .run(...chunkIds, ...chunkIds);
   }
 
   getChunk(id: string): StoredChunk | undefined {
@@ -155,6 +192,29 @@ export class MetadataStore {
       totalFiles: this.chunks.getFileCount(),
       totalChunks: this.chunks.getChunkCount(),
       languages: this.chunks.getLanguageCounts(),
+    };
+  }
+
+  getStorageStats(): {
+    metadataDbBytes: number;
+    metadataDbPageBytes: number;
+    metadataDbFreeBytes: number;
+    metadataDbUsedBytes: number;
+    targetCount: number;
+    targetAliasCount: number;
+  } {
+    const pageSize = Number(this.db.pragma("page_size", { simple: true }) ?? 0);
+    const pageCount = Number(this.db.pragma("page_count", { simple: true }) ?? 0);
+    const freelistCount = Number(this.db.pragma("freelist_count", { simple: true }) ?? 0);
+    const pageBytes = pageSize * pageCount;
+    const freeBytes = pageSize * freelistCount;
+    return {
+      metadataDbBytes: existsSync(this.dbPath) ? statSync(this.dbPath).size : 0,
+      metadataDbPageBytes: pageBytes,
+      metadataDbFreeBytes: freeBytes,
+      metadataDbUsedBytes: Math.max(0, pageBytes - freeBytes),
+      targetCount: this.targets.getTargetCount(),
+      targetAliasCount: this.targets.getAliasCount(),
     };
   }
 
@@ -355,6 +415,12 @@ export class MetadataStore {
 
   getCommunityForChunk(chunkId: string): string | undefined {
     return this.communities.getCommunityForChunk(chunkId);
+  }
+
+  /** Bulk variant of getCommunityForChunk — resolves many chunk ids in batched
+   * queries (vs N roundtrips). Used by the visualize/lens hot path. */
+  getMembershipsForChunks(chunkIds: string[]): Map<string, string> {
+    return this.communities.getMembershipsForChunks(chunkIds);
   }
 
   getCommunityInfo(communityId: string): CommunityRecord | undefined {

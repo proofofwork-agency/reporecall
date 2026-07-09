@@ -2,7 +2,7 @@ import { readFile, stat } from "fs/promises";
 import { extname, relative } from "path";
 import type Parser from "web-tree-sitter";
 import { getLanguage, createParser, initTreeSitter } from "./tree-sitter.js";
-import { getLanguageForExtension, type LanguageConfig } from "./languages.js";
+import { getLanguageForExtension, resolveLanguage, type LanguageConfig } from "./languages.js";
 import type { CodeChunk } from "./types.js";
 import { extractCallEdges, type CallEdge } from "../analysis/call-graph.js";
 import { extractImports, type RawImport } from "../analysis/imports.js";
@@ -52,6 +52,14 @@ function buildWholeFileChunk(
 }
 
 function extractName(node: SyntaxNode): string {
+  // Python: a decorated_definition wraps the real function/class. Recurse
+  // into its "definition" field so the inner name is used instead of
+  // "<anonymous>".
+  if (node.type === "decorated_definition") {
+    const def = node.childForFieldName("definition");
+    if (def) return extractName(def);
+  }
+
   const nameNode =
     node.childForFieldName("name") ??
     node.childForFieldName("declarator");
@@ -209,7 +217,7 @@ export async function chunkFileWithCalls(
   const MAX_CHUNK_FILE_SIZE = 1024 * 1024; // 1MB
 
   const ext = extname(filePath);
-  const langInfo = getLanguageForExtension(ext);
+  let langInfo = getLanguageForExtension(ext);
   const relPath = relative(projectRoot, filePath);
   const h = await getHasher();
 
@@ -235,6 +243,12 @@ export async function chunkFileWithCalls(
   }
 
   const content = await readFile(filePath, "utf-8");
+
+  // `.h` headers default to C but are commonly C++; sniff content and promote
+  // to the C++ grammar to avoid silent parse errors on real C++ headers.
+  if (ext === ".h" && langInfo?.language === "c") {
+    langInfo = resolveLanguage(ext, content);
+  }
 
   if (!langInfo) {
     const id = h.h64ToString(`${relPath}:file:0`);
@@ -276,6 +290,7 @@ export async function chunkFileWithCalls(
   try {
     tree = parser.parse(content);
   } catch {
+    try { parser.delete(); } catch { /* already freed */ }
     const id = h.h64ToString(`${relPath}:file:0`);
     return {
       chunks: [buildWholeFileChunk(id, relPath, content, langName)],
@@ -285,6 +300,7 @@ export async function chunkFileWithCalls(
     };
   }
   if (!tree) {
+    try { parser.delete(); } catch { /* already freed */ }
     const id = h.h64ToString(`${relPath}:file:0`);
     return {
       chunks: [buildWholeFileChunk(id, relPath, content, langName)],
@@ -294,77 +310,85 @@ export async function chunkFileWithCalls(
     };
   }
 
-  const nodes: Parser.SyntaxNode[] = [];
   try {
-    walkForExtractables(tree.rootNode, config, nodes);
-  } catch {
-    const id = h.h64ToString(`${relPath}:file:0`);
-    return {
-      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
-      callEdges: [],
-      rawImports: [],
-      language: langName,
-    };
-  }
+    const nodes: Parser.SyntaxNode[] = [];
+    try {
+      walkForExtractables(tree.rootNode, config, nodes);
+    } catch {
+      const id = h.h64ToString(`${relPath}:file:0`);
+      return {
+        chunks: [buildWholeFileChunk(id, relPath, content, langName)],
+        callEdges: [],
+        rawImports: [],
+        language: langName,
+      };
+    }
 
-  if (nodes.length === 0) {
-    const id = h.h64ToString(`${relPath}:file:0`);
-    // Still extract imports — the tree parsed fine, just no extractable nodes
+    if (nodes.length === 0) {
+      const id = h.h64ToString(`${relPath}:file:0`);
+      // Still extract imports — the tree parsed fine, just no extractable nodes
+      const tsJsLanguages = new Set(["typescript", "tsx", "javascript"]);
+      const fallbackImports = tsJsLanguages.has(langName)
+        ? extractImports(tree.rootNode, langName)
+        : [];
+      return {
+        chunks: [buildWholeFileChunk(id, relPath, content, langName)],
+        callEdges: [],
+        rawImports: fallbackImports,
+        language: langName,
+      };
+    }
+
+    const chunks: CodeChunk[] = [];
+    const allCallEdges: CallEdge[] = [];
+
+    for (const node of nodes) {
+      const name = extractName(node);
+      const startLine = node.startPosition.row + 1;
+      const endLine = node.endPosition.row + 1;
+      const id = h.h64ToString(`${relPath}:${name}:${startLine}`);
+      const lineCount = endLine - startLine + 1;
+
+      let chunkContent = node.text;
+      if (lineCount > MAX_CHUNK_LINES) {
+        const lines = chunkContent.split("\n");
+        const kept = lines.slice(0, TRUNCATION_KEEP_LINES);
+        kept.push(`// ... truncated ${lineCount - TRUNCATION_KEEP_LINES} more lines (${lineCount} total) ...`);
+        chunkContent = kept.join("\n");
+      }
+
+      chunks.push({
+        id,
+        filePath: relPath,
+        name,
+        kind: node.type,
+        content: chunkContent,
+        startLine,
+        endLine,
+        parentName: extractParentName(node),
+        docstring: extractDocstring(node, config.docstringTypes),
+        language: langName,
+        isExported: isExported(node),
+      });
+
+      if (config.callNodeTypes) {
+        const edges = extractCallEdges(node, id, relPath, config.callNodeTypes);
+        allCallEdges.push(...edges);
+      }
+    }
+
+    // Extract imports from TS/JS/TSX files
     const tsJsLanguages = new Set(["typescript", "tsx", "javascript"]);
-    const fallbackImports = tsJsLanguages.has(langName)
+    const rawImports = tsJsLanguages.has(langName)
       ? extractImports(tree.rootNode, langName)
       : [];
-    return {
-      chunks: [buildWholeFileChunk(id, relPath, content, langName)],
-      callEdges: [],
-      rawImports: fallbackImports,
-      language: langName,
-    };
+
+    return { chunks, callEdges: allCallEdges, rawImports, language: langName };
+  } finally {
+    // web-tree-sitter allocates Parser/Tree objects on the WASM heap, which is
+    // NOT garbage-collected. Free both on every exit path to avoid unbounded
+    // heap growth when indexing large codebases (thousands of files).
+    try { tree.delete(); } catch { /* already freed */ }
+    try { parser.delete(); } catch { /* already freed */ }
   }
-
-  const chunks: CodeChunk[] = [];
-  const allCallEdges: CallEdge[] = [];
-
-  for (const node of nodes) {
-    const name = extractName(node);
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-    const id = h.h64ToString(`${relPath}:${name}:${startLine}`);
-    const lineCount = endLine - startLine + 1;
-
-    let chunkContent = node.text;
-    if (lineCount > MAX_CHUNK_LINES) {
-      const lines = chunkContent.split("\n");
-      const kept = lines.slice(0, TRUNCATION_KEEP_LINES);
-      kept.push(`// ... truncated ${lineCount - TRUNCATION_KEEP_LINES} more lines (${lineCount} total) ...`);
-      chunkContent = kept.join("\n");
-    }
-
-    chunks.push({
-      id,
-      filePath: relPath,
-      name,
-      kind: node.type,
-      content: chunkContent,
-      startLine,
-      endLine,
-      parentName: extractParentName(node),
-      docstring: extractDocstring(node, config.docstringTypes),
-      language: langName,
-      isExported: isExported(node),
-    });
-
-    if (config.callNodeTypes) {
-      const edges = extractCallEdges(node, id, relPath, config.callNodeTypes);
-      allCallEdges.push(...edges);
-    }
-  }
-
-  // Extract imports from TS/JS/TSX files
-  const tsJsLanguages = new Set(["typescript", "tsx", "javascript"]);
-  const rawImports = tsJsLanguages.has(langName)
-    ? extractImports(tree.rootNode, langName)
-    : [];
-
-  return { chunks, callEdges: allCallEdges, rawImports, language: langName };
 }

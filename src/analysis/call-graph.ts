@@ -161,14 +161,22 @@ function walkForCallNodes(
   callNodeTypes: string[],
   results: SyntaxNode[]
 ): void {
-  if (callNodeTypes.includes(node.type)) {
-    results.push(node);
-    // Don't recurse into call nodes to avoid double-counting nested calls
-    // at this level — but we do want nested calls as separate edges
-  }
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child) walkForCallNodes(child, callNodeTypes, results);
+  // Iterative traversal (explicit stack). A recursive walker overflows the
+  // call stack on deep/minified/generated ASTs (e.g. 10k-deep call chains).
+  // Pre-order DFS is preserved by pushing children in reverse so they pop in
+  // original order — identical visitation set/order to the prior recursion.
+  const stack: SyntaxNode[] = [node];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (callNodeTypes.includes(current.type)) {
+      results.push(current);
+      // Don't recurse into call nodes to avoid double-counting nested calls
+      // at this level — but we do want nested calls as separate edges
+    }
+    for (let i = current.childCount - 1; i >= 0; i--) {
+      const child = current.child(i);
+      if (child) stack.push(child);
+    }
   }
 }
 

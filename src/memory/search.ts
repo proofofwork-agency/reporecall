@@ -131,12 +131,23 @@ export class MemorySearch {
       const topCodeSymbols = options?.topCodeSymbols ?? [];
 
       if (!allowedStatuses.includes(resolvedStatus)) {
+        // Zero the score before skipping, mirroring the minConfidence path below.
+        // Without this, archived/superseded memories retain their raw keyword
+        // score (set above) and leak into results because the secondary status
+        // filter at the bottom only runs when `options.statuses` is explicitly
+        // provided.
+        scores.set(id, 0);
         continue;
       }
 
-      // Recency boost
-      const age = now - new Date(memory.fileMtime).getTime();
-      const recencyScore = Math.min(1.0, Math.max(0, 1 - age / ninetyDays));
+      // Recency boost — guard against malformed timestamps: a single NaN mtime
+      // would corrupt the sort comparator below (NaN comparisons are unstable).
+      const mtimeMs = new Date(memory.fileMtime).getTime();
+      let recencyScore = 0;
+      if (Number.isFinite(mtimeMs)) {
+        const age = now - mtimeMs;
+        recencyScore = Math.min(1.0, Math.max(0, 1 - age / ninetyDays));
+      }
       adjusted += RECENCY_WEIGHT * recencyScore;
 
       // Importance: penalize over-accessed memories that fire on most queries.

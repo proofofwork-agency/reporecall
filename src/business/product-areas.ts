@@ -1,4 +1,5 @@
 import type { Memory } from "../memory/types.js";
+import { slugify, extractSectionText, extractBulletSection, humanizeSlug } from "../core/strings.js";
 
 export type PresentationQuality = "high" | "medium" | "low" | "fallback";
 
@@ -583,7 +584,11 @@ function toProductArea(
   const supportingSymbols = unique(uniquePages.flatMap((page) => page.supportingSymbols)).slice(0, 12);
   const displaySummary = summarizeProductAreaDisplay(displayName, uniquePages);
   const avgConfidence = uniquePages.reduce((sum, page) => sum + page.confidence, 0) / Math.max(1, uniquePages.length);
-  const confidence = Math.max(0.55, Math.min(0.94, avgConfidence + Math.min(score * 0.01, 0.08)));
+  // Confidence reflects the actual evidence: a low average page confidence
+  // with little supporting score yields a low value, instead of being clamped
+  // up to a synthetic floor. The bonus is bounded so strong evidence can lift
+  // (but not inflate past) a sane ceiling.
+  const confidence = Math.max(0.2, Math.min(0.95, avgConfidence + Math.min(score * 0.01, 0.08)));
   const presentation = evaluateProductAreaPresentation({
     id,
     name,
@@ -762,7 +767,7 @@ function evaluateProductAreaPresentation(input: {
   };
 }
 
-function deriveBusinessDisplaySummary(input: {
+export function deriveBusinessDisplaySummary(input: {
   displayName: string;
   summary: string;
   businessOutcome: string;
@@ -781,10 +786,13 @@ function deriveBusinessDisplaySummary(input: {
 }
 
 function isTechnicalCapabilityLabel(value: string): boolean {
+  // Note: deliberately NOT matching bare camelCase identifiers. The word-boundary
+  // technical-suffix check below already catches genuine technical camelCase
+  // (e.g. "orderService" -> "order Service" -> "service"); a generic camelCase
+  // pattern would false-positive on legitimate business names like "productId".
   return /\b(?:backend|frontend):/i.test(value)
     || /`[^`]+`/.test(value)
     || /\b(?:service|controller|repository|handler|processor|provider|middleware|modal|store|query|string|parser|builder|factory|client)\b/i.test(splitTechnicalWords(value))
-    || /[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+/.test(value)
     || /\b[A-Za-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|sql|json|mdx?|ya?ml)\b/i.test(value);
 }
 
@@ -878,8 +886,13 @@ function isGenericPresentationSummary(value: string): boolean {
 function countDomainSignals(values: string[]): number {
   const tokens = new Set<string>();
   for (const value of values) {
+    // tokenize() yields single lowercase words, so a per-token membership test
+    // against the multi-word GENERIC_PRESENTATION_LABELS could never match.
+    // Guard at the whole-value level instead: a value that is itself a generic
+    // presentation label contributes no domain signal.
+    if (isGenericPresentationLabel(value)) continue;
     for (const token of tokenize(value)) {
-      if (!PRODUCT_AREA_GENERIC_TERMS.has(token) && !GENERIC_PRESENTATION_LABELS.has(token)) tokens.add(token);
+      if (!PRODUCT_AREA_GENERIC_TERMS.has(token)) tokens.add(token);
     }
   }
   return tokens.size;
@@ -934,41 +947,6 @@ function toTechnicalEvidence(files: string[], symbols: string[]): TechnicalEvide
   };
 }
 
-function extractSectionText(content: string, heading: string): string {
-  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
-  if (!match?.[1]) return "";
-  return match[1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("- "))
-    .join(" ")
-    .trim();
-}
-
-function extractBulletSection(content: string, heading: string): string[] {
-  const match = content.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`));
-  if (!match?.[1]) return [];
-  return match[1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim())
-    .filter((line) => line.length > 0);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function humanizeSlug(name: string): string {
-  return name
-    .replace(/^business-/, "")
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : part)
-    .join(" ");
-}
-
 function firstNonEmpty(primary: string, fallback: string): string {
   return primary.trim() || fallback;
 }
@@ -985,14 +963,6 @@ function titleCase(input: string): string {
       return `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}`;
     })
     .join(" ");
-}
-
-function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
 }
 
 function unique(values: string[]): string[] {

@@ -3,7 +3,7 @@
  *
  * Reads from MetadataStore (communities, hub nodes, surprises, chunks)
  * and writes wiki pages as memory files with type=wiki. Runs during
- * index_codebase — no LLM needed.
+ * index/refresh completion — no LLM needed.
  */
 
 import { execFileSync } from "child_process";
@@ -17,6 +17,7 @@ import { writeManagedMemoryFile } from "../memory/files.js";
 import { resolveAllLinks } from "./links.js";
 import { getLogger } from "../core/logger.js";
 import { buildBusinessPages } from "./business.js";
+import { slugify } from "../core/strings.js";
 
 const WIKI_GENERATOR_VERSION = "deterministic-wiki-v3-business-presentation";
 const GENERATED_WIKI_PREFIXES = /^(business-|community-|hub-|surprises-)/;
@@ -145,7 +146,7 @@ export class WikiGenerator {
         members.length > 30 ? `\n_...and ${members.length - 30} more_` : "",
       ].join("\n");
 
-      const writeResult = this.writePage(slug, {
+      const writeResult = await this.writePage(slug, {
         description: `Code community: ${community.label} (${community.nodeCount} nodes, cohesion ${community.cohesion.toFixed(2)})`,
         pageType: "community",
         content,
@@ -186,7 +187,7 @@ export class WikiGenerator {
 
       const links = communityLink ? [communityLink] : [];
 
-      const writeResult = this.writePage(slug, {
+      const writeResult = await this.writePage(slug, {
         description: `Hub node: ${hub.name} (${hub.degree} edges) in ${hub.filePath}`,
         pageType: "hub",
         content,
@@ -218,7 +219,7 @@ export class WikiGenerator {
     );
 
     for (const businessPage of businessPages) {
-      const writeResult = this.writePage(businessPage.slug, {
+      const writeResult = await this.writePage(businessPage.slug, {
         description: businessPage.description,
         pageType: "business",
         content: businessPage.content,
@@ -267,7 +268,7 @@ export class WikiGenerator {
         surpriseLines,
       ].join("\n");
 
-      const writeResult = this.writePage(slug, {
+      const writeResult = await this.writePage(slug, {
         description: `${surprises.length} surprising cross-module connections in the codebase`,
         pageType: "module",
         content,
@@ -298,7 +299,7 @@ export class WikiGenerator {
     return result;
   }
 
-  private writePage(
+  private async writePage(
     slug: string,
     input: {
       description: string;
@@ -311,7 +312,7 @@ export class WikiGenerator {
       sourceCommit: string;
       confidence: number;
     }
-  ): "written" | "updated" | "skipped" {
+  ): Promise<"written" | "updated" | "skipped"> {
     const fingerprint = this.pageFingerprint(input);
 
     // Skip write only if both the source commit and generated output match.
@@ -348,8 +349,9 @@ export class WikiGenerator {
       content: input.content,
     });
 
-    // Index the file and update wiki links
-    this.indexer.indexFile(filePath).catch((err) =>
+    // Index the file and update wiki links — await so indexing completes before
+    // removeStaleGeneratedPages() runs, avoiding a deletion-vs-indexing race.
+    await this.indexer.indexFile(filePath).catch((err) =>
       getLogger().warn({ err, slug }, "Wiki page indexing failed")
     );
     this.memoryStore.setWikiLinks(slug, allLinks);
@@ -426,14 +428,6 @@ export class WikiGenerator {
       return "";
     }
   }
-}
-
-function slugify(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
 }
 
 function uniqueValues(arr: string[]): string[] {

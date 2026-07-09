@@ -6,7 +6,10 @@ export function getLogger(): pino.Logger {
   if (logger) return logger;
   const destination =
     process.env.MEMORY_LOG_DEST === "stderr"
-      ? pino.destination({ dest: 2, sync: true })
+      ? // Async (buffered) stderr destination. Synchronous writes block the
+        // event loop and can hard-deadlock an MCP stdio server if the client
+        // stops draining stderr.
+        pino.destination({ dest: 2, sync: false })
       : undefined;
   logger = pino(
     { level: process.env.MEMORY_LOG_LEVEL ?? "info" },

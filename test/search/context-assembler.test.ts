@@ -108,6 +108,150 @@ describe("assembleContext — maxChunks", () => {
   });
 });
 
+describe("assembleContext — evidence compression", () => {
+  function makeLargeResult(
+    id: string,
+    language: string,
+    filePath: string,
+    signature: string,
+    bodyLine: string,
+    score: number
+  ): SearchResult {
+    const filler = Array.from({ length: 70 }, (_, i) =>
+      `  // filler implementation detail ${i} auth token route session`
+    ).join("\n");
+    return {
+      id,
+      score,
+      filePath,
+      name: id,
+      kind: "function",
+      startLine: 10,
+      endLine: 90,
+      content: `${signature}\n${bodyLine}\n${filler}\n}`,
+      docstring: `Handles ${id}`,
+      language,
+    };
+  }
+
+  it("compresses lower-ranked multilingual chunks with reversible chunk refs", () => {
+    const results: SearchResult[] = [
+      makeLargeResult(
+        "authController",
+        "typescript",
+        "src/auth/controller.ts",
+        "export async function authController(req: Request) {",
+        "  const token = req.headers.get('authorization');",
+        1
+      ),
+      makeLargeResult(
+        "verify_token",
+        "python",
+        "services/auth.py",
+        "def verify_token(token: str):",
+        "  raise ValueError('unauthorized token')",
+        0.98
+      ),
+      makeLargeResult(
+        "AuthRoute",
+        "go",
+        "cmd/server/auth.go",
+        "func AuthRoute(router *gin.Engine) {",
+        "  router.GET(\"/auth/callback\", callback)",
+        0.97
+      ),
+      makeLargeResult(
+        "check_session",
+        "rust",
+        "crates/auth/src/lib.rs",
+        "pub fn check_session(token: &str) -> Result<(), AuthError> {",
+        "  panic!(\"invalid auth token\")",
+        0.96
+      ),
+    ];
+
+    const ctx = assembleContext(results, 100_000, {
+      scoreFloorRatio: 0,
+      query: "auth token route",
+      compressionRank: 1,
+      contextCompressionEnabled: true,
+      contextCompressionPreserveTopChunks: 1,
+      contextCompressionMinChunkTokens: 1,
+      contextCompressionTargetRatio: 0.95,
+    });
+
+    expect(ctx.text).toContain("export async function authController");
+    expect(ctx.text).toContain("chunkId `verify_token`");
+    expect(ctx.text).toContain("chunkId `AuthRoute`");
+    expect(ctx.text).toContain("chunkId `check_session`");
+    expect(ctx.text).toContain("L10: def verify_token");
+    expect(ctx.text).toContain('"/auth/callback"');
+    expect(ctx.compression?.compressedChunks).toBeGreaterThanOrEqual(3);
+    expect(ctx.compression?.originalRefs.map((ref) => ref.chunkId)).toEqual([
+      "verify_token",
+      "AuthRoute",
+      "check_session",
+    ]);
+    expect(ctx.compression?.tokensSaved).toBeGreaterThan(0);
+  });
+
+  it("can disable compression even when compressionRank is set", () => {
+    const results = [
+      makeLargeResult(
+        "full_one",
+        "typescript",
+        "src/full.ts",
+        "export function full_one() {",
+        "  return '/auth/full';",
+        1
+      ),
+      makeLargeResult(
+        "full_two",
+        "python",
+        "src/full.py",
+        "def full_two():",
+        "  return '/auth/full'",
+        0.99
+      ),
+    ];
+
+    const ctx = assembleContext(results, 100_000, {
+      scoreFloorRatio: 0,
+      compressionRank: 1,
+      contextCompressionEnabled: false,
+      contextCompressionMinChunkTokens: 1,
+    });
+
+    expect(ctx.text).toContain("```python");
+    expect(ctx.text).toContain("def full_two");
+    expect(ctx.text).not.toContain("chunkId `full_two`");
+    expect(ctx.compression?.compressedChunks).toBe(0);
+  });
+
+  it("lets route compressionRank override global preserved chunk count", () => {
+    const results: SearchResult[] = [
+      makeLargeResult("primary", "typescript", "src/primary.ts", "export function primary() {", "  return '/auth/primary';", 1),
+      makeLargeResult("secondary", "typescript", "src/secondary.ts", "export function secondary() {", "  return '/auth/secondary';", 0.99),
+      makeLargeResult("third", "typescript", "src/third.ts", "export function third() {", "  return '/auth/third';", 0.98),
+    ];
+
+    const ctx = assembleContext(results, 100_000, {
+      scoreFloorRatio: 0,
+      query: "auth route",
+      compressionRank: 1,
+      contextCompressionEnabled: true,
+      contextCompressionPreserveTopChunks: 3,
+      contextCompressionMinChunkTokens: 1,
+      contextCompressionTargetRatio: 0.95,
+    });
+
+    expect(ctx.text).toContain("export function primary");
+    expect(ctx.text).toContain("chunkId `secondary`");
+    expect(ctx.text).toContain("chunkId `third`");
+    expect(ctx.compression?.originalRefs.map((ref) => ref.chunkId)).toEqual(["secondary", "third"]);
+  });
+});
+
 describe("assembleContext — directive header", () => {
   it("includes directive header by default", () => {
     const results = [makeResult("a", 1.0)];
