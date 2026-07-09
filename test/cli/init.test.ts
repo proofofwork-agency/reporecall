@@ -124,6 +124,11 @@ describe('initCommand — real file creation', () => {
     expect(command).toContain('$PROJECT_DIR')
     expect(command).toContain('.memory/daemon.token')
     expect(command).toContain('2>/dev/null || echo ""')
+    expect(command).toContain('WARN_FILE="$PROJECT_DIR/.memory/hook-warning.last"')
+    expect(command).toContain('"systemMessage"')
+    expect(command).toContain('Reporecall hook could not reach daemon')
+    expect(command).toContain('NOW - LAST')
+    expect(command).not.toContain('|| true')
     // Bearer header is templated, not a literal value
     expect(command).toContain('Authorization: Bearer $TOKEN')
   })
@@ -135,6 +140,10 @@ describe('initCommand — real file creation', () => {
     const content = readFileSync(claudeMdPath, 'utf-8')
     expect(content).toContain('<!-- reporecall -->')
     expect(content).toContain('## Reporecall')
+    expect(content).toContain('Check freshness first')
+    expect(content).toContain('EMPTY or STALE')
+    expect(content).toContain('recall_memories')
+    expect(content).not.toMatch(/\brecall_memory\b/)
   })
 
   it('does not duplicate config.json on re-init', async () => {

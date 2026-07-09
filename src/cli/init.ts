@@ -111,6 +111,7 @@ export function initCommand(): Command {
       // the project, so the fallback keeps local command hooks working in
       // headless/sdk-cli sessions.
       const tokenPath = resolve(configDataDir, 'daemon.token')
+      const hookWarningPath = resolve(configDataDir, 'hook-warning.last')
 
       const existingHooks = (settings.hooks ?? {}) as Record<string, unknown[]>
 
@@ -127,20 +128,30 @@ export function initCommand(): Command {
         // will reject it, which is safe.
         // Prefer $CLAUDE_PROJECT_DIR, but fall back to $PWD for headless
         // Claude entrypoints that do not propagate the stable project-dir env.
-        const relPath = relative(projectRoot, tokenPath)
-        if (!/^[\w./\\\-]+$/.test(relPath)) {
+        const tokenRelPath = relative(projectRoot, tokenPath)
+        const warningRelPath = relative(projectRoot, hookWarningPath)
+        for (const relPath of [tokenRelPath, warningRelPath]) {
+          if (/^[\w./\\\-]+$/.test(relPath)) continue
           console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
           process.exit(1)
         }
+        const warning = `Reporecall hook could not reach daemon at 127.0.0.1:${configPort}. Start it with reporecall serve; hook-injected context is unavailable until then.`
         const command = [
           `PROJECT_DIR="${'$'}{CLAUDE_PROJECT_DIR:-$PWD}";`,
-          `TOKEN=$(cat "$PROJECT_DIR/${relPath}" 2>/dev/null || echo "");`,
-          `curl -s -X POST`,
+          `TOKEN=$(cat "$PROJECT_DIR/${tokenRelPath}" 2>/dev/null || echo "");`,
+          `WARN_FILE="$PROJECT_DIR/${warningRelPath}";`,
+          `RESPONSE=$(curl -s -f -X POST`,
           `  -H "Authorization: Bearer $TOKEN"`,
           `  -H "Content-Type: application/json"`,
           `  --data-binary @-`,
-          `  "http://127.0.0.1:${configPort}${endpoint}"`,
-          `  2>/dev/null || true`
+          `  "http://127.0.0.1:${configPort}${endpoint}" 2>/dev/null);`,
+          `STATUS=$?;`,
+          `if [ "$STATUS" -eq 0 ]; then printf '%s' "$RESPONSE";`,
+          `else NOW=$(date +%s); LAST=$(cat "$WARN_FILE" 2>/dev/null || echo 0);`,
+          `case "$LAST" in ''|*[!0-9]*) LAST=0;; esac;`,
+          `if [ $((NOW - LAST)) -ge 300 ]; then mkdir -p "$(dirname "$WARN_FILE")"; echo "$NOW" > "$WARN_FILE";`,
+          `printf '%s' '${JSON.stringify({ systemMessage: warning })}';`,
+          `else printf '%s' '{}'; fi; fi; exit 0`
         ].join(' ')
 
         return {
@@ -252,11 +263,12 @@ export function initCommand(): Command {
 ${MEMORY_MARKER}
 ## Reporecall
 
-Codebase context is injected automatically via hooks on each message (marked "Relevant codebase context"). Follow this priority chain:
+Reporecall can provide codebase context through Claude Code hooks and MCP tools. Treat Reporecall output as useful evidence, not authority:
 
-1. **Answer from injected context first.** It contains files, symbols, and call graphs for the query — do not re-fetch files listed in the injected context header.
-2. **Fill gaps with any tool.** For multi-file questions, prefer Reporecall MCP search_context because it returns routed, token-budgeted context with compressed secondary evidence. Use search_code for raw hit lists, explain_flow/find_callers/get_symbol for graph navigation, and read_code_chunk to expand compressed chunkId refs. Grep/Read/Glob work for exact matches and raw lookups.
-3. **Avoid redundant searches.** Do not re-search for symbols or files already present in the injected context.
+1. **Check freshness first.** If injected context or an MCP response says the index is EMPTY or STALE, say so and refresh with \`refresh_context\` or \`reporecall index\` before relying on results.
+2. **Use injected context when it is fresh and relevant.** It may contain files, symbols, and call graphs for the query. Do not reread files only to duplicate context already shown, but verify with normal tools when evidence is incomplete or surprising.
+3. **Fill gaps with the right tool.** For multi-file questions, prefer Reporecall MCP \`search_context\` because it returns routed, token-budgeted context with compressed secondary evidence. Use \`search_code\` for raw hit lists, \`explain_flow\`/call graph tools for navigation, and \`read_code_chunk\` to expand compressed chunkId refs. Grep/Read/Glob remain appropriate for exact matches and sanity checks.
+4. **Notice hook failures.** If Claude reports that the Reporecall hook cannot reach the daemon, do not assume context was injected. Start \`reporecall serve\` or use MCP/CLI tools directly.
 
 If the injected context is marked "low confidence", steps 2 and 3 are appropriate immediately.
 
@@ -264,7 +276,7 @@ If the injected context is marked "low confidence", steps 2 and 3 are appropriat
 
 Reporecall maintains persistent project memory across sessions. Use these MCP tools:
 - **store_memory** — Save important project context, decisions, or patterns for future sessions.
-- **recall_memory** — Retrieve previously stored memories relevant to the current task.
+- **recall_memories** — Retrieve previously stored memories relevant to the current task.
 - **forget_memory** — Remove outdated or incorrect memories.
 
 Memories are automatically injected alongside code context when relevant to the query.
