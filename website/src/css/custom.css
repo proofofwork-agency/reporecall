@@ -1,0 +1,123 @@
+/* Reporecall docs theme */
+
+:root {
+  --ifm-color-primary: #4f46e5;
+  --ifm-color-primary-dark: #4338ca;
+  --ifm-color-primary-darker: #3730a3;
+  --ifm-color-primary-darkest: #312e81;
+  --ifm-color-primary-light: #6366f1;
+  --ifm-color-primary-lighter: #818cf8;
+  --ifm-color-primary-lightest: #a5b4fc;
+  --ifm-code-font-size: 95%;
+  --ifm-font-family-monospace: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+  --docusaurus-highlight-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #818cf8;
+  --ifm-color-primary-dark: #6366f1;
+  --ifm-color-primary-darker: #4f46e5;
+  --ifm-color-primary-darkest: #4338ca;
+  --ifm-color-primary-light: #a5b4fc;
+  --ifm-color-primary-lighter: #c7d2fe;
+  --ifm-color-primary-lightest: #e0e7ff;
+  --docusaurus-highlight-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* ---- Homepage hero ---- */
+.heroBanner {
+  padding: 5rem 0 4rem;
+  text-align: center;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    var(--ifm-color-primary-darkest),
+    var(--ifm-color-primary)
+  );
+  overflow: hidden;
+}
+
+.heroTitle {
+  font-size: 3.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+.heroSubtitle {
+  font-size: 1.3rem;
+  opacity: 0.95;
+  max-width: 720px;
+  margin: 0 auto 1.75rem;
+  line-height: 1.5;
+}
+
+.heroButtons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.heroButtons .button--outline {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.heroButtons .button--outline:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: #fff;
+}
+
+.heroInstall {
+  margin-top: 2rem;
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0.6rem 1.1rem;
+  border-radius: 8px;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.95rem;
+}
+
+/* ---- Feature cards ---- */
+.featuresSection {
+  padding: 3.5rem 0 2rem;
+}
+
+.featureCard {
+  height: 100%;
+  padding: 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  background: var(--ifm-background-surface-color);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.featureCard:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-3px);
+}
+
+.featureCard h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1.15rem;
+}
+
+.featureCard p {
+  margin-bottom: 0;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.col--4 {
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .heroTitle {
+    font-size: 2.4rem;
+  }
+  .heroSubtitle {
+    font-size: 1.1rem;
+  }
+}
