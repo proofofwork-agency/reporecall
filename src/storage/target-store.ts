@@ -8,6 +8,7 @@ import type {
 
 export class TargetStore {
   private static readonly SQLITE_PARAM_LIMIT = 900;
+  private static readonly MAX_ALIASES_PER_TARGET = 24;
 
   private replaceTargetStmt!: Database.Statement;
   private replaceAliasStmt!: Database.Statement;
@@ -50,6 +51,11 @@ export class TargetStore {
       CREATE INDEX IF NOT EXISTS idx_targets_subsystem ON targets(subsystem);
       CREATE INDEX IF NOT EXISTS idx_target_aliases_lookup ON target_aliases(normalized_alias, weight DESC);
     `);
+    this.pruneAliasTable();
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_target_aliases_unique_normalized
+        ON target_aliases(target_id, normalized_alias);
+    `);
 
     this.replaceTargetStmt = this.db.prepare(
       `INSERT OR REPLACE INTO targets
@@ -90,6 +96,7 @@ export class TargetStore {
   }
 
   replaceAll(targets: StoredTarget[], aliases: StoredTargetAlias[]): void {
+    const prunedAliases = this.prepareAliasesForStorage(aliases);
     this.db.transaction(() => {
       this.deleteAliasesStmt.run();
       this.deleteTargetsStmt.run();
@@ -105,7 +112,7 @@ export class TargetStore {
           target.confidence
         );
       }
-      for (const alias of aliases) {
+      for (const alias of prunedAliases) {
         this.replaceAliasStmt.run(
           alias.targetId,
           alias.alias,
@@ -138,6 +145,16 @@ export class TargetStore {
       this.deleteAliasesStmt.run();
       this.deleteTargetsStmt.run();
     })();
+  }
+
+  getTargetCount(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM targets`).get() as { count: number };
+    return Number(row.count);
+  }
+
+  getAliasCount(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM target_aliases`).get() as { count: number };
+    return Number(row.count);
   }
 
   resolveAliases(
@@ -196,6 +213,106 @@ export class TargetStore {
     const bindings: unknown[] = values.slice();
     while (bindings.length < TargetStore.SQLITE_PARAM_LIMIT) bindings.push(null);
     return bindings;
+  }
+
+  private prepareAliasesForStorage(aliases: StoredTargetAlias[]): StoredTargetAlias[] {
+    const deduped = new Map<string, StoredTargetAlias>();
+    for (const alias of aliases) {
+      const key = `${alias.targetId}:${alias.normalizedAlias}`;
+      const existing = deduped.get(key);
+      if (!existing || this.compareAliases(existing, alias) > 0) {
+        deduped.set(key, alias);
+      }
+    }
+
+    const grouped = new Map<string, StoredTargetAlias[]>();
+    for (const alias of deduped.values()) {
+      const group = grouped.get(alias.targetId) ?? [];
+      group.push(alias);
+      grouped.set(alias.targetId, group);
+    }
+
+    const pruned: StoredTargetAlias[] = [];
+    for (const group of grouped.values()) {
+      pruned.push(...group.sort((a, b) => this.compareAliases(a, b)).slice(0, TargetStore.MAX_ALIASES_PER_TARGET));
+    }
+    return pruned;
+  }
+
+  private compareAliases(a: StoredTargetAlias, b: StoredTargetAlias): number {
+    if (b.weight !== a.weight) return b.weight - a.weight;
+    const sourceDelta = this.sourcePriority(b.source) - this.sourcePriority(a.source);
+    if (sourceDelta !== 0) return sourceDelta;
+    const aTokens = a.normalizedAlias.split(" ").length;
+    const bTokens = b.normalizedAlias.split(" ").length;
+    if (bTokens !== aTokens) return bTokens - aTokens;
+    if (b.normalizedAlias.length !== a.normalizedAlias.length) return b.normalizedAlias.length - a.normalizedAlias.length;
+    return a.alias.localeCompare(b.alias);
+  }
+
+  private sourcePriority(source: StoredTargetAlias["source"]): number {
+    switch (source) {
+      case "symbol": return 6;
+      case "file_path": return 5;
+      case "parent_dir": return 4;
+      case "slug": return 3;
+      case "literal": return 2;
+      case "derived": return 1;
+    }
+  }
+
+  private pruneAliasTable(): void {
+    this.db.exec(`
+      DELETE FROM target_aliases
+      WHERE rowid NOT IN (
+        SELECT rowid FROM (
+          SELECT
+            rowid,
+            ROW_NUMBER() OVER (
+              PARTITION BY target_id, normalized_alias
+              ORDER BY
+                weight DESC,
+                CASE source
+                  WHEN 'symbol' THEN 6
+                  WHEN 'file_path' THEN 5
+                  WHEN 'parent_dir' THEN 4
+                  WHEN 'slug' THEN 3
+                  WHEN 'literal' THEN 2
+                  ELSE 1
+                END DESC,
+                LENGTH(normalized_alias) DESC,
+                LENGTH(alias) ASC
+            ) AS rn
+          FROM target_aliases
+        )
+        WHERE rn = 1
+      );
+
+      DELETE FROM target_aliases
+      WHERE rowid NOT IN (
+        SELECT rowid FROM (
+          SELECT
+            rowid,
+            ROW_NUMBER() OVER (
+              PARTITION BY target_id
+              ORDER BY
+                weight DESC,
+                CASE source
+                  WHEN 'symbol' THEN 6
+                  WHEN 'file_path' THEN 5
+                  WHEN 'parent_dir' THEN 4
+                  WHEN 'slug' THEN 3
+                  WHEN 'literal' THEN 2
+                  ELSE 1
+                END DESC,
+                LENGTH(normalized_alias) DESC,
+                LENGTH(alias) ASC
+            ) AS rn
+          FROM target_aliases
+        )
+        WHERE rn <= ${TargetStore.MAX_ALIASES_PER_TARGET}
+      );
+    `);
   }
 
   private mapTarget(row: Record<string, unknown>): StoredTarget {

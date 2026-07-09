@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { resolve } from "path";
-import { mkdirSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve } from "path";
+import { execFileSync } from "child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { createServer, type Server } from "http";
 import { createDaemonServer } from "../../src/daemon/server.js";
+import { clearFreshnessCache } from "../../src/core/staleness.js";
 
 // 3F: Daemon HTTP endpoints
 
@@ -59,7 +62,7 @@ function makeSearch(overrides?: Partial<any>): any {
 function makeMetadata(overrides?: Partial<any>): any {
   return {
     getStats: () => ({ totalFiles: 3, totalChunks: 12, languages: { typescript: 12 } }),
-    getStat: (_key: string) => undefined,
+    getStat: (key: string) => key === "lastIndexedAt" ? "2026-04-02T00:00:00.000Z" : undefined,
     setStat: () => {},
     recordLatency: () => {},
     incrementRouteStat: () => {},
@@ -69,6 +72,21 @@ function makeMetadata(overrides?: Partial<any>): any {
     close: () => {},
     ...overrides,
   };
+}
+
+function runGit(projectRoot: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+function commitFile(projectRoot: string, fileName: string, content: string): string {
+  writeFileSync(join(projectRoot, fileName), content);
+  runGit(projectRoot, ["add", fileName]);
+  runGit(projectRoot, ["-c", "user.name=Reporecall Test", "-c", "user.email=test@example.com", "commit", "-m", `commit ${fileName}`]);
+  return runGit(projectRoot, ["rev-parse", "HEAD"]);
 }
 
 async function request(
@@ -142,6 +160,7 @@ describe("daemon HTTP server (3F)", () => {
       server.close((err) => (err ? rej(err) : res()))
     );
     rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    clearFreshnessCache();
   });
 
   it("GET /health returns status ok", async () => {
@@ -218,6 +237,103 @@ describe("daemon HTTP server (3F)", () => {
     expect(body).toHaveProperty("hookSpecificOutput");
     expect(body.hookSpecificOutput.additionalContext).toBe("");
     expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+  });
+
+  it("POST /hooks/prompt-context with empty index returns only the honesty banner", async () => {
+    await new Promise<void>((res, rej) =>
+      server.close((err) => (err ? rej(err) : res()))
+    );
+
+    const config = makeConfig(port);
+    const emptyMetadata = makeMetadata({
+      getStats: () => ({ totalFiles: 0, totalChunks: 0, languages: {} }),
+    });
+    const result = createDaemonServer(
+      config,
+      makeSearch({
+        searchWithContext: async () => {
+          throw new Error("search should not run for empty index");
+        },
+      }),
+      emptyMetadata
+    );
+    server = result.server;
+    token = result.token;
+    await new Promise<void>((res) => server.listen(port, "127.0.0.1", res));
+
+    const { status, body } = await request(port, "POST", "/hooks/prompt-context", {
+      query: "how does authentication work",
+    }, token);
+
+    expect(status).toBe(200);
+    expect(body.hookSpecificOutput).toEqual({
+      hookEventName: "UserPromptSubmit",
+      additionalContext: "⚠ reporecall index EMPTY: no indexed code context is available. Run refresh_context or `reporecall index`.",
+    });
+  });
+
+  it("POST /hooks/prompt-context schedules background auto-refresh when index is stale", async () => {
+    await new Promise<void>((res, rej) =>
+      server.close((err) => (err ? rej(err) : res()))
+    );
+
+    const projectRoot = mkdtempSync(join(tmpdir(), "reporecall-autorefresh-"));
+    try {
+      runGit(projectRoot, ["init"]);
+      const indexedCommit = commitFile(projectRoot, "a.ts", "export const a = 1;\n");
+      commitFile(projectRoot, "b.ts", "export const b = 2;\n");
+
+      const searchWithContext = async () => ({
+        text: "## src/auth.ts\nfunction authenticate() {}",
+        tokenCount: 15,
+        chunks: [
+          {
+            id: "c1",
+            filePath: "src/auth.ts",
+            name: "authenticate",
+            kind: "function_declaration",
+            startLine: 1,
+            endLine: 5,
+            content: "function authenticate() {}",
+            language: "typescript",
+            score: 0.9,
+          },
+        ],
+      });
+      const config = { ...makeConfig(port), projectRoot, debounceMs: 10 };
+      let refreshCalls = 0;
+      const result = createDaemonServer(
+        config,
+        makeSearch({ searchWithContext }),
+        makeMetadata({
+          getStat: (key: string) => {
+            if (key === "lastIndexedAt") return "2026-04-02T00:00:00.000Z";
+            if (key === "indexedCommit") return indexedCommit;
+            return undefined;
+          },
+        }),
+        {
+          refreshIndex: async () => {
+            refreshCalls += 1;
+          },
+        }
+      );
+      server = result.server;
+      token = result.token;
+      await new Promise<void>((res) => server.listen(port, "127.0.0.1", res));
+
+      const { status, body } = await request(port, "POST", "/hooks/prompt-context", {
+        query: "how does authentication work",
+      }, token);
+      await new Promise((res) => setTimeout(res, 40));
+
+      expect(status).toBe(200);
+      expect(body.hookSpecificOutput.additionalContext).toContain("reporecall index STALE");
+      expect(body.hookSpecificOutput.additionalContext).toContain("authenticate");
+      expect(refreshCalls).toBe(1);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it("GET /unknown returns 404", async () => {
@@ -467,6 +583,7 @@ describe("daemon HTTP server — debug mode", () => {
       server.close((err) => (err ? rej(err) : res()))
     );
     rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    clearFreshnessCache();
   });
 
   it("X-Memory-Debug header is present on session-start when debugMode is true", async () => {
@@ -529,7 +646,7 @@ describe("daemon HTTP server — debug mode", () => {
     expect(parsed).toHaveProperty("hookEventName", "UserPromptSubmit");
     expect(parsed).toHaveProperty("queryMode", "trace");
     expect(parsed.chunks).toBe(1);
-    expect(parsed.tokens).toBe(10);
+    expect(parsed.tokens).toBeGreaterThan(10);
     expect(parsed).toHaveProperty("queryClassification");
     expect(parsed.queryClassification).toMatchObject({
       isCodeQuery: true,

@@ -1,5 +1,5 @@
 import { resolve, dirname } from "path";
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, statSync } from "fs";
 import type Database from "better-sqlite3";
 import type {
   ChunkScoringInfo,
@@ -57,6 +57,7 @@ export type {
  */
 export class MetadataStore {
   private db: Database.Database;
+  private dbPath: string;
   private chunks: ChunkStore;
   private callEdges: CallEdgeStore;
   private stats: StatsStore;
@@ -68,6 +69,7 @@ export class MetadataStore {
 
   constructor(dataDir: string) {
     const dbPath = resolve(dataDir, "metadata.db");
+    this.dbPath = dbPath;
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = openSqliteWithRecovery(dbPath);
     this.chunks = new ChunkStore(this.db);
@@ -190,6 +192,29 @@ export class MetadataStore {
       totalFiles: this.chunks.getFileCount(),
       totalChunks: this.chunks.getChunkCount(),
       languages: this.chunks.getLanguageCounts(),
+    };
+  }
+
+  getStorageStats(): {
+    metadataDbBytes: number;
+    metadataDbPageBytes: number;
+    metadataDbFreeBytes: number;
+    metadataDbUsedBytes: number;
+    targetCount: number;
+    targetAliasCount: number;
+  } {
+    const pageSize = Number(this.db.pragma("page_size", { simple: true }) ?? 0);
+    const pageCount = Number(this.db.pragma("page_count", { simple: true }) ?? 0);
+    const freelistCount = Number(this.db.pragma("freelist_count", { simple: true }) ?? 0);
+    const pageBytes = pageSize * pageCount;
+    const freeBytes = pageSize * freelistCount;
+    return {
+      metadataDbBytes: existsSync(this.dbPath) ? statSync(this.dbPath).size : 0,
+      metadataDbPageBytes: pageBytes,
+      metadataDbFreeBytes: freeBytes,
+      metadataDbUsedBytes: Math.max(0, pageBytes - freeBytes),
+      targetCount: this.targets.getTargetCount(),
+      targetAliasCount: this.targets.getAliasCount(),
     };
   }
 

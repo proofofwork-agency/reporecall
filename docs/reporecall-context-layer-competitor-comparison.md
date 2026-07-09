@@ -17,7 +17,7 @@ They show:
 - Product-area evidence.
 - `reporecall explain --json`.
 - `reporecall lens --json` and Lens HTML.
-- MCP business and Lens export tools.
+- Compact MCP tools.
 
 ## Positioning
 
@@ -29,7 +29,7 @@ Reporecall is best positioned as a local context engine for coding agents:
 - It routes questions by intent.
 - It selects source files with provenance.
 - It adds graph, wiki, memory, and business-context layers.
-- It exposes the result through hooks, MCP tools, `explain --json`, `lens --json`, and MCP `get_lens_data`.
+- It exposes the result through hooks, compact MCP tools, `explain --json`, `lens --json`, and Lens HTML.
 
 The main value is better context for agents, not model hosting or an AI editor UI.
 
@@ -46,13 +46,13 @@ Reporecall's current context stack:
 | Capability evidence | Selects concrete files for flows and architecture questions with `selectionSource`, `selectionReason`, and `wikiPagesUsed`. |
 | Business layer | Exposes `productAreas[]` with `areaKind`, `businessPages[]`, `productAreasUsed[]`, and `businessPagesUsed[]`. |
 | Memory layer | Stores durable facts, rules, decisions, feedback, and working context. |
-| Public surfaces | Claude hooks, MCP tools, `explain --json`, `lens --json`, MCP `get_lens_data`, and Lens HTML. |
+| Public surfaces | Claude hooks, compact MCP tools, `explain --json`, `lens --json`, and Lens HTML. |
 
 ## Competitor Matrix
 
 | Tool | Context Layer | Memory / Rules | Code Graph | Business/Product Layer | Local-first | Best At |
 | --- | --- | --- | --- | --- | --- | --- |
-| Reporecall | Intent routing, local code chunks, graph, wiki, capability resolver, product areas | Persistent local memory, generated wiki, business pages | Imports, calls, topology, Lens | Yes: `productAreas[]`, `businessPages[]`, MCP business query | Yes | Supplying better repo context to agents |
+| Reporecall | Intent routing, local code chunks, graph, wiki, capability resolver, product areas | Persistent local memory, generated wiki, business pages | Imports, calls, topology, Lens | Yes: `productAreas[]`, `businessPages[]`, Lens/explain JSON | Yes | Supplying better repo context to agents |
 | Cursor | Editor context, codebase indexing, agents, MCP | Project rules, user rules, generated memories | Some codebase awareness | No first-class product-area layer | Partly | Integrated AI editor workflow |
 | Windsurf | IDE context, Cascade, local/remote indexing | Memories and rules | Codebase context engine | No first-class product-area layer | Partly; remote indexing exists for teams | AI IDE with agent workflow |
 | Continue | Context providers, codebase/search providers, MCP | Configurable assistants and rules | Depends on providers | No built-in product layer | Strong open-source angle | Customizable OSS agent stack |
@@ -87,7 +87,7 @@ Reporecall is stronger when you want:
 
 - Local deterministic indexing.
 - Tool-agnostic context exports.
-- MCP business-context tools.
+- CLI Lens/explain business-context exports.
 - A product/business layer over code evidence.
 
 Windsurf is stronger when you want a complete editor and agent experience out of the box.
@@ -199,8 +199,8 @@ Key strengths:
 - Durable memory.
 - Business capability pages.
 - Product-area aggregation.
-- MCP tools for code and business context.
-- `lens --json`, MCP `get_lens_data`, and `explain --json` for external tools.
+- Compact MCP tools for code context, flow navigation, memory, refresh, and stats.
+- `lens --json` and `explain --json` for external tools.
 - Auditable provenance through `selectionSource`, `selectionReason`, and `wikiPagesUsed`.
 
 ## Reporecall Weaknesses

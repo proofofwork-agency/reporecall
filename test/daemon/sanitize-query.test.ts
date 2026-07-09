@@ -55,7 +55,8 @@ describe("sanitizeQuery", () => {
     expect(result).toContain("explain this function");
     expect(result).toContain("how does it work");
     expect(result).not.toContain("return");
-    expect(result).not.toContain("hello");
+    expect(result).toContain("hello");
+    expect(result).not.toContain("world");
   });
 
   it("strips bare fenced code blocks (no language tag)", () => {
@@ -83,7 +84,7 @@ describe("sanitizeQuery", () => {
   });
 
   it("skips export statements", () => {
-    expect(sanitizeQuery("export default App")).toBe("");
+    expect(sanitizeQuery("export default App")).toBe("App");
   });
 
   it("skips if/for/while control flow", () => {
@@ -119,9 +120,24 @@ describe("sanitizeQuery", () => {
 
   // --- Truncation ---
 
-  it("truncates to 500 characters", () => {
-    const longQuery = "a ".repeat(300);
-    expect(sanitizeQuery(longQuery).length).toBeLessThanOrEqual(500);
+  it("truncates to 1200 characters", () => {
+    const longQuery = "a ".repeat(800);
+    expect(sanitizeQuery(longQuery).length).toBeLessThanOrEqual(1200);
+  });
+
+  it("keeps explicit code identifiers and paths as query hints", () => {
+    const input = [
+      "why does this route fail",
+      "`handlePromptContextDetailed`",
+      "src/daemon/server.ts",
+      "const currentCommit = await resolveCurrentCommit(projectRoot)",
+    ].join("\n");
+
+    const result = sanitizeQuery(input);
+    expect(result).toContain("handlePromptContextDetailed");
+    expect(result).toContain("src/daemon/server.ts");
+    expect(result).toContain("currentCommit");
+    expect(result).toContain("resolveCurrentCommit");
   });
 
   // --- Edge cases ---

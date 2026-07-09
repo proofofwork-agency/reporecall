@@ -5,6 +5,7 @@ import { getLogger } from "../core/logger.js";
 
 const TABLE_NAME = "chunks";
 const ALLOWED_FILTER_FIELDS = new Set(["id", "filePath"]);
+const VECTOR_DELETE_BATCH_SIZE = 25;
 
 /**
  * Escape a string value for use in a LanceDB SQL filter predicate.
@@ -267,10 +268,24 @@ export class VectorStore {
     if (filePaths.length === 0) return;
     const table = await this.getTable();
     if (!table) return;
-    try {
-      await table.delete(buildOrPredicate("filePath", filePaths));
-    } catch (err) {
-      getLogger().warn({ err, count: filePaths.length }, "VectorStore.removeByFiles: failed to delete records");
+    const uniquePaths = Array.from(new Set(filePaths)).filter((p) => p.length > 0);
+    for (let i = 0; i < uniquePaths.length; i += VECTOR_DELETE_BATCH_SIZE) {
+      const batch = uniquePaths.slice(i, i + VECTOR_DELETE_BATCH_SIZE);
+      try {
+        await table.delete(buildOrPredicate("filePath", batch));
+      } catch (err) {
+        getLogger().warn(
+          { err, count: batch.length },
+          "VectorStore.removeByFiles: batch delete failed; retrying per file"
+        );
+        for (const filePath of batch) {
+          try {
+            await table.delete(buildEqualsPredicate("filePath", filePath));
+          } catch (fileErr) {
+            getLogger().warn({ err: fileErr, filePath }, "VectorStore.removeByFiles: failed to delete file records");
+          }
+        }
+      }
     }
   }
 

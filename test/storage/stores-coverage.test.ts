@@ -261,6 +261,102 @@ describe("TargetStore", () => {
     store.clearAll();
     expect(store.findTargetById("file_module:src/auth/session.ts")).toBeUndefined();
   });
+
+  it("dedupes and caps aliases written through replaceAll", () => {
+    store.replaceAll(
+      [
+        {
+          id: "symbol:large",
+          kind: "symbol" as const,
+          canonicalName: "LargeSymbol",
+          normalizedName: "large symbol",
+          filePath: "src/large.ts",
+          ownerChunkId: "large",
+          confidence: 0.95,
+        },
+      ],
+      [
+        {
+          targetId: "symbol:large",
+          alias: "shared",
+          normalizedAlias: "shared",
+          source: "derived" as const,
+          weight: 0.4,
+        },
+        {
+          targetId: "symbol:large",
+          alias: "shared",
+          normalizedAlias: "shared",
+          source: "symbol" as const,
+          weight: 1,
+        },
+        ...Array.from({ length: 40 }, (_, i) => ({
+          targetId: "symbol:large",
+          alias: `alias-${i}`,
+          normalizedAlias: `alias ${i}`,
+          source: "derived" as const,
+          weight: 0.5 - i / 1000,
+        })),
+      ]
+    );
+
+    expect(store.getTargetCount()).toBe(1);
+    expect(store.getAliasCount()).toBe(24);
+    const hits = store.resolveAliases(["shared"]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].source).toBe("symbol");
+  });
+
+  it("prunes legacy oversized alias tables during schema initialization", () => {
+    const legacyDir = mkdtempSync(join(tmpdir(), "mem-target-legacy-"));
+    const legacyDb = openDb(legacyDir, "target.db");
+    try {
+      legacyDb.exec(`
+        CREATE TABLE targets (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          canonical_name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          owner_chunk_id TEXT,
+          subsystem TEXT,
+          confidence REAL NOT NULL
+        );
+        CREATE TABLE target_aliases (
+          target_id TEXT NOT NULL,
+          alias TEXT NOT NULL,
+          normalized_alias TEXT NOT NULL,
+          source TEXT NOT NULL,
+          weight REAL NOT NULL,
+          PRIMARY KEY (target_id, normalized_alias, source)
+        );
+      `);
+      legacyDb.prepare(
+        `INSERT INTO targets (id, kind, canonical_name, normalized_name, file_path, owner_chunk_id, subsystem, confidence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("symbol:legacy", "symbol", "LegacySymbol", "legacy symbol", "src/legacy.ts", "legacy", null, 0.9);
+      const insert = legacyDb.prepare(
+        `INSERT INTO target_aliases (target_id, alias, normalized_alias, source, weight)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      insert.run("symbol:legacy", "shared-low", "shared", "derived", 0.4);
+      insert.run("symbol:legacy", "shared-high", "shared", "symbol", 1);
+      for (let i = 0; i < 50; i += 1) {
+        insert.run("symbol:legacy", `legacy-${i}`, `legacy ${i}`, "derived", 0.5 - i / 1000);
+      }
+
+      const legacyStore = new TargetStore(legacyDb);
+      legacyStore.initSchema();
+
+      expect(legacyStore.getAliasCount()).toBe(24);
+      const hits = legacyStore.resolveAliases(["shared"]);
+      expect(hits).toHaveLength(1);
+      expect(hits[0].alias).toBe("shared-high");
+    } finally {
+      legacyDb.close();
+      rmSync(legacyDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("CommunityStore", () => {

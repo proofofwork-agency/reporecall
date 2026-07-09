@@ -101,6 +101,8 @@ export interface MemoryConfig {
   topologyEnabled?: boolean;
   /** Skip topology graph construction above this indexed chunk count */
   topologyMaxChunks?: number;
+  /** Automatically refresh the index in the background when stale drift is detected */
+  autoRefresh?: boolean;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -184,6 +186,7 @@ const UserConfigSchema = z.object({
   contextCompressionTargetRatio: z.number().min(0.1).max(0.95).optional(),
   topologyEnabled: z.boolean().optional(),
   topologyMaxChunks: z.number().int().min(100).optional(),
+  autoRefresh: z.boolean().optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -211,6 +214,11 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", "REPORECALL.md", ".mcp.json",
     ".codex", ".codex/**", ".claude", ".claude/**", ".agents", ".agents/**",
     ".cursor", ".cursor/**", ".continue", ".continue/**", ".playwright-mcp", ".playwright-mcp/**",
+    // Parser/test fixtures are intentionally heterogeneous and should not be
+    // indexed as first-class project evidence by default.
+    "test/fixtures", "test/fixtures/**", "tests/fixtures", "tests/fixtures/**",
+    "test/__fixtures__", "test/__fixtures__/**", "tests/__fixtures__", "tests/__fixtures__/**",
+    "spec/fixtures", "spec/fixtures/**", "specs/fixtures", "specs/fixtures/**",
   ],
   maxFileSize: 100 * 1024,
   batchSize: 32,
@@ -277,6 +285,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   contextCompressionTargetRatio: 0.75,
   topologyEnabled: true,
   topologyMaxChunks: 50_000,
+  autoRefresh: true,
   factExtractors: [],
   conceptBundles: [
     {

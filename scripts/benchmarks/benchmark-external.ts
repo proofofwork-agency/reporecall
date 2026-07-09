@@ -5,7 +5,7 @@ import { join } from "path";
 import {
   printExternalResults,
   runExternalBenchmark,
-} from "./test/benchmark/external-runner.js";
+} from "../../test/benchmark/external-runner.js";
 
 type Provider = "keyword" | "semantic";
 
@@ -41,7 +41,7 @@ async function main() {
   const results = await runExternalBenchmark(providerArg, fixturePath);
   printExternalResults(results);
 
-  const jsonPath = outputPath ?? join(process.cwd(), "external-benchmark-results.json");
+  const jsonPath = outputPath ?? join(process.cwd(), "scripts/benchmarks/external-benchmark-results.json");
   writeFileSync(jsonPath, JSON.stringify({ timestamp: new Date().toISOString(), external: results }, null, 2));
   console.log(`\nResults written to: ${jsonPath}`);
 }

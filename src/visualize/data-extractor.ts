@@ -71,11 +71,15 @@ export function extractDashboardData(
   const chunkCommunityMap = new Map<string, string>();
   const communityChunks = new Map<string, Array<{ name: string; filePath: string; kind: string }>>();
   if (allChunks.length > 0) {
-    const bulkMemberships = (metadata as {
-      getMembershipsForChunks?: (chunkIds: string[]) => Map<string, string>;
-    }).getMembershipsForChunks;
-    const membershipMap = bulkMemberships
-      ? bulkMemberships(allChunks.map((chunk) => chunk.id))
+    const hasBulkMemberships =
+      typeof (metadata as {
+        getMembershipsForChunks?: (chunkIds: string[]) => Map<string, string>;
+      }).getMembershipsForChunks === "function";
+    // Call as a method on `metadata` so `this` stays bound. Pulling the function
+    // off the object and invoking it unbound loses `this`, which crashes inside
+    // the store (`this.communities` is undefined).
+    const membershipMap = hasBulkMemberships
+      ? metadata.getMembershipsForChunks(allChunks.map((chunk) => chunk.id))
       : null;
     for (const chunk of allChunks) {
       const cid = membershipMap

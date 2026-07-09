@@ -1,5 +1,7 @@
 # Reporecall v0.7.0 vs v0.6.2 Comparison
 
+> Historical note: this document describes the v0.7 MCP surface. Current builds expose the compact WP5 MCP surface (`search_context`, `search_code`, `explain_flow`, `memory`, `refresh_context`, `get_stats`) and keep full business/Lens exports on CLI JSON surfaces.
+
 This document compares the current Reporecall working tree, prepared as `0.7.0`, against the previous `0.6.2` release baseline.
 
 The short version: `0.6.2` made Reporecall visible and navigable through the Lens dashboard. `0.7.0` makes Reporecall more useful to agents by improving retrieval coverage, adding capability evidence, and exposing business-oriented context as a public, generic output.

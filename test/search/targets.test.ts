@@ -161,4 +161,26 @@ describe("targets", () => {
     expect(aliases).toContain("generate image");
     expect(aliases).toContain("storyboard controller");
   });
+
+  it("dedupes aliases by normalized text and caps aliases per target", () => {
+    const catalog = buildTargetCatalog([
+      makeChunk({
+        id: "large-name",
+        name: "VeryLargeComplexProcessRequestHandlerControllerServiceFactoryRegistryBuilder",
+        filePath: "src/services/very-large-complex-process-request-handler-controller-service-factory-registry-builder.ts",
+      }),
+    ], ["src/", "lib/", "bin/"]);
+
+    const byTarget = new Map<string, string[]>();
+    for (const alias of catalog.aliases) {
+      const aliases = byTarget.get(alias.targetId) ?? [];
+      aliases.push(alias.normalizedAlias);
+      byTarget.set(alias.targetId, aliases);
+    }
+
+    for (const aliases of byTarget.values()) {
+      expect(aliases.length).toBeLessThanOrEqual(24);
+      expect(new Set(aliases).size).toBe(aliases.length);
+    }
+  });
 });

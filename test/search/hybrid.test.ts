@@ -423,7 +423,7 @@ describe("HybridSearch", () => {
         startLine: 1,
         endLine: 40,
         content:
-          'server.registerTool("search_code", {});\nserver.registerTool("find_callees", {});',
+          'server.registerTool("search_code", {});\nserver.registerTool("explain_flow", {});',
         language: "typescript",
         indexedAt: now,
       },
@@ -452,7 +452,7 @@ describe("HybridSearch", () => {
     const context = await search.searchWithContext("What MCP tools are exposed?", 2000);
     expect(context.chunks[0].filePath).toBe("src/daemon/mcp-server.ts");
     expect(context.text).toContain("## Direct facts");
-    expect(context.text).toContain("search_code, find_callees");
+    expect(context.text).toContain("search_code, explain_flow");
   });
 
   it("should use configurable implementationPaths", async () => {

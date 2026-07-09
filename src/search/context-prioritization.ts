@@ -546,7 +546,7 @@ export function buildSummaryOnlyBroadContext(
     "## Relevant codebase context",
     "",
     "> Reporecall deferred broad code injection because the candidate bundle is low confidence.",
-    "> Expand with Reporecall MCP tools first (`search_code`, `explain_flow`, `find_callers`, `get_symbol`) before grep.",
+    "> Expand with Reporecall MCP tools first (`search_code`, `explain_flow` actions) before grep.",
     "",
     `- Query: ${query}`,
     `- Broad mode: ${diagnostics.broadMode}`,

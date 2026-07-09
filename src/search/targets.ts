@@ -20,6 +20,15 @@ const ENDPOINT_DIR_HINT_RE = /(?:^|\/)(api|apis|route|routes|function|functions|
 const EXPLICIT_TARGET_RE = /\b(?:show|trace|explain|debug|fix|where|find)\b/i;
 const IMPLEMENTATION_PATH_HINTS = new Set(["src", "lib", "bin", "app", "server", "services", "supabase"]);
 const GENERIC_ALIAS_TERMS = new Set(["callback", "function", "handler", "service", "route", "routing", "request", "session", "process", "files", "results", "result", "tool", "tools", "server", "handle", "prompt", "storage"]);
+const MAX_ALIASES_PER_TARGET = 24;
+const TARGET_ALIAS_SOURCE_PRIORITY: Record<TargetAliasSource, number> = {
+  symbol: 6,
+  file_path: 5,
+  parent_dir: 4,
+  slug: 3,
+  literal: 2,
+  derived: 1,
+};
 
 export interface ResolvedTargetCandidate {
   target: StoredTarget;
@@ -84,9 +93,9 @@ function addAlias(
 ): void {
   const normalizedAlias = normalizeTargetText(alias);
   if (!normalizedAlias || normalizedAlias.length < 2) return;
-  const key = `${targetId}:${normalizedAlias}:${source}`;
+  const key = `${targetId}:${normalizedAlias}`;
   const existing = aliases.get(key);
-  if (existing && existing.weight >= weight) return;
+  if (existing && compareStoredAliases(existing, { targetId, alias, normalizedAlias, source, weight }) <= 0) return;
   aliases.set(key, {
     targetId,
     alias,
@@ -94,6 +103,32 @@ function addAlias(
     source,
     weight,
   });
+}
+
+function compareStoredAliases(a: StoredTargetAlias, b: StoredTargetAlias): number {
+  if (b.weight !== a.weight) return b.weight - a.weight;
+  const sourceDelta = TARGET_ALIAS_SOURCE_PRIORITY[b.source] - TARGET_ALIAS_SOURCE_PRIORITY[a.source];
+  if (sourceDelta !== 0) return sourceDelta;
+  const aTokens = a.normalizedAlias.split(" ").length;
+  const bTokens = b.normalizedAlias.split(" ").length;
+  if (bTokens !== aTokens) return bTokens - aTokens;
+  if (b.normalizedAlias.length !== a.normalizedAlias.length) return b.normalizedAlias.length - a.normalizedAlias.length;
+  return a.alias.localeCompare(b.alias);
+}
+
+function capAliasesByTarget(aliases: StoredTargetAlias[]): StoredTargetAlias[] {
+  const grouped = new Map<string, StoredTargetAlias[]>();
+  for (const alias of aliases) {
+    const group = grouped.get(alias.targetId) ?? [];
+    group.push(alias);
+    grouped.set(alias.targetId, group);
+  }
+
+  const capped: StoredTargetAlias[] = [];
+  for (const group of grouped.values()) {
+    capped.push(...group.sort(compareStoredAliases).slice(0, MAX_ALIASES_PER_TARGET));
+  }
+  return capped;
 }
 
 function buildAliasSet(
@@ -286,7 +321,7 @@ export function buildTargetCatalog(
 
   return {
     targets: Array.from(targets.values()),
-    aliases: Array.from(aliases.values()),
+    aliases: capAliasesByTarget(Array.from(aliases.values())),
   };
 }
 

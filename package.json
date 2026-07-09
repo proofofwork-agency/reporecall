@@ -1,6 +1,6 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Local codebase memory, intent-routed retrieval, generated wiki, and MCP tools for coding agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -48,8 +48,8 @@
     "dev": "tsup --watch",
     "test": "vitest",
     "lint": "tsc --noEmit",
-    "benchmark": "tsx benchmark.ts",
-    "benchmark:external": "tsx benchmark-external.ts",
+    "benchmark": "tsx scripts/benchmarks/benchmark.ts",
+    "benchmark:external": "tsx scripts/benchmarks/benchmark-external.ts",
     "benchmark:project-context": "tsx scripts/benchmarks/project-context-audit.ts",
     "benchmark:production": "tsx scripts/benchmarks/production-gate.ts",
     "stress:large-repo": "tsx scripts/benchmarks/large-repo-stress.ts",

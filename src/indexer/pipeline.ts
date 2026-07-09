@@ -25,6 +25,7 @@ import { detectCommunities } from "../analysis/community-detection.js";
 import { findGodNodes, findSurprises, suggestQuestions } from "../analysis/topology-analysis.js";
 import type { TopologySnapshot } from "../storage/community-store.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
+import { resolveCurrentCommit } from "../core/staleness.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -85,6 +86,9 @@ function estimateChunkTextBytes(chunk: {
 }
 
 export class IndexingPipeline {
+  private static readonly VACUUM_FREE_BYTES_THRESHOLD = 16 * 1024 * 1024;
+  private static readonly VACUUM_FREE_RATIO_THRESHOLD = 0.25;
+
   private config: MemoryConfig;
   private embedder: EmbeddingProvider;
   private metadata: MetadataStore;
@@ -106,6 +110,45 @@ export class IndexingPipeline {
     this.fts = deps?.fts ?? new FTSStore(config.dataDir);
     this.vectors = deps?.vectors ?? new VectorStore(config.dataDir, config.embeddingDimensions);
     this.merkle = deps?.merkle ?? new MerkleTree(config.dataDir);
+  }
+
+  private writeIndexCompletionStats(now = new Date().toISOString()): void {
+    this.metadata.setStat("lastIndexedAt", now);
+    this.metadata.setStat("indexedCommit", resolveCurrentCommit(this.config.projectRoot) ?? "");
+  }
+
+  private async vacuumIfNeeded(reason: string): Promise<void> {
+    const before = this.metadata.getStorageStats();
+    const freeRatio = before.metadataDbPageBytes > 0
+      ? before.metadataDbFreeBytes / before.metadataDbPageBytes
+      : 0;
+    if (
+      before.metadataDbFreeBytes < IndexingPipeline.VACUUM_FREE_BYTES_THRESHOLD
+      && freeRatio < IndexingPipeline.VACUUM_FREE_RATIO_THRESHOLD
+    ) {
+      return;
+    }
+
+    const log = getLogger();
+    log.info(
+      {
+        reason,
+        metadataDbBytes: before.metadataDbBytes,
+        metadataDbFreeBytes: before.metadataDbFreeBytes,
+        targetAliasCount: before.targetAliasCount,
+      },
+      "SQLite metadata free pages above threshold; vacuuming"
+    );
+    await this.vacuum();
+    const after = this.metadata.getStorageStats();
+    log.info(
+      {
+        metadataDbBytes: after.metadataDbBytes,
+        metadataDbFreeBytes: after.metadataDbFreeBytes,
+        targetAliasCount: after.targetAliasCount,
+      },
+      "SQLite metadata compaction check complete"
+    );
   }
 
   private getFileBatchSize(): number {
@@ -603,6 +646,8 @@ export class IndexingPipeline {
         total: 0,
         message: "No changes detected",
       });
+      this.writeIndexCompletionStats();
+      await this.vacuumIfNeeded("no-change verification");
       return { filesProcessed: 0, chunksCreated: 0 };
     }
 
@@ -694,8 +739,8 @@ export class IndexingPipeline {
     }
 
     this.rebuildTargetCatalog();
-    const now = new Date().toISOString();
-    this.metadata.setStat("lastIndexedAt", now);
+    this.writeIndexCompletionStats();
+    await this.vacuumIfNeeded("index completion");
 
     try {
       const conventions = analyzeConventions(this.metadata);
@@ -791,7 +836,8 @@ export class IndexingPipeline {
       }
     }
     this.merkle.save();
-    this.metadata.setStat("lastIndexedAt", new Date().toISOString());
+    this.writeIndexCompletionStats();
+    await this.vacuumIfNeeded("incremental index completion");
 
     if (degradedFiles.size > 0) {
       log.error(
