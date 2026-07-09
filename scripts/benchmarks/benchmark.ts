@@ -3,7 +3,7 @@
  * Benchmark runner — measures search quality against the Reporecall codebase
  * using the production pipeline and graded relevance annotations.
  *
- *   npx tsx benchmark.ts [--provider keyword|semantic] [--output path.json]
+ *   npx tsx scripts/benchmarks/benchmark.ts [--provider keyword|semantic] [--output path.json]
  */
 
 import { writeFileSync } from 'fs'
@@ -11,7 +11,7 @@ import { join } from 'path'
 import {
   runLiveBenchmark,
   printLiveResults,
-} from './test/benchmark/live-runner.js'
+} from '../../test/benchmark/live-runner.js'
 
 type Provider = 'keyword' | 'semantic'
 
@@ -40,7 +40,7 @@ async function main() {
   const results = await runLiveBenchmark(providerArg)
   printLiveResults(results)
 
-  const jsonPath = outputPath ?? join(process.cwd(), 'benchmark-results.json')
+  const jsonPath = outputPath ?? join(process.cwd(), 'scripts/benchmarks/benchmark-results.json')
   writeFileSync(jsonPath, JSON.stringify({ timestamp: new Date().toISOString(), live: results }, null, 2))
   console.log(`\nResults written to: ${jsonPath}`)
 }

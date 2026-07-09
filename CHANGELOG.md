@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.8.0] - 2026-07-09
+
+Trust-contract remediation release. This is a breaking MCP surface change focused
+on freshness honesty, leaner injected context, smaller storage, and less agent
+tool-choice confusion.
+
+### Breaking
+
+- Collapsed the public MCP surface to six tools: `search_context`,
+  `search_code`, `explain_flow`, `memory`, `refresh_context`, and `get_stats`.
+- Folded standalone navigation and memory tools into action-based tools:
+  `search_code action=read_chunk`, `explain_flow action=callers|callees|stack_tree|imports|symbol|resolve_seed`,
+  and `memory action=recall|explain|list|store|forget`.
+- Removed destructive/wiki/business/topology standalone MCP tools from public
+  registration. CLI Lens/explain JSON remains the structured export path for
+  business and wiki data.
+
+### Added
+
+- Staleness metadata and warning banners across MCP responses and hook-injected
+  context, including explicit empty-index repair guidance.
+- `indexedCommit` stamping on completed index/refresh passes, including
+  no-change verification passes.
+- Auto-refresh on stale daemon indexes, with debouncing and a freshness-aware
+  repair path.
+- Storage visibility in stats: metadata DB bytes, free bytes, target count, and
+  target-alias count.
+- Design note for the MCP tool collapse at
+  `docs/design/wp5-tool-collapse.md`.
+
+### Changed
+
+- Hook installation templates now surface curl failures instead of silently
+  swallowing daemon outages.
+- Prompt-context injection is leaner: broad fallbacks are reduced, vanished
+  evidence is disclosed, advisory text counts against budgets, and compression
+  expansion points use `search_code action=read_chunk`.
+- Target aliases are deduped, capped per target, and pruned on startup for
+  legacy databases.
+- Common test/spec fixture directories are ignored by default as code evidence.
+- Root benchmark entrypoints moved to `scripts/benchmarks/`; stale benchmark
+  outputs and untracked source/report/tmp dumps were removed.
+
+### Fixed
+
+- Empty code indexes no longer block `refresh_context` or independent memory
+  actions.
+- Memory write/read actions are no longer falsely coupled to code-index
+  freshness.
+- Legacy indexes without commit stamps are treated honestly as stale in git
+  repos instead of silently trusted.
+
 ## [0.7.1] - 2026-05-12
 
 Patch release driven by reporecall's self-evaluation on its own codebase.

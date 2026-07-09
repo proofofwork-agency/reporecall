@@ -349,7 +349,7 @@ reporecall conventions
 
 ## Changelog
 
-### Unreleased - Trust Contract Remediation
+### v0.8.0 - Trust Contract Remediation
 
 - MCP now exposes a compact six-tool surface: `search_context`, `search_code`, `explain_flow`, `memory`, `refresh_context`, and `get_stats`.
 - Legacy standalone navigation, topology, business, wiki, and memory tools are folded into action-based tools or CLI/Lens JSON exports.

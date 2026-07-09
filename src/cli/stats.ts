@@ -160,7 +160,7 @@ export function statsCommand(): Command {
             console.log(`  Avg memories/hit:     ${(memoriesInjectedNum / memoryHitNum).toFixed(1)}`)
           }
           if (memoryFreshness) {
-            console.log(`  Freshness:            newest update ${memoryFreshness} ago`)
+            console.log(`  Freshness:            newest update ${memoryFreshness}`)
           }
           if (memoryTotals) {
             console.log(`  Inventory:            ${memoryTotals.total} total (${memoryTotals.active} active, ${memoryTotals.archived} archived, ${memoryTotals.superseded} superseded, ${memoryTotals.pinned} pinned)`)
