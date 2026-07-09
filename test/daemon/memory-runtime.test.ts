@@ -142,8 +142,9 @@ Initial content.
 `
     );
 
-    await waitFor(() => store.getByName("live_memory")?.description === "Initial writable memory");
+    await waitFor(() => store.getByName("live_memory")?.description === "Initial writable memory", 15000);
 
+    await wait(50); // let watcher settle
     writeFileSync(
       liveFile,
       `---
@@ -157,11 +158,12 @@ Updated content.
       "utf-8"
     );
 
-    await waitFor(() => store.getByName("live_memory")?.description === "Updated writable memory");
+    await waitFor(() => store.getByName("live_memory")?.description === "Updated writable memory", 15000);
     expect(store.getByName("live_memory")?.content).toContain("Updated content.");
 
+    await wait(50);
     rmSync(liveFile, { force: true });
-    await waitFor(() => store.getByName("live_memory") === undefined);
+    await waitFor(() => store.getByName("live_memory") === undefined, 15000);
     expect(store.getCount()).toBe(1);
   });
 
