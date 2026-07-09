@@ -51,6 +51,10 @@ tool-choice confusion.
   freshness.
 - Legacy indexes without commit stamps are treated honestly as stale in git
   repos instead of silently trusted.
+- Architecture dashboard/lens (`reporecall lens`, `lens --json`, and the MCP
+  dashboard export) no longer crashes with `Cannot read properties of undefined
+  (reading 'communities')`; the bulk community-membership lookup is invoked as a
+  bound method so `this` is preserved. (`src/visualize/data-extractor.ts`)
 
 ## [0.7.1] - 2026-05-12
 
