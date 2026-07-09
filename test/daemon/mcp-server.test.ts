@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { execFileSync } from "child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it } from "vitest";
 import { createMCPServer } from "../../src/daemon/mcp-server.js";
+import { clearFreshnessCache } from "../../src/core/staleness.js";
 
 // 3G: MCP server tools
 // We test the MCP server by calling its tool handlers directly.
@@ -210,6 +215,21 @@ The product stores incoming media.
   };
 }
 
+function runGit(projectRoot: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+function commitFile(projectRoot: string, fileName: string, content: string): string {
+  writeFileSync(join(projectRoot, fileName), content);
+  runGit(projectRoot, ["add", fileName]);
+  runGit(projectRoot, ["-c", "user.name=Reporecall Test", "-c", "user.email=test@example.com", "commit", "-m", `commit ${fileName}`]);
+  return runGit(projectRoot, ["rev-parse", "HEAD"]);
+}
+
 // Capture tool handlers by monkey-patching McpServer.registerTool during server creation
 async function captureToolHandlers(
   search: any,
@@ -262,6 +282,10 @@ async function captureToolHandlers(
 }
 
 describe("MCP server tools (3G)", () => {
+  afterEach(() => {
+    clearFreshnessCache();
+  });
+
   it("search_code returns formatted results", async () => {
     const search = makeMockSearch();
     const pipeline = makeMockPipeline();
@@ -277,11 +301,11 @@ describe("MCP server tools (3G)", () => {
     expect(result.content[0].type).toBe("text");
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
-    expect(parsed[0].name).toBe("processRequest");
-    expect(parsed[0].id).toBe("c1");
-    expect(parsed[0].filePath).toBe("src/server.ts");
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0].name).toBe("processRequest");
+    expect(parsed.results[0].id).toBe("c1");
+    expect(parsed.results[0].filePath).toBe("src/server.ts");
+    expect(parsed.staleness.level).toBe("fresh");
   });
 
   it("search_context returns assembled context with compression metadata", async () => {
@@ -345,6 +369,51 @@ describe("MCP server tools (3G)", () => {
     expect(parsed.selectedFiles).toEqual(["src/server.ts"]);
     expect(parsed.compression.compressedChunks).toBe(1);
     expect(parsed.compression.originalRefs[0].chunkId).toBe("c1");
+    expect(parsed.staleness.level).toBe("fresh");
+  });
+
+  it("search_context includes staleness and banner when indexed commit differs from HEAD", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "reporecall-mcp-stale-"));
+    try {
+      runGit(projectRoot, ["init"]);
+      const indexedCommit = commitFile(projectRoot, "a.ts", "export const a = 1;\n");
+      const currentCommit = commitFile(projectRoot, "b.ts", "export const b = 2;\n");
+      const search = makeMockSearch({
+        searchWithContext: async () => ({
+          text: "## Relevant codebase context\n\n- stale result\n",
+          tokenCount: 12,
+          routeStyle: "standard",
+          deliveryMode: "code_context",
+          chunks: [],
+          compression: { enabled: false },
+        }),
+      });
+      const pipeline = makeMockPipeline();
+      const metadata = makeMockMetadata({
+        getStat: (key: string) => {
+          if (key === "lastIndexedAt") return "2026-04-02T00:00:00.000Z";
+          if (key === "indexedCommit") return indexedCommit;
+          return undefined;
+        },
+      });
+      const config = { ...makeConfig(), projectRoot };
+
+      const handlers = await captureToolHandlers(search, pipeline, metadata, config);
+      const handler = handlers.get("search_context");
+      expect(handler).toBeDefined();
+
+      const result = await handler!({ query: "how does request processing work", tokenBudget: 500 });
+      const parsed = JSON.parse(result.content[0].text);
+
+      expect(currentCommit).not.toBe(indexedCommit);
+      expect(parsed.staleness.level).toBe("stale");
+      expect(parsed.staleness.indexedCommit).toBe(indexedCommit);
+      expect(parsed.staleness.currentCommit).toBe(currentCommit);
+      expect(parsed.banner).toContain("reporecall index STALE");
+      expect(parsed.banner).toContain("repo has moved");
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it("read_code_chunk returns original source by chunk id", async () => {
@@ -464,6 +533,38 @@ describe("MCP server tools (3G)", () => {
     expect(parsed.index.filesProcessed).toBe(3);
     expect(parsed.wiki.pagesWritten).toBe(4);
     expect(parsed.stats.totalFiles).toBe(5);
+  });
+
+  it("index_codebase and refresh_context repair paths run even when the index is empty", async () => {
+    let indexAllCalls = 0;
+    const pipeline = makeMockPipeline({
+      indexAll: async () => {
+        indexAllCalls += 1;
+        return { filesProcessed: 1, chunksCreated: 1 };
+      },
+    });
+    const metadata = makeMockMetadata({
+      getStats: () => ({ totalFiles: 0, totalChunks: 0, languages: {} }),
+      getStat: () => undefined,
+    });
+
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      pipeline,
+      metadata,
+      makeConfig()
+    );
+
+    const indexResult = await handlers.get("index_codebase")!({});
+    const refreshResult = await handlers.get("refresh_context")!({});
+    const parsedIndex = JSON.parse(indexResult.content[0].text);
+    const parsedRefresh = JSON.parse(refreshResult.content[0].text);
+
+    expect(indexAllCalls).toBe(2);
+    expect(parsedIndex.filesProcessed).toBe(1);
+    expect(parsedRefresh.index.filesProcessed).toBe(1);
+    expect(parsedIndex.banner).toBeUndefined();
+    expect(parsedRefresh.banner).toBeUndefined();
   });
 
   it("get_lens_data returns bounded Lens JSON without triggering indexing", async () => {
@@ -698,9 +799,9 @@ The product completes the capability.`,
     const result = await handler!({ functionName: "processRequest", limit: 10 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
-    expect(parsed[0].callerName).toBe("handleRoute");
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0].callerName).toBe("handleRoute");
+    expect(parsed.staleness.level).toBe("fresh");
   });
 
   it("find_callees returns callees of a function", async () => {
@@ -716,9 +817,9 @@ The product completes the capability.`,
     const result = await handler!({ functionName: "processRequest", limit: 10 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
-    expect(parsed[0].targetName).toBe("validateInput");
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0].targetName).toBe("validateInput");
+    expect(parsed.staleness.level).toBe("fresh");
   });
 
   it("get_symbol returns matching chunks by name", async () => {

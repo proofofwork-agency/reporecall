@@ -14,6 +14,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
 import type { HookDebugRecord } from "../search/types.js";
 import type { MemoryRuntime } from "./memory/runtime.js";
+import { banner, computeFreshness } from "../core/staleness.js";
 import {
   SessionStartBodySchema,
   PromptContextBodySchema,
@@ -611,6 +612,56 @@ export function createDaemonServer(
             return;
           }
 
+          const freshness = computeFreshness(metadata, config.projectRoot);
+          const freshnessBanner = banner(freshness);
+          if (freshness.level === "empty") {
+            if (sessionKey) hookSessionState.delete(sessionKey);
+            log.warn({ requestId, freshness }, "prompt-context skipped because reporecall index is empty");
+            metadata.incrementRouteStat("skip");
+            const emptyDebug: HookDebugRecord = {
+              queryMode: "skip",
+              intentType: { isCodeQuery: false, needsNavigation: false },
+              skipReason: "empty index",
+              injectedTokenCount: 0,
+              injectedChunkCount: 0,
+              seedCandidate: null,
+              confidence: null,
+              latencyMs: 0,
+              query: rawQuery,
+              sanitizedQuery: query,
+            };
+            logHook(`[${requestId}] SKIP reason="empty index" debug=${JSON.stringify(emptyDebug)}`);
+            if (debugMode) {
+              res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({
+                requestId,
+                hookEventName: "UserPromptSubmit",
+                queryMode: "skip",
+                chunks: 0,
+                tokens: 0,
+                elapsedMs: 0,
+                skipReason: "empty index",
+                staleness: freshness,
+              })));
+            }
+            json(res, {
+              hookSpecificOutput: {
+                hookEventName: "UserPromptSubmit",
+                additionalContext: freshnessBanner ?? "",
+              },
+              ...(debugMode ? {
+                _debug: {
+                  queryMode: "skip" as const,
+                  tokensInjected: 0,
+                  chunksInjected: 0,
+                  skipReason: "empty index",
+                  latencyMs: 0,
+                  staleness: freshness,
+                },
+              } : {}),
+            });
+            return;
+          }
+
           // Classify intent — skip retrieval entirely for non-code queries
           const intent = classifyIntent(query);
           let queryMode = intent.queryMode;
@@ -883,9 +934,12 @@ export function createDaemonServer(
             });
           }
 
-          const hookAdditionalContext = promptContext.advisoryText
+          const hookContextBody = promptContext.advisoryText
             ? `${promptContext.advisoryText}\n\n${context.text}`
             : context.text;
+          const hookAdditionalContext = freshnessBanner
+            ? `${freshnessBanner}\n\n${hookContextBody}`
+            : hookContextBody;
 
           if (debugMode) {
             res.setHeader("X-Memory-Debug", safeHeaderValue(JSON.stringify({

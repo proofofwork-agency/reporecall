@@ -3,6 +3,7 @@ import { resolve } from "path";
 import { mkdirSync, rmSync } from "fs";
 import { createServer, type Server } from "http";
 import { createDaemonServer } from "../../src/daemon/server.js";
+import { clearFreshnessCache } from "../../src/core/staleness.js";
 
 // 3F: Daemon HTTP endpoints
 
@@ -59,7 +60,7 @@ function makeSearch(overrides?: Partial<any>): any {
 function makeMetadata(overrides?: Partial<any>): any {
   return {
     getStats: () => ({ totalFiles: 3, totalChunks: 12, languages: { typescript: 12 } }),
-    getStat: (_key: string) => undefined,
+    getStat: (key: string) => key === "lastIndexedAt" ? "2026-04-02T00:00:00.000Z" : undefined,
     setStat: () => {},
     recordLatency: () => {},
     incrementRouteStat: () => {},
@@ -142,6 +143,7 @@ describe("daemon HTTP server (3F)", () => {
       server.close((err) => (err ? rej(err) : res()))
     );
     rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    clearFreshnessCache();
   });
 
   it("GET /health returns status ok", async () => {
@@ -218,6 +220,39 @@ describe("daemon HTTP server (3F)", () => {
     expect(body).toHaveProperty("hookSpecificOutput");
     expect(body.hookSpecificOutput.additionalContext).toBe("");
     expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+  });
+
+  it("POST /hooks/prompt-context with empty index returns only the honesty banner", async () => {
+    await new Promise<void>((res, rej) =>
+      server.close((err) => (err ? rej(err) : res()))
+    );
+
+    const config = makeConfig(port);
+    const emptyMetadata = makeMetadata({
+      getStats: () => ({ totalFiles: 0, totalChunks: 0, languages: {} }),
+    });
+    const result = createDaemonServer(
+      config,
+      makeSearch({
+        searchWithContext: async () => {
+          throw new Error("search should not run for empty index");
+        },
+      }),
+      emptyMetadata
+    );
+    server = result.server;
+    token = result.token;
+    await new Promise<void>((res) => server.listen(port, "127.0.0.1", res));
+
+    const { status, body } = await request(port, "POST", "/hooks/prompt-context", {
+      query: "how does authentication work",
+    }, token);
+
+    expect(status).toBe(200);
+    expect(body.hookSpecificOutput).toEqual({
+      hookEventName: "UserPromptSubmit",
+      additionalContext: "⚠ reporecall index EMPTY: no indexed code context is available. Run refresh_context or `reporecall index`.",
+    });
   });
 
   it("GET /unknown returns 404", async () => {
@@ -467,6 +502,7 @@ describe("daemon HTTP server — debug mode", () => {
       server.close((err) => (err ? rej(err) : res()))
     );
     rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    clearFreshnessCache();
   });
 
   it("X-Memory-Debug header is present on session-start when debugMode is true", async () => {

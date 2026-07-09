@@ -25,6 +25,7 @@ import { detectCommunities } from "../analysis/community-detection.js";
 import { findGodNodes, findSurprises, suggestQuestions } from "../analysis/topology-analysis.js";
 import type { TopologySnapshot } from "../storage/community-store.js";
 import type { ReadWriteLock } from "../core/rwlock.js";
+import { resolveCurrentCommit } from "../core/staleness.js";
 
 export interface IndexProgress {
   phase: "scanning" | "chunking" | "embedding" | "storing" | "done";
@@ -106,6 +107,11 @@ export class IndexingPipeline {
     this.fts = deps?.fts ?? new FTSStore(config.dataDir);
     this.vectors = deps?.vectors ?? new VectorStore(config.dataDir, config.embeddingDimensions);
     this.merkle = deps?.merkle ?? new MerkleTree(config.dataDir);
+  }
+
+  private writeIndexCompletionStats(now = new Date().toISOString()): void {
+    this.metadata.setStat("lastIndexedAt", now);
+    this.metadata.setStat("indexedCommit", resolveCurrentCommit(this.config.projectRoot) ?? "");
   }
 
   private getFileBatchSize(): number {
@@ -603,6 +609,7 @@ export class IndexingPipeline {
         total: 0,
         message: "No changes detected",
       });
+      this.writeIndexCompletionStats();
       return { filesProcessed: 0, chunksCreated: 0 };
     }
 
@@ -694,8 +701,7 @@ export class IndexingPipeline {
     }
 
     this.rebuildTargetCatalog();
-    const now = new Date().toISOString();
-    this.metadata.setStat("lastIndexedAt", now);
+    this.writeIndexCompletionStats();
 
     try {
       const conventions = analyzeConventions(this.metadata);
@@ -791,7 +797,7 @@ export class IndexingPipeline {
       }
     }
     this.merkle.save();
-    this.metadata.setStat("lastIndexedAt", new Date().toISOString());
+    this.writeIndexCompletionStats();
 
     if (degradedFiles.size > 0) {
       log.error(

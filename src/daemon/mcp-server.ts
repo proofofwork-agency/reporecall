@@ -30,6 +30,7 @@ import { extractDashboardData } from '../visualize/data-extractor.js'
 import type { DashboardData } from '../visualize/types.js'
 import type { StoredChunk } from '../storage/types.js'
 import { getLogger } from '../core/logger.js'
+import { banner, clearFreshnessCache, computeFreshness, type IndexFreshness } from '../core/staleness.js'
 
 const require = createRequire(import.meta.url)
 
@@ -69,6 +70,76 @@ function errorResult(err: unknown) {
       }
     ],
     isError: true
+  }
+}
+
+interface ToolTextContent {
+  type: 'text'
+  text: string
+}
+
+interface ToolResultLike {
+  content?: ToolTextContent[]
+  isError?: boolean
+  [key: string]: unknown
+}
+
+function emptyIndexPayload(freshness: IndexFreshness): Record<string, unknown> {
+  return {
+    banner: banner(freshness),
+    message: 'Reporecall index is empty; no code context is available.',
+    hint: 'run refresh_context or `reporecall index`',
+    staleness: freshness
+  }
+}
+
+function payloadWithStaleness(payload: unknown, freshness: IndexFreshness): Record<string, unknown> {
+  const line = banner(freshness)
+  const shaped = Array.isArray(payload)
+    ? { results: payload, count: payload.length }
+    : payload && typeof payload === 'object'
+      ? payload as Record<string, unknown>
+      : { message: String(payload) }
+
+  return {
+    ...(line ? { banner: line } : {}),
+    ...shaped,
+    staleness: freshness
+  }
+}
+
+function textResult(payload: Record<string, unknown>): ToolResultLike {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(payload, null, 2)
+      }
+    ]
+  }
+}
+
+function addStalenessToResult(result: ToolResultLike, freshness: IndexFreshness): ToolResultLike {
+  const first = result.content?.[0]
+  if (!first || first.type !== 'text') {
+    return textResult(payloadWithStaleness({ message: 'No text response returned by tool' }, freshness))
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(first.text)
+  } catch {
+    parsed = { message: first.text }
+  }
+
+  const nextContent = [...(result.content ?? [])]
+  nextContent[0] = {
+    ...first,
+    text: JSON.stringify(payloadWithStaleness(parsed, freshness), null, 2)
+  }
+  return {
+    ...result,
+    content: nextContent
   }
 }
 
@@ -177,6 +248,22 @@ export function createMCPServer(
     version
   })
 
+  const registerTool = ((name: string, toolConfig: any, handler: any) => {
+    return (server.registerTool as any)(name, toolConfig, async (...callArgs: unknown[]) => {
+      const readOnly = toolConfig.annotations?.readOnlyHint === true
+      if (!readOnly) return handler(...callArgs)
+
+      const freshness = computeFreshness(metadata, config.projectRoot)
+      if (freshness.level === 'empty' && name !== 'get_stats') {
+        return textResult(emptyIndexPayload(freshness))
+      }
+
+      const result = await handler(...callArgs) as ToolResultLike
+      if (result.isError) return result
+      return addStalenessToResult(result, freshness)
+    })
+  }) as McpServer['registerTool']
+
   const indexAndRegenerateWiki = async (paths?: string[]) => {
     let index: unknown
     if (paths && paths.length > 0) {
@@ -185,6 +272,7 @@ export function createMCPServer(
     } else {
       index = await pipeline.indexAll()
     }
+    clearFreshnessCache()
 
     let wiki: unknown = null
     if (wikiGenerator) {
@@ -198,10 +286,10 @@ export function createMCPServer(
     return { index, wiki }
   }
 
-  server.registerTool(
+  registerTool(
     'search_code',
     {
-      description: 'Search the codebase using hybrid vector + keyword search and return raw matching chunks. For multi-file questions, prefer search_context.',
+      description: 'Search the codebase using hybrid vector + keyword search. Returns { results, count, staleness } with raw matching chunks in results. For multi-file questions, prefer search_context.',
       inputSchema: {
         query: z.string().min(1).describe('Search query'),
         limit: z
@@ -254,7 +342,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'search_context',
     {
       description:
@@ -320,7 +408,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'read_code_chunk',
     {
       description: 'Read the full original source for a code chunk by chunkId, or by file path and line range.',
@@ -367,7 +455,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'index_codebase',
     {
       description: 'Index or re-index the codebase. Also regenerates deterministic wiki/business pages when the wiki layer is enabled.',
@@ -400,7 +488,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'refresh_context',
     {
       description:
@@ -448,7 +536,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'get_lens_data',
     {
       description:
@@ -492,7 +580,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'get_stats',
     {
       description: 'Get index statistics, conventions, and latency info',
@@ -526,7 +614,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'clear_index',
     {
       description: 'Clear all indexed data',
@@ -583,6 +671,7 @@ export function createMCPServer(
 
           // Update metadata reference for get_stats tool
           metadata = pipeline.getMetadataStore()
+          clearFreshnessCache()
         }
 
         if (lock) {
@@ -600,7 +689,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'find_callers',
     {
       description: 'Find functions that call a given function',
@@ -633,7 +722,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'find_callees',
     {
       description: 'Find functions called by a given function',
@@ -666,7 +755,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'resolve_seed',
     {
       description:
@@ -705,7 +794,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'build_stack_tree',
     {
       description:
@@ -791,7 +880,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'get_imports',
     {
       description:
@@ -842,7 +931,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'get_symbol',
     {
       description:
@@ -889,7 +978,7 @@ export function createMCPServer(
     }
   )
 
-  server.registerTool(
+  registerTool(
     'explain_flow',
     {
       description:
@@ -1005,7 +1094,7 @@ export function createMCPServer(
   // --- Memory tools (only registered when memory layer is available) ---
 
   if (memorySearch && memoryIndexer) {
-    server.registerTool(
+    registerTool(
       'recall_memories',
       {
         description:
@@ -1088,7 +1177,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'explain_memory',
       {
         description:
@@ -1166,7 +1255,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'compact_memories',
       {
         description:
@@ -1210,7 +1299,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'clear_working_memory',
       {
         description:
@@ -1282,7 +1371,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'store_memory',
       {
         description:
@@ -1418,7 +1507,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'forget_memory',
       {
         description:
@@ -1490,7 +1579,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'list_memories',
       {
         description:
@@ -1582,7 +1671,7 @@ export function createMCPServer(
 
   // --- Topology analysis tools ------------------------------------------------
 
-  server.registerTool(
+  registerTool(
     'get_communities',
     {
       description:
@@ -1610,7 +1699,7 @@ export function createMCPServer(
     }
   );
 
-  server.registerTool(
+  registerTool(
     'get_hub_nodes',
     {
       description:
@@ -1638,7 +1727,7 @@ export function createMCPServer(
     }
   );
 
-  server.registerTool(
+  registerTool(
     'get_surprises',
     {
       description:
@@ -1677,7 +1766,7 @@ export function createMCPServer(
     }
   );
 
-  server.registerTool(
+  registerTool(
     'suggest_investigations',
     {
       description:
@@ -1708,7 +1797,7 @@ export function createMCPServer(
   // --- Business context tools (registered when memory store is available) ---
 
   if (memoryStore) {
-    server.registerTool(
+    registerTool(
       'list_product_areas',
       {
         description:
@@ -1746,7 +1835,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'business_context_query',
       {
         description:
@@ -1788,7 +1877,7 @@ export function createMCPServer(
   // --- Wiki tools (registered when memory store is available) ---
 
   if (memoryStore && memorySearch && memoryIndexer) {
-    server.registerTool(
+    registerTool(
       'wiki_query',
       {
         description:
@@ -1827,7 +1916,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'wiki_read',
       {
         description:
@@ -1893,7 +1982,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'wiki_write',
       {
         description:
@@ -1954,7 +2043,7 @@ export function createMCPServer(
       }
     )
 
-    server.registerTool(
+    registerTool(
       'wiki_check_staleness',
       {
         description:
