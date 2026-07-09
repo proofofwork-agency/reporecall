@@ -110,6 +110,39 @@ describe("handlePromptContext — route integration", () => {
     expect(result.advisoryText).toContain("Reporecall Guidance");
   });
 
+  it("discloses selected files that vanished from the index", async () => {
+    const context = makeAssembledContext("## src/app.ts\nfunction main() {}", 80);
+    const metadata: any = {
+      findChunksByFilePath: (filePath: string) => filePath === "src/app.ts" ? context.chunks : [],
+      getAllCommunities: () => [],
+      getGodNodes: () => [],
+      getTopSurprises: () => [],
+    };
+
+    const result = await handlePromptContextDetailed(
+      "which files implement payment flow",
+      makeSearch({
+        searchWithContext: async () => context,
+        getLastBroadSelectionDiagnostics: () => ({
+          broadMode: "workflow",
+          deliveryMode: "code_context",
+          familyConfidence: 0.9,
+          selectedFiles: [
+            { filePath: "src/missing-payment.ts", selectionSource: "workflow_bundle" },
+          ],
+        }),
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "architecture",
+      metadata
+    );
+
+    expect(result.missingEvidence?.join(" ")).toContain("src/missing-payment.ts");
+    expect(result.advisoryText).toContain("Selected evidence for src/missing-payment.ts is no longer present");
+  });
+
   it("mentions active compression in advisory metadata", async () => {
     const compressedContext: AssembledContext = {
       ...makeAssembledContext("## context", 80),

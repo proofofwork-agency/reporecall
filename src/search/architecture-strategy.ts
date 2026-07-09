@@ -665,15 +665,13 @@ export class ArchitectureStrategy {
     };
 
     if (deferredReason) {
-      return results;
+      return [];
     }
-    return finalChunks.length > 0
-      ? finalChunks.map((candidate) => ({
-          ...candidate.result,
-          hookScore: candidate.score,
-          score: Math.max(candidate.result.score, candidate.score),
-        }))
-      : results;
+    return finalChunks.map((candidate) => ({
+      ...candidate.result,
+      hookScore: candidate.score,
+      score: Math.max(candidate.result.score, candidate.score),
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -808,15 +806,12 @@ export class ArchitectureStrategy {
       deferredReason: deferredReason ?? undefined,
     };
 
-    return selectedChunks.length > 0
-      ? selectedChunks.map((candidate) => ({
-          ...candidate.result,
-          hookScore: candidate.score,
-          score: Math.max(candidate.result.score, candidate.score),
-        }))
-      : candidates
-          .slice(0, Math.min(maxContextChunks, 8))
-          .map((candidate) => candidate.result);
+    if (deferredReason) return [];
+    return selectedChunks.map((candidate) => ({
+      ...candidate.result,
+      hookScore: candidate.score,
+      score: Math.max(candidate.result.score, candidate.score),
+    }));
   }
 
   // -------------------------------------------------------------------------

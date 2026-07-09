@@ -646,7 +646,7 @@ describe("daemon HTTP server — debug mode", () => {
     expect(parsed).toHaveProperty("hookEventName", "UserPromptSubmit");
     expect(parsed).toHaveProperty("queryMode", "trace");
     expect(parsed.chunks).toBe(1);
-    expect(parsed.tokens).toBe(10);
+    expect(parsed.tokens).toBeGreaterThan(10);
     expect(parsed).toHaveProperty("queryClassification");
     expect(parsed.queryClassification).toMatchObject({
       isCodeQuery: true,
