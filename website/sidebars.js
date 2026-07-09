@@ -22,6 +22,12 @@ const sidebars = {
       collapsed: false,
       items: ['architecture', 'memory', 'lens'],
     },
+    {
+      type: 'category',
+      label: 'Positioning & Analysis',
+      collapsed: true,
+      items: ['competitive-positioning'],
+    },
     'changelog',
   ],
 };

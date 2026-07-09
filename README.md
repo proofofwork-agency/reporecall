@@ -363,7 +363,15 @@ Placeholder results (to be replaced with real runs):
 - Typical 40–70% context token reduction on trace/architecture questions while maintaining or improving recall
 - 100% of responses include freshness metadata
 
-Run `npm run benchmark` or see `scripts/benchmarks/`. PRs with reproducible numbers on real repos are very welcome.
+Run `npm run benchmark` or see `scripts/benchmarks/`. 
+
+For token savings + freshness:
+
+```bash
+npm run benchmark:tokens -- --project .
+```
+
+PRs with reproducible numbers on real repos are very welcome.
 
 ## Lens
 
