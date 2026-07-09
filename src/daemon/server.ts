@@ -14,7 +14,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { MetricsCollector } from "./metrics.js";
 import type { HookDebugRecord } from "../search/types.js";
 import type { MemoryRuntime } from "./memory/runtime.js";
-import { banner, computeFreshness } from "../core/staleness.js";
+import { banner, clearFreshnessCache, computeFreshness, type IndexFreshness } from "../core/staleness.js";
 import {
   SessionStartBodySchema,
   PromptContextBodySchema,
@@ -279,6 +279,7 @@ export interface DaemonServerOptions {
   ftsInitialized?: boolean;
   debugMode?: boolean;
   ftsStore?: import("../storage/fts-store.js").FTSStore;
+  refreshIndex?: () => Promise<void>;
   memorySearch?: import("../memory/search.js").MemorySearch;
   memoryRuntime?: MemoryRuntime;
   memoryStore?: import("../storage/memory-store.js").MemoryStore;
@@ -312,9 +313,53 @@ export function createDaemonServer(
   const metrics = new MetricsCollector((msg) => log.info(msg));
 
   const hookLog = new RotatingLog(hookLogPath);
+  let serverClosed = false;
   function logHook(message: string): void {
+    if (serverClosed) return;
     const timestamp = new Date().toISOString().slice(11, 19);
     hookLog.append(`[${timestamp}] ${message}\n`).catch((e) => log.warn({ err: e }, "hook log write failed"));
+  }
+
+  let autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let autoRefreshInFlight = false;
+  let autoRefreshQueued = false;
+
+  function scheduleAutoRefresh(freshness: IndexFreshness, requestId: string): void {
+    if (serverClosed) return;
+    if (config.autoRefresh === false || !liveOptions.refreshIndex) return;
+    if (autoRefreshTimer) return;
+
+    autoRefreshTimer = setTimeout(() => {
+      autoRefreshTimer = undefined;
+      void runAutoRefresh(freshness, requestId);
+    }, config.debounceMs);
+    autoRefreshTimer.unref?.();
+  }
+
+  async function runAutoRefresh(freshness: IndexFreshness, requestId: string): Promise<void> {
+    if (serverClosed) return;
+    if (autoRefreshInFlight) {
+      autoRefreshQueued = true;
+      return;
+    }
+
+    autoRefreshInFlight = true;
+    log.warn({ requestId, freshness }, "reporecall index stale; scheduling background auto-refresh");
+    logHook(`[${requestId}] AUTO_REFRESH start reason=${JSON.stringify(freshness)}`);
+    try {
+      await liveOptions.refreshIndex?.();
+      clearFreshnessCache();
+      if (!serverClosed) logHook(`[${requestId}] AUTO_REFRESH complete`);
+    } catch (err) {
+      log.warn({ err, requestId }, "reporecall background auto-refresh failed");
+      logHook(`[${requestId}] AUTO_REFRESH failed error=${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      autoRefreshInFlight = false;
+      if (autoRefreshQueued) {
+        autoRefreshQueued = false;
+        scheduleAutoRefresh(freshness, requestId);
+      }
+    }
   }
 
   const server = createServer(async (req, res) => {
@@ -660,6 +705,9 @@ export function createDaemonServer(
               } : {}),
             });
             return;
+          }
+          if (freshness.level === "stale") {
+            scheduleAutoRefresh(freshness, requestId);
           }
 
           // Classify intent — skip retrieval entirely for non-code queries
@@ -1091,6 +1139,13 @@ export function createDaemonServer(
         { error: "Internal server error", code, requestId, ...context },
         500
       );
+    }
+  });
+  server.on("close", () => {
+    serverClosed = true;
+    if (autoRefreshTimer) {
+      clearTimeout(autoRefreshTimer);
+      autoRefreshTimer = undefined;
     }
   });
 

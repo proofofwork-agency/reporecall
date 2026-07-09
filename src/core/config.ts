@@ -101,6 +101,8 @@ export interface MemoryConfig {
   topologyEnabled?: boolean;
   /** Skip topology graph construction above this indexed chunk count */
   topologyMaxChunks?: number;
+  /** Automatically refresh the index in the background when stale drift is detected */
+  autoRefresh?: boolean;
 }
 
 // M-config: Zod schema for user-configurable fields
@@ -184,6 +186,7 @@ const UserConfigSchema = z.object({
   contextCompressionTargetRatio: z.number().min(0.1).max(0.95).optional(),
   topologyEnabled: z.boolean().optional(),
   topologyMaxChunks: z.number().int().min(100).optional(),
+  autoRefresh: z.boolean().optional(),
 }).strict();
 
 const DEFAULT_EXTENSIONS = Array.from(
@@ -277,6 +280,7 @@ const DEFAULTS: Omit<MemoryConfig, "projectRoot" | "dataDir"> = {
   contextCompressionTargetRatio: 0.75,
   topologyEnabled: true,
   topologyMaxChunks: 50_000,
+  autoRefresh: true,
   factExtractors: [],
   conceptBundles: [
     {

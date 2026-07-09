@@ -109,6 +109,11 @@ describe("loadConfig — default config", () => {
     expect(config.topologyMaxChunks).toBe(50_000);
   });
 
+  it("enables auto-refresh by default", () => {
+    const config = loadConfig(tmpDir);
+    expect(config.autoRefresh).toBe(true);
+  });
+
   it("includes the full current parser language surface in default extensions", () => {
     const config = loadConfig(tmpDir);
     for (const ext of [".cs", ".php", ".zig", ".lua", ".html", ".vue", ".toml"]) {
@@ -161,6 +166,12 @@ describe("loadConfig — valid user config", () => {
     const config = loadConfig(tmpDir);
     expect(config.topologyEnabled).toBe(false);
     expect(config.topologyMaxChunks).toBe(1000);
+  });
+
+  it("applies autoRefresh override", () => {
+    writeConfigJson(tmpDir, { autoRefresh: false });
+    const config = loadConfig(tmpDir);
+    expect(config.autoRefresh).toBe(false);
   });
 
   it("applies a valid port override", () => {
