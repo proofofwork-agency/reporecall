@@ -113,9 +113,9 @@ External utilities should depend on the public outputs, not Reporecall internals
 | --- | --- |
 | MCP server | Live code search, graph navigation, wiki/memory access, and indexing. |
 | `refresh_context` | External-tool refresh entry point: re-index code, regenerate wiki/business pages, and return updated stats. |
-| `get_lens_data` | Read-only MCP export for current Lens JSON, with options to omit raw wiki content or graph-heavy arrays. |
-| `business_context_query` / `list_product_areas` | Business-facing entry points that default to presentation-safe records; `list_product_areas` can include unsafe diagnostics when requested. |
-| `wiki_read` | Read a wiki page by slug; when generated slugs changed after regeneration, returns replacement suggestions instead of a dead-end miss. |
+| `reporecall lens --json` | Read-only Lens JSON export with wiki, graph, memory, and business/product context. |
+| `refresh_context` | MCP repair verb for re-indexing before agent work. |
+| `search_context` / `search_code` / `explain_flow` / `memory` | Compact MCP surface for live agent retrieval, navigation, and memory. |
 | `reporecall explain --json` | Per-question retrieval diagnostics, selected files, `productAreasUsed[]`, and `businessPagesUsed[]`. |
 | `reporecall lens --json` | Whole-project topology, wiki graph, and business context export. |
 | `productAreas[]` | Business-facing grouping over related capabilities, with `displayName`, `displaySummary`, and `areaKind`. |
@@ -133,7 +133,7 @@ Product areas are not a fixed taxonomy. Reporecall starts with common software-p
 
 Each product area includes `areaKind`: `fixed`, `discovered`, or `fallback`. External tools can use this to keep foundational product areas primary while treating repo-derived domain areas as supporting context when appropriate.
 
-External tools can ask Reporecall to refresh itself through MCP. Use `refresh_context` after large file changes or before a planning workflow that needs fresh wiki/product-area context. It runs the same local indexing and deterministic wiki generation path that Reporecall uses for its own Lens and agent context. Then call `get_lens_data` for a read-only Lens JSON export over the current index. `index_codebase` remains available for lower-level indexing workflows and also regenerates wiki pages when the wiki layer is enabled.
+External tools can ask Reporecall to refresh itself through MCP. Use `refresh_context` after large file changes or before a planning workflow that needs fresh wiki/product-area context. It runs the same local indexing and deterministic wiki generation path that Reporecall uses for its own Lens and agent context. Use `reporecall lens --json` for a read-only Lens JSON export over the current index.
 
 ## How It Works
 
@@ -232,7 +232,7 @@ Reporecall exposes product-language context in three places:
 
 - `reporecall lens --json` for whole-project `productAreas[]` and `businessPages[]`.
 - `reporecall explain --json` for query-specific `productAreasUsed[]` and `businessPagesUsed[]`.
-- MCP tools `list_product_areas` and `business_context_query` for live agent access.
+- `reporecall lens --json` and `reporecall explain --json` for business/product context exports.
 
 These surfaces are additive product-language views over code evidence for external tools.
 
@@ -296,19 +296,16 @@ Reporecall exposes a local MCP server:
 reporecall mcp --project .
 ```
 
-Use this server from Codex or any MCP-compatible client when you want code search, flow navigation, business context, wiki pages, memory, or topology data without relying on Claude Code hooks.
+Use this server from Codex or any MCP-compatible client when you want code search, flow navigation, memory, or index refresh without relying on Claude Code hooks.
 
 Main tool groups:
 
 | Group | Tools |
 | --- | --- |
-| Code search | `search_context`, `search_code`, `read_code_chunk`, `get_symbol`, `resolve_seed` |
-| Flow/navigation | `find_callers`, `find_callees`, `explain_flow`, `build_stack_tree`, `get_imports` |
-| Business context | `list_product_areas`, `business_context_query` |
-| Topology | `get_communities`, `get_hub_nodes`, `get_surprises`, `suggest_investigations` |
-| Wiki | `wiki_query`, `wiki_read`, `wiki_write`, `wiki_check_staleness` |
-| Memory | `recall_memories`, `store_memory`, `forget_memory`, `list_memories`, `explain_memory`, `compact_memories`, `clear_working_memory` |
-| Index/context lifecycle | `refresh_context`, `get_lens_data`, `index_codebase`, `get_stats`, `clear_index` |
+| Code context | `search_context` for routed context; `search_code action=search` for raw hits; `search_code action=read_chunk` for full source expansion |
+| Flow/navigation | `explain_flow action=flow`, `callers`, `callees`, `stack_tree`, `imports`, `symbol`, or `resolve_seed` |
+| Memory | `memory action=recall`, `explain`, `list`, `store`, or `forget` |
+| Index/context lifecycle | `refresh_context`, `get_stats` |
 
 ## Configuration
 
@@ -351,6 +348,11 @@ reporecall conventions
 ```
 
 ## Changelog
+
+### Unreleased - Trust Contract Remediation
+
+- MCP now exposes a compact six-tool surface: `search_context`, `search_code`, `explain_flow`, `memory`, `refresh_context`, and `get_stats`.
+- Legacy standalone navigation, topology, business, wiki, and memory tools are folded into action-based tools or CLI/Lens JSON exports.
 
 ### v0.7.1 - Self-Evaluation Patch
 

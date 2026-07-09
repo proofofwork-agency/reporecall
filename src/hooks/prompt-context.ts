@@ -947,7 +947,7 @@ function buildReporecallAdvisory(
   }
   if (compression?.compressedChunks) {
     lines.push(
-      `Compressed ${compression.compressedChunks} secondary chunks, saving ${compression.tokensSaved} tokens. Use Reporecall MCP read_code_chunk with chunkId for full source.`
+      `Compressed ${compression.compressedChunks} secondary chunks, saving ${compression.tokensSaved} tokens. Use Reporecall MCP search_code with action=read_chunk and chunkId for full source.`
     );
   }
   if (missingEvidence.length > 0) {

@@ -6,11 +6,8 @@ Stable public surfaces:
 
 - `reporecall lens --json` exposes whole-project `productAreas[]` and `businessPages[]`.
 - `reporecall explain --json` exposes query-specific `productAreasUsed[]` and `businessPagesUsed[]`.
-- MCP tools `list_product_areas` and `business_context_query` expose the same structures for live agent clients.
-- `list_product_areas` and `business_context_query` default to presentation-safe records for business-facing clients. `list_product_areas` accepts `includeUnsafe: true` for diagnostics.
 - MCP tool `refresh_context` lets an external client re-index code, regenerate deterministic wiki/business pages, and get updated stats before reading business context.
-- MCP tool `get_lens_data` returns the current Lens JSON from the existing index, with options to omit raw wiki content, business pages, or graph-heavy arrays.
-- MCP tool `wiki_read` returns replacement suggestions when a generated page slug no longer exists after wiki regeneration.
+- The compact MCP server intentionally does not expose dedicated business/wiki tools; use CLI JSON exports for full business, wiki, and Lens structures.
 
 Consumers should read `productAreas[]` for business-facing grouping and `businessPages[]` for capability-level evidence when present. Keep a fallback for older Reporecall output.
 
@@ -85,9 +82,9 @@ Each `businessPages[]` item may include:
 - Treat this as a read-only product map, not a source-of-truth product specification.
 - Keep the business view additive. Do not feed business summaries back into core search ranking as hard rules.
 - Call MCP `refresh_context` after substantial repository changes or before a planning workflow that needs current wiki/product-area context.
-- Call MCP `get_lens_data` when an agent or utility needs the full current Lens export without shelling out to `reporecall lens --json`.
-- Use MCP `business_context_query` when an agent has a user question and needs only relevant product areas/pages instead of the full Lens export.
-- If `wiki_read` returns `status: "not_found"`, show or follow the returned `suggestions[]` instead of treating a stale generated slug as a hard failure.
+- Call `reporecall lens --json` when an agent or utility needs the full current Lens export.
+- Use `reporecall explain --json` when an agent has a user question and needs only relevant product areas/pages instead of the full Lens export.
+- If a generated wiki slug is missing after regeneration, refresh the index and inspect current Lens/CLI output instead of treating the stale slug as authoritative.
 - Use `productAreas[]` as the preferred business-facing entry point. Use `businessPages[]` when the user needs capability-level detail and evidence.
 - Prefer `areaKind: "fixed"` for primary navigation, treat `areaKind: "discovered"` as domain-supporting evidence unless it directly matches the user query, and treat `areaKind: "fallback"` as low-confidence context.
 - Prefer `displayName` and `displaySummary` for business-facing UI. Keep `name`, `capability`, and `summary` for compatibility and diagnostics.

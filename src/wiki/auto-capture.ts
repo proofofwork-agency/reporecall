@@ -1,7 +1,7 @@
 /**
  * Auto-capture wiki pages from MCP tool results.
  *
- * When explain_flow or build_stack_tree completes, the result
+ * When explain_flow completes, the result
  * is automatically saved as a wiki page for future sessions.
  */
 
@@ -96,7 +96,7 @@ export class WikiAutoCapture {
   }
 
   /**
-   * Capture a build_stack_tree result as a wiki page.
+   * Capture an explain_flow stack_tree result as a wiki page.
    */
   async captureTreeResult(
     query: string,
@@ -139,7 +139,7 @@ export class WikiAutoCapture {
       relatedFiles: relatedFiles.slice(0, 20),
       relatedSymbols: relatedSymbols.slice(0, 20),
       confidence: 0.75,
-      reason: "Auto-captured from build_stack_tree result",
+      reason: "Auto-captured from explain_flow stack_tree result",
       pageType: "exploration",
       sourceLayer: "llm-enriched",
       links: allLinks,
@@ -150,7 +150,7 @@ export class WikiAutoCapture {
     await this.indexer.indexFile(filePath);
     this.store.setWikiLinks(slug, allLinks);
 
-    getLogger().info({ slug, seedName }, "Wiki page auto-captured from build_stack_tree");
+    getLogger().info({ slug, seedName }, "Wiki page auto-captured from explain_flow stack_tree");
     return slug;
   }
 

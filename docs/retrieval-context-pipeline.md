@@ -24,6 +24,6 @@ The behavior is controlled in `.memory/config.json`:
 - `contextCompressionMinChunkTokens`: minimum chunk size before compression is attempted.
 - `contextCompressionTargetRatio`: maximum compressed/full token ratio accepted.
 
-Compressed context is reversible through the MCP `read_code_chunk` tool. Use the `chunkId` from compressed evidence, or provide `filePath` with `startLine`/`endLine`, to retrieve the full original chunk.
+Compressed context is reversible through MCP `search_code action=read_chunk`. Use the `chunkId` from compressed evidence, or provide `filePath` with `startLine`/`endLine`, to retrieve the full original chunk.
 
 MCP clients should prefer `search_context` for multi-file questions because it returns the same assembled, compression-aware context used by hooks and CLI explain. Use `search_code` when you explicitly need raw matching chunks instead of a token-budgeted context bundle.

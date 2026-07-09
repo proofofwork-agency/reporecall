@@ -215,6 +215,24 @@ The product stores incoming media.
   };
 }
 
+function makeMockMemorySearch(results: any[] = []): any {
+  return {
+    search: async () => results,
+  };
+}
+
+function makeMockMemoryIndexer(overrides?: Partial<any>): any {
+  return {
+    getWritableDirs: () => ["/tmp/test-mcp/.memory/reporecall-memories"],
+    getMemoryDirs: () => ["/tmp/test-mcp/.memory/reporecall-memories"],
+    indexFile: async () => true,
+    removeByFilePath: async () => true,
+    regenerateIndex: () => {},
+    compact: () => ({ archived: 0, superseded: 0 }),
+    ...overrides,
+  };
+}
+
 function runGit(projectRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: projectRoot,
@@ -286,6 +304,34 @@ describe("MCP server tools (3G)", () => {
     clearFreshnessCache();
   });
 
+  it("registers only the six public MCP tools when memory is available", async () => {
+    const handlers = await captureToolHandlers(
+      makeMockSearch(),
+      makeMockPipeline(),
+      makeMockMetadata(),
+      makeConfig(),
+      {
+        memorySearch: makeMockMemorySearch(),
+        memoryIndexer: makeMockMemoryIndexer(),
+        memoryStore: makeMockMemoryStore(),
+      }
+    );
+
+    expect([...handlers.keys()].sort()).toEqual([
+      "explain_flow",
+      "get_stats",
+      "memory",
+      "refresh_context",
+      "search_code",
+      "search_context",
+    ]);
+    expect(handlers.get("clear_index")).toBeUndefined();
+    expect(handlers.get("index_codebase")).toBeUndefined();
+    expect(handlers.get("read_code_chunk")).toBeUndefined();
+    expect(handlers.get("store_memory")).toBeUndefined();
+    expect(handlers.get("recall_memories")).toBeUndefined();
+  });
+
   it("search_code returns formatted results", async () => {
     const search = makeMockSearch();
     const pipeline = makeMockPipeline();
@@ -301,6 +347,7 @@ describe("MCP server tools (3G)", () => {
     expect(result.content[0].type).toBe("text");
 
     const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.action).toBe("search");
     expect(parsed.results.length).toBeGreaterThan(0);
     expect(parsed.results[0].name).toBe("processRequest");
     expect(parsed.results[0].id).toBe("c1");
@@ -416,87 +463,51 @@ describe("MCP server tools (3G)", () => {
     }
   });
 
-  it("read_code_chunk returns original source by chunk id", async () => {
+  it("search_code action=read_chunk returns original source by chunk id", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("read_code_chunk");
+    const handler = handlers.get("search_code");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ chunkId: "c1" });
+    const result = await handler!({ action: "read_chunk", chunkId: "c1" });
     expect(result.content).toHaveLength(1);
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.id).toBe("c1");
-    expect(parsed.content).toContain("function processRequest");
-    expect(parsed.startLine).toBe(10);
+    expect(parsed.action).toBe("read_chunk");
+    expect(parsed.chunk.id).toBe("c1");
+    expect(parsed.chunk.content).toContain("function processRequest");
+    expect(parsed.chunk.startLine).toBe(10);
   });
 
-  it("read_code_chunk returns original source by file and line range", async () => {
+  it("search_code action=read_chunk returns original source by file and line range", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("read_code_chunk");
+    const handler = handlers.get("search_code");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ filePath: "src/server.ts", startLine: 12, endLine: 13 });
+    const result = await handler!({ action: "read_chunk", filePath: "src/server.ts", startLine: 12, endLine: 13 });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.id).toBe("c1");
-    expect(parsed.filePath).toBe("src/server.ts");
+    expect(parsed.chunk.id).toBe("c1");
+    expect(parsed.chunk.filePath).toBe("src/server.ts");
   });
 
-  it("index_codebase with no paths calls indexAll", async () => {
-    let indexAllCalled = false;
-    const pipeline = makeMockPipeline({
-      indexAll: async () => {
-        indexAllCalled = true;
-        return { filesProcessed: 5, chunksCreated: 22 };
-      },
-    });
-
+  it("does not register lower-level index_codebase as a standalone MCP tool", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
-      pipeline,
+      makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("index_codebase");
-    expect(handler).toBeDefined();
 
-    const result = await handler!({ paths: undefined });
-    expect(indexAllCalled).toBe(true);
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.filesProcessed).toBe(5);
-    expect(parsed.chunksCreated).toBe(22);
-  });
-
-  it("index_codebase with paths calls indexChanged", async () => {
-    let capturedPaths: string[] | undefined;
-    const pipeline = makeMockPipeline({
-      indexChanged: async (paths: string[]) => {
-        capturedPaths = paths;
-        return { filesProcessed: paths.length, chunksCreated: paths.length * 2 };
-      },
-    });
-
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      pipeline,
-      makeMockMetadata(),
-      makeConfig()
-    );
-    const handler = handlers.get("index_codebase");
-    expect(handler).toBeDefined();
-
-    await handler!({ paths: ["src/server.ts", "src/app.ts"] });
-    expect(capturedPaths).toEqual(["src/server.ts", "src/app.ts"]);
+    expect(handlers.get("index_codebase")).toBeUndefined();
   });
 
   it("refresh_context re-indexes and regenerates wiki pages for external tools", async () => {
@@ -535,7 +546,7 @@ describe("MCP server tools (3G)", () => {
     expect(parsed.stats.totalFiles).toBe(5);
   });
 
-  it("index_codebase and refresh_context repair paths run even when the index is empty", async () => {
+  it("refresh_context repair path runs even when the index is empty", async () => {
     let indexAllCalls = 0;
     const pipeline = makeMockPipeline({
       indexAll: async () => {
@@ -555,50 +566,91 @@ describe("MCP server tools (3G)", () => {
       makeConfig()
     );
 
-    const indexResult = await handlers.get("index_codebase")!({});
     const refreshResult = await handlers.get("refresh_context")!({});
-    const parsedIndex = JSON.parse(indexResult.content[0].text);
     const parsedRefresh = JSON.parse(refreshResult.content[0].text);
 
-    expect(indexAllCalls).toBe(2);
-    expect(parsedIndex.filesProcessed).toBe(1);
+    expect(indexAllCalls).toBe(1);
     expect(parsedRefresh.index.filesProcessed).toBe(1);
-    expect(parsedIndex.banner).toBeUndefined();
     expect(parsedRefresh.banner).toBeUndefined();
   });
 
-  it("get_lens_data returns bounded Lens JSON without triggering indexing", async () => {
-    let indexAllCalled = false;
-    const pipeline = makeMockPipeline({
-      indexAll: async () => {
-        indexAllCalled = true;
-        return { filesProcessed: 1, chunksCreated: 1 };
-      },
-    });
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      pipeline,
-      makeMockMetadata(),
-      makeConfig(),
-      { memoryStore: makeMockMemoryStore() }
-    );
-    const handler = handlers.get("get_lens_data");
-    expect(handler).toBeDefined();
+  it("memory recall and store bypass empty code-index gating while code tools stay gated", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "reporecall-memory-mcp-"));
+    try {
+      let indexedMemoryPath: string | undefined;
+      const memorySearch = makeMockMemorySearch([
+        {
+          id: "mem-1",
+          name: "memory-contract",
+          description: "Memory survives empty code index",
+          type: "project",
+          class: "fact",
+          scope: "project",
+          status: "active",
+          summary: "Memory is independent of code index freshness.",
+          confidence: 0.9,
+          content: "Memory tools should work even when the code index is empty.",
+          score: 1,
+          filePath: join(tempDir, "memory-contract.md"),
+        },
+      ]);
+      const memoryStore = {
+        getByName: () => undefined,
+        search: () => [],
+        get: () => undefined,
+        getAll: () => [],
+        getByType: () => [],
+      };
+      const memoryIndexer = makeMockMemoryIndexer({
+        getWritableDirs: () => [tempDir],
+        getMemoryDirs: () => [tempDir],
+        indexFile: async (filePath: string) => {
+          indexedMemoryPath = filePath;
+          return true;
+        },
+      });
+      const metadata = makeMockMetadata({
+        getStats: () => ({ totalFiles: 0, totalChunks: 0, languages: {} }),
+        getStat: () => undefined,
+      });
+      const handlers = await captureToolHandlers(
+        makeMockSearch(),
+        makeMockPipeline(),
+        metadata,
+        makeConfig(),
+        { memorySearch, memoryIndexer, memoryStore }
+      );
 
-    const result = await handler!({
-      includeWikiContent: false,
-      includeBusinessPages: false,
-      includeGraph: false,
-    });
+      const recallResult = await handlers.get("memory")!({
+        action: "recall",
+        query: "memory contract",
+      });
+      const recallParsed = JSON.parse(recallResult.content[0].text);
+      expect(recallParsed.action).toBe("recall");
+      expect(recallParsed.memories[0].name).toBe("memory-contract");
 
-    expect(indexAllCalled).toBe(false);
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.meta.projectName).toBe("test-mcp");
-    expect(parsed.wikiPages[0].content).toBe("");
-    expect(parsed.businessPages).toEqual([]);
-    expect(parsed.productAreas).toEqual([]);
-    expect(parsed.communities).toEqual([]);
-    expect(parsed.wikiGraphNodes).toEqual([]);
+      const storeResult = await handlers.get("memory")!({
+        action: "store",
+        name: "empty index memory write",
+        description: "Store should work without code chunks",
+        memoryType: "project",
+        content: "Stored while code index is empty.",
+      });
+      const storeParsed = JSON.parse(storeResult.content[0].text);
+      expect(storeParsed.action).toBe("store");
+      expect(storeParsed.stored).toBe(true);
+      expect(indexedMemoryPath).toContain("empty_index_memory_write");
+
+      const searchResult = await handlers.get("search_code")!({ query: "anything" });
+      const searchParsed = JSON.parse(searchResult.content[0].text);
+      expect(searchParsed.banner).toContain("reporecall index EMPTY");
+
+      const flowResult = await handlers.get("explain_flow")!({ query: "anything" });
+      const flowParsed = JSON.parse(flowResult.content[0].text);
+      expect(flowParsed.banner).toContain("reporecall index EMPTY");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("get_stats returns statistics, conventions, and latency", async () => {
@@ -622,207 +674,76 @@ describe("MCP server tools (3G)", () => {
     expect(parsed.totalChunks).toBe(22);
   });
 
-  it("list_product_areas returns business-facing aggregates from wiki memory", async () => {
-    const memoryStore = makeMockMemoryStore();
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      makeMockPipeline(),
-      makeMockMetadata(),
-      makeConfig(),
-      { memoryStore }
-    );
-    const handler = handlers.get("list_product_areas");
-    expect(handler).toBeDefined();
-
-    const result = await handler!({ limit: 10 });
-    expect(result.isError).toBeUndefined();
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.count).toBeGreaterThan(0);
-    expect(parsed.businessPageCount).toBe(2);
-    expect(parsed.productAreas.map((area: any) => area.name)).toContain("Product Area: Authentication");
-  });
-
-  it("list_product_areas hides unsafe fallback areas unless diagnostics are requested", async () => {
-    const base = makeMockMemoryStore();
-    const memoryStore = {
-      ...base,
-      getByType: (type: string) => [
-        ...base.getByType(type),
-        {
-          id: "wiki-technical-helper",
-          name: "business-shared-retry-helper",
-          type: "wiki",
-          description: "Business capability view",
-          summary: "Backend helper coordinates retry work.",
-          content: `## Capability
-Backend: WithRetry, ProcessRequest
-
-## Actor
-Product user
-
-## Trigger
-A request enters this capability.
-
-## Business outcome
-The product completes the capability.`,
-          filePath: "/tmp/test-mcp/.memory/wiki/business-shared-retry-helper.md",
-          relatedFiles: ["src/retry.ts"],
-          relatedSymbols: ["WithRetry", "ProcessRequest"],
-          confidence: 0.61,
-        },
-      ],
-    };
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      makeMockPipeline(),
-      makeMockMetadata(),
-      makeConfig(),
-      { memoryStore }
-    );
-    const handler = handlers.get("list_product_areas");
-    expect(handler).toBeDefined();
-
-    const safeResult = await handler!({ limit: 20 });
-    const safeParsed = JSON.parse(safeResult.content[0].text);
-    expect(safeParsed.productAreas.every((area: any) => area.presentationSafe)).toBe(true);
-    expect(safeParsed.safeTotal).toBe(safeParsed.count);
-
-    const diagnosticResult = await handler!({ limit: 20, includeUnsafe: true });
-    const diagnosticParsed = JSON.parse(diagnosticResult.content[0].text);
-    expect(diagnosticParsed.productAreas.some((area: any) => area.presentationSafe === false)).toBe(true);
-  });
-
-  it("business_context_query returns matching product areas and pages", async () => {
-    const memoryStore = makeMockMemoryStore();
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      makeMockPipeline(),
-      makeMockMetadata(),
-      makeConfig(),
-      { memoryStore }
-    );
-    const handler = handlers.get("business_context_query");
-    expect(handler).toBeDefined();
-
-    const result = await handler!({ query: "authentication session login", limit: 3 });
-    expect(result.isError).toBeUndefined();
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.query).toBe("authentication session login");
-    expect(parsed.productAreas[0].name).toBe("Product Area: Authentication");
-    expect(parsed.businessPages[0].name).toBe("business-user-authentication");
-    expect(parsed.businessPages[0].supportingFiles).toContain("src/auth.ts");
-  });
-
-  it("wiki_read returns replacement suggestions for stale generated slugs", async () => {
-    const base = makeMockMemoryStore();
-    const memoryStore = {
-      ...base,
-      getByName: () => undefined,
-      getByType: (type: string) => {
-        if (type !== "wiki") return [];
-        return [
-          {
-            id: "wiki-area",
-            name: "product-area-analytics",
-            type: "wiki",
-            description: "Analytics groups dashboard reporting capabilities.",
-            summary: "Analytics covers dashboard reporting and metric review.",
-            content: "Dashboard charts and reports help users review metrics.",
-            filePath: "/tmp/test-mcp/.memory/wiki/product-area-analytics.md",
-            relatedFiles: [],
-            relatedSymbols: [],
-            confidence: 0.86,
-          },
-          {
-            id: "wiki-upload",
-            name: "business-upload",
-            type: "wiki",
-            description: "Upload accepts files.",
-            summary: "Upload accepts incoming files.",
-            content: "File intake and storage.",
-            filePath: "/tmp/test-mcp/.memory/wiki/business-upload.md",
-            relatedFiles: [],
-            relatedSymbols: [],
-            confidence: 0.8,
-          },
-        ];
-      },
-    };
+  it("does not register Lens, business, wiki, topology, or clear-index tools", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig(),
       {
-        memoryStore,
-        memorySearch: { search: async () => [] },
-        memoryIndexer: { getWritableDirs: () => ["/tmp/test-mcp/.memory"] },
+        memorySearch: makeMockMemorySearch(),
+        memoryIndexer: makeMockMemoryIndexer(),
+        memoryStore: makeMockMemoryStore(),
       }
     );
-    const handler = handlers.get("wiki_read");
-    expect(handler).toBeDefined();
 
-    const result = await handler!({ name: "business-analytics-dashboard" });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.status).toBe("not_found");
-    expect(parsed.suggestions[0].name).toBe("product-area-analytics");
-    expect(parsed.suggestions[0].matchedTerms).toContain("dashboard");
+    for (const removedName of [
+      "get_lens_data",
+      "list_product_areas",
+      "business_context_query",
+      "wiki_query",
+      "wiki_read",
+      "wiki_write",
+      "wiki_check_staleness",
+      "get_communities",
+      "get_hub_nodes",
+      "get_surprises",
+      "suggest_investigations",
+      "clear_index",
+    ]) {
+      expect(handlers.get(removedName), removedName).toBeUndefined();
+    }
   });
 
-  it("clear_index with confirm=false returns abort message", async () => {
+  it("explain_flow action=callers returns callers of a function", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("clear_index");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ confirm: false });
-    expect(result.content[0].text).toContain("Aborted");
-  });
-
-  it("find_callers returns callers of a function", async () => {
-    const handlers = await captureToolHandlers(
-      makeMockSearch(),
-      makeMockPipeline(),
-      makeMockMetadata(),
-      makeConfig()
-    );
-    const handler = handlers.get("find_callers");
-    expect(handler).toBeDefined();
-
-    const result = await handler!({ functionName: "processRequest", limit: 10 });
+    const result = await handler!({ action: "callers", functionName: "processRequest", limit: 10 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(parsed.results.length).toBeGreaterThan(0);
-    expect(parsed.results[0].callerName).toBe("handleRoute");
+    expect(parsed.action).toBe("callers");
+    expect(parsed.callers.length).toBeGreaterThan(0);
+    expect(parsed.callers[0].callerName).toBe("handleRoute");
     expect(parsed.staleness.level).toBe("fresh");
   });
 
-  it("find_callees returns callees of a function", async () => {
+  it("explain_flow action=callees returns callees of a function", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("find_callees");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ functionName: "processRequest", limit: 10 });
+    const result = await handler!({ action: "callees", functionName: "processRequest", limit: 10 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(parsed.results.length).toBeGreaterThan(0);
-    expect(parsed.results[0].targetName).toBe("validateInput");
+    expect(parsed.action).toBe("callees");
+    expect(parsed.callees.length).toBeGreaterThan(0);
+    expect(parsed.callees[0].targetName).toBe("validateInput");
     expect(parsed.staleness.level).toBe("fresh");
   });
 
-  it("get_symbol returns matching chunks by name", async () => {
+  it("explain_flow action=symbol returns matching chunks by name", async () => {
     const metadata = makeMockMetadata({
       findChunksByNames: (names: string[]) => {
         if (names.includes("processRequest")) {
@@ -850,12 +771,13 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("get_symbol");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ name: "processRequest" });
+    const result = await handler!({ action: "symbol", name: "processRequest" });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("symbol");
     expect(parsed.symbol).toBe("processRequest");
     expect(parsed.count).toBe(1);
     expect(parsed.matches[0].name).toBe("processRequest");
@@ -863,7 +785,7 @@ The product completes the capability.`,
     expect(parsed.matches[0].kind).toBe("function_declaration");
   });
 
-  it("get_symbol returns empty matches for unknown symbol", async () => {
+  it("explain_flow action=symbol returns empty matches for unknown symbol", async () => {
     const metadata = makeMockMetadata({
       findChunksByNames: () => [],
     });
@@ -874,12 +796,13 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("get_symbol");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ name: "nonexistent" });
+    const result = await handler!({ action: "symbol", name: "nonexistent" });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("symbol");
     expect(parsed.symbol).toBe("nonexistent");
     expect(parsed.count).toBe(0);
     expect(parsed.matches).toEqual([]);
@@ -996,7 +919,7 @@ The product completes the capability.`,
     expect(result.content[0].text).toContain("No matching code symbol");
   });
 
-  it("get_imports returns import records for a known file", async () => {
+  it("explain_flow action=imports returns import records for a known file", async () => {
     const metadata = makeMockMetadata({
       getImportsForFile: (filePath: string) => {
         if (filePath === "src/server.ts") {
@@ -1027,13 +950,14 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("get_imports");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ filePath: "src/server.ts" });
+    const result = await handler!({ action: "imports", filePath: "src/server.ts" });
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("imports");
     expect(parsed.filePath).toBe("src/server.ts");
     expect(parsed.count).toBe(2);
     expect(Array.isArray(parsed.imports)).toBe(true);
@@ -1051,7 +975,7 @@ The product completes the capability.`,
     expect(second.resolvedPath).toBeUndefined();
   });
 
-  it("get_imports returns empty imports for a file with no imports", async () => {
+  it("explain_flow action=imports returns empty imports for a file with no imports", async () => {
     const metadata = makeMockMetadata({
       getImportsForFile: () => [],
     });
@@ -1062,33 +986,34 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("get_imports");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ filePath: "src/empty.ts" });
+    const result = await handler!({ action: "imports", filePath: "src/empty.ts" });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("imports");
     expect(parsed.filePath).toBe("src/empty.ts");
     expect(parsed.count).toBe(0);
     expect(parsed.imports).toEqual([]);
   });
 
-  it("get_imports rejects a path outside the project root", async () => {
+  it("explain_flow action=imports rejects a path outside the project root", async () => {
     const handlers = await captureToolHandlers(
       makeMockSearch(),
       makeMockPipeline(),
       makeMockMetadata(),
       makeConfig()
     );
-    const handler = handlers.get("get_imports");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ filePath: "../../etc/passwd" });
+    const result = await handler!({ action: "imports", filePath: "../../etc/passwd" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("Error");
   });
 
-  it("resolve_seed returns bestSeed and candidates for a known symbol", async () => {
+  it("explain_flow action=resolve_seed returns bestSeed and candidates for a known symbol", async () => {
     const chunk = {
       id: "chunk-processRequest",
       name: "processRequest",
@@ -1135,13 +1060,14 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("resolve_seed");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ query: "processRequest" });
+    const result = await handler!({ action: "resolve_seed", query: "processRequest" });
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("resolve_seed");
     // Must expose the three top-level keys the MCP tool documents
     expect(parsed).toHaveProperty("bestSeed");
     expect(parsed).toHaveProperty("candidates");
@@ -1158,7 +1084,7 @@ The product completes the capability.`,
     }
   });
 
-  it("resolve_seed returns null bestSeed for an unknown symbol", async () => {
+  it("explain_flow action=resolve_seed returns null bestSeed for an unknown symbol", async () => {
     const metadata = makeMockMetadata({
       findChunksByNames: () => [],
     });
@@ -1176,18 +1102,19 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("resolve_seed");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ query: "completelyUnknownSymbolXYZ" });
+    const result = await handler!({ action: "resolve_seed", query: "completelyUnknownSymbolXYZ" });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("resolve_seed");
     expect(parsed.bestSeed).toBeNull();
     expect(parsed.count).toBe(0);
     expect(parsed.candidates).toEqual([]);
   });
 
-  it("build_stack_tree includes coverage in response", async () => {
+  it("explain_flow action=stack_tree includes coverage in response", async () => {
     const seedChunk = {
       id: "seed-1",
       name: "myFunc",
@@ -1227,12 +1154,13 @@ The product completes the capability.`,
       metadata,
       makeConfig()
     );
-    const handler = handlers.get("build_stack_tree");
+    const handler = handlers.get("explain_flow");
     expect(handler).toBeDefined();
 
-    const result = await handler!({ seed: "myFunc" });
+    const result = await handler!({ action: "stack_tree", seed: "myFunc" });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(parsed.action).toBe("stack_tree");
     expect(parsed).toHaveProperty("coverage");
     expect(parsed.coverage).toHaveProperty("utilization");
     expect(parsed.coverage).toHaveProperty("balance");

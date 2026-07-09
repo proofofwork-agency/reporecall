@@ -47,6 +47,16 @@ function loadVersion(): string {
 }
 
 const version = loadVersion()
+const PUBLIC_MCP_TOOLS = new Set([
+  'search_context',
+  'search_code',
+  'explain_flow',
+  'memory',
+  'refresh_context',
+  'get_stats',
+])
+
+const EMPTY_INDEX_EXEMPT_TOOLS = new Set(['get_stats', 'memory'])
 
 function isPathSafe(projectRoot: string, p: string): boolean {
   const abs = resolve(projectRoot, p)
@@ -249,12 +259,13 @@ export function createMCPServer(
   })
 
   const registerTool = ((name: string, toolConfig: any, handler: any) => {
+    if (!PUBLIC_MCP_TOOLS.has(name)) return undefined as any
     return (server.registerTool as any)(name, toolConfig, async (...callArgs: unknown[]) => {
       const readOnly = toolConfig.annotations?.readOnlyHint === true
       if (!readOnly) return handler(...callArgs)
 
       const freshness = computeFreshness(metadata, config.projectRoot)
-      if (freshness.level === 'empty' && name !== 'get_stats') {
+      if (freshness.level === 'empty' && !EMPTY_INDEX_EXEMPT_TOOLS.has(name)) {
         return textResult(emptyIndexPayload(freshness))
       }
 
@@ -289,9 +300,10 @@ export function createMCPServer(
   registerTool(
     'search_code',
     {
-      description: 'Search the codebase using hybrid vector + keyword search. Returns { results, count, staleness } with raw matching chunks in results. For multi-file questions, prefer search_context.',
+      description: 'Search raw code chunks or read an exact indexed chunk. Use action=search for raw hits, action=read_chunk with chunkId or filePath/line range for full source. Returns staleness on search/read responses.',
       inputSchema: {
-        query: z.string().min(1).describe('Search query'),
+        action: z.enum(['search', 'read_chunk']).optional().describe('Operation to run (default: search)'),
+        query: z.string().min(1).optional().describe('Search query for action=search'),
         limit: z
           .number()
           .int()
@@ -302,32 +314,68 @@ export function createMCPServer(
         activeFiles: z
           .array(z.string())
           .optional()
-          .describe('Currently open file paths for boosting')
+          .describe('Currently open file paths for boosting'),
+        chunkId: z.string().min(1).optional().describe('Exact chunk id for action=read_chunk'),
+        filePath: z.string().min(1).optional().describe('Indexed project-relative file path for action=read_chunk'),
+        startLine: z.number().int().min(1).optional().describe('Start line for file path lookup'),
+        endLine: z.number().int().min(1).optional().describe('End line for file path lookup')
       },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ query, limit, activeFiles }) => {
+    async ({ action, query, limit, activeFiles, chunkId, filePath, startLine, endLine }) => {
       try {
         const doSearch = async () => {
+          if ((action ?? 'search') === 'read_chunk') {
+            const chunk = chunkId
+              ? metadata.getChunk(chunkId)
+              : findBestChunkByLocation(metadata, filePath, startLine, endLine)
+
+            if (!chunk) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({ error: 'chunk not found', chunkId, filePath, startLine, endLine }, null, 2)
+                  }
+                ],
+                isError: true
+              }
+            }
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ action: 'read_chunk', chunk: shapeCodeChunk(chunk) }, null, 2)
+                }
+              ]
+            }
+          }
+
+          if (!query) throw new Error('query is required for search_code action=search')
           const results = await search.search(query, { limit, activeFiles })
           return {
             content: [
               {
                 type: 'text' as const,
                 text: JSON.stringify(
-                  results.map((r) => ({
-                    name: r.name,
-                    id: r.id,
-                    filePath: r.filePath,
-                    kind: r.kind,
-                    startLine: r.startLine,
-                    endLine: r.endLine,
-                    score: r.score,
-                    content: r.content,
-                    docstring: r.docstring,
-                    parentName: r.parentName,
-                    language: r.language
-                  })),
+                  {
+                    action: 'search',
+                    results: results.map((r) => ({
+                      name: r.name,
+                      id: r.id,
+                      filePath: r.filePath,
+                      kind: r.kind,
+                      startLine: r.startLine,
+                      endLine: r.endLine,
+                      score: r.score,
+                      content: r.content,
+                      docstring: r.docstring,
+                      parentName: r.parentName,
+                      language: r.language
+                    })),
+                    count: results.length
+                  },
                   null,
                   2
                 )
@@ -346,7 +394,7 @@ export function createMCPServer(
     'search_context',
     {
       description:
-        'Return assembled, token-budgeted code context for a multi-file question. Uses Reporecall routing and evidence compression; compressed entries can be expanded with read_code_chunk.',
+        'Return assembled, token-budgeted code context for a multi-file question. Uses Reporecall routing and evidence compression; compressed entries can be expanded with search_code action=read_chunk.',
       inputSchema: {
         query: z.string().min(1).describe('Natural language codebase question'),
         tokenBudget: z
@@ -982,9 +1030,18 @@ export function createMCPServer(
     'explain_flow',
     {
       description:
-        'Explain the call flow around a query or function name. Resolves a seed symbol, builds a bidirectional call tree, and returns assembled flow context with callers, seed, and callees.',
+        'Code navigation verb tool. action=flow returns assembled call-flow context; callers/callees/stack_tree/imports/symbol/resolve_seed return focused graph or symbol details.',
       inputSchema: {
-        query: z.string().min(1).describe('Natural language query or function name'),
+        action: z
+          .enum(['flow', 'callers', 'callees', 'stack_tree', 'imports', 'symbol', 'resolve_seed'])
+          .optional()
+          .describe('Navigation action to run (default: flow)'),
+        query: z.string().min(1).optional().describe('Natural language query or function/symbol name'),
+        functionName: z.string().min(1).optional().describe('Function name for callers/callees'),
+        name: z.string().min(1).optional().describe('Symbol name for action=symbol'),
+        seed: z.string().min(1).optional().describe('Function or method name for action=stack_tree'),
+        filePath: z.string().min(1).optional().describe('Relative file path for action=imports'),
+        limit: z.number().int().min(1).max(500).optional().describe('Max results for callers/callees (default 20)'),
         direction: z
           .enum(['up', 'down', 'both'])
           .optional()
@@ -999,11 +1056,99 @@ export function createMCPServer(
       },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ query, direction, maxDepth }) => {
+    async ({ action, query, functionName, name, seed, filePath, limit, direction, maxDepth }) => {
       try {
         const doExplain = () => {
+          const selectedAction = action ?? 'flow'
+          if (selectedAction === 'callers') {
+            const target = functionName ?? query ?? name
+            if (!target) throw new Error('functionName or query is required for explain_flow action=callers')
+            const callers = search.findCallers(target, limit)
+            return {
+              action: selectedAction,
+              payload: { functionName: target, callers, count: callers.length },
+              relatedFiles: callers.map((caller) => caller.filePath).filter(Boolean),
+              relatedSymbols: callers.map((caller) => caller.callerName).filter(Boolean),
+            }
+          }
+
+          if (selectedAction === 'callees') {
+            const target = functionName ?? query ?? name
+            if (!target) throw new Error('functionName or query is required for explain_flow action=callees')
+            const callees = search.findCallees(target, limit)
+            return {
+              action: selectedAction,
+              payload: { functionName: target, callees, count: callees.length },
+              relatedFiles: callees.map((callee) => callee.filePath).filter(Boolean),
+              relatedSymbols: callees.map((callee) => callee.targetName).filter(Boolean),
+            }
+          }
+
+          if (selectedAction === 'imports') {
+            if (!filePath) throw new Error('filePath is required for explain_flow action=imports')
+            if (!isPathSafe(config.projectRoot, filePath)) throw new Error('Path outside project root')
+            const imports = metadata.getImportsForFile(filePath)
+            return {
+              action: selectedAction,
+              payload: {
+                filePath,
+                imports: imports.map((i) => ({
+                  name: i.importedName,
+                  from: i.sourceModule,
+                  resolvedPath: i.resolvedPath,
+                  isDefault: i.isDefault,
+                  isNamespace: i.isNamespace
+                })),
+                count: imports.length
+              },
+              relatedFiles: imports.map((i) => i.resolvedPath).filter((p): p is string => Boolean(p)),
+              relatedSymbols: imports.map((i) => i.importedName).filter(Boolean),
+            }
+          }
+
+          if (selectedAction === 'symbol') {
+            const symbolName = name ?? query
+            if (!symbolName) throw new Error('name or query is required for explain_flow action=symbol')
+            const matches = metadata.findChunksByNames([symbolName])
+            return {
+              action: selectedAction,
+              payload: {
+                symbol: symbolName,
+                matches: matches.map((m) => ({
+                  name: m.name,
+                  kind: m.kind,
+                  filePath: m.filePath,
+                  startLine: m.startLine,
+                  endLine: m.endLine,
+                  content: m.content,
+                  parentName: m.parentName,
+                  language: m.language
+                })),
+                count: matches.length
+              },
+              relatedFiles: matches.map((m) => m.filePath),
+              relatedSymbols: matches.map((m) => m.name),
+            }
+          }
+
           const ftsStore = pipeline.getFTSStore()
-          const seedResult = resolveSeeds(query, metadata, ftsStore)
+          const seedQuery = selectedAction === 'stack_tree'
+            ? seed ?? query ?? name
+            : query ?? seed ?? name
+          if (!seedQuery) throw new Error('query or seed is required for explain_flow')
+          const seedResult = resolveSeeds(seedQuery, metadata, ftsStore)
+          if (selectedAction === 'resolve_seed') {
+            return {
+              action: selectedAction,
+              payload: {
+                bestSeed: seedResult.bestSeed,
+                candidates: seedResult.seeds,
+                count: seedResult.seeds.length
+              },
+              relatedFiles: seedResult.seeds.map((candidate) => candidate.filePath).filter(Boolean),
+              relatedSymbols: seedResult.seeds.map((candidate) => candidate.name).filter(Boolean),
+            }
+          }
           if (!seedResult.bestSeed) {
             return null
           }
@@ -1014,8 +1159,30 @@ export function createMCPServer(
             maxDepth: maxDepth ?? 2,
             maxBranchFactor: 3,
             maxNodes: 24,
-            query
+            query: seedQuery
           })
+
+          if (selectedAction === 'stack_tree') {
+            const allNodes = [tree.seed, ...tree.upTree, ...tree.downTree]
+            return {
+              action: selectedAction,
+              payload: {
+                seed: tree.seed,
+                upTree: tree.upTree,
+                downTree: tree.downTree,
+                edges: tree.edges,
+                nodeCount: tree.nodeCount,
+                coverage: tree.coverage
+              },
+              capture: {
+                type: 'tree' as const,
+                seedQuery,
+                seedName: seedResult.bestSeed.name,
+              },
+              relatedFiles: [...new Set(allNodes.map(n => n.filePath).filter(Boolean))],
+              relatedSymbols: [...new Set(allNodes.map(n => n.name))],
+            }
+          }
 
           const flowBudget = resolveContextBudget(
             config.contextBudget,
@@ -1025,7 +1192,7 @@ export function createMCPServer(
             tree,
             metadata,
             flowBudget,
-            query,
+            seedQuery,
             {
               contextCompressionEnabled: config.contextCompressionEnabled,
               contextCompressionMode: config.contextCompressionMode,
@@ -1037,9 +1204,31 @@ export function createMCPServer(
 
           const allNodes = [tree.seed, ...tree.upTree, ...tree.downTree]
           return {
-            seed: seedResult.bestSeed,
-            tree,
-            flowContext,
+            action: 'flow',
+            payload: {
+              seed: {
+                name: seedResult.bestSeed.name,
+                filePath: seedResult.bestSeed.filePath,
+                kind: seedResult.bestSeed.kind,
+                confidence: seedResult.bestSeed.confidence
+              },
+              tree: {
+                nodeCount: tree.nodeCount,
+                upCount: tree.upTree.length,
+                downCount: tree.downTree.length,
+                coverage: tree.coverage
+              },
+              flowContext: flowContext.text,
+              tokenCount: flowContext.tokenCount,
+              chunksIncluded: flowContext.chunks.length,
+              compression: flowContext.compression
+            },
+            capture: {
+              type: 'flow' as const,
+              query: seedQuery,
+              seedName: seedResult.bestSeed.name,
+              text: flowContext.text,
+            },
             relatedFiles: [...new Set(flowContext.chunks.map(c => c.filePath).filter(Boolean))],
             relatedSymbols: [...new Set(allNodes.map(n => n.name))]
           }
@@ -1047,39 +1236,30 @@ export function createMCPServer(
         const explained = lock ? await lock.withRead(async () => doExplain()) : doExplain()
         if (!explained) {
           return {
-            content: [{ type: 'text' as const, text: `No matching code symbol found for "${query}"` }]
+            content: [{ type: 'text' as const, text: `No matching code symbol found for "${query ?? seed ?? name ?? functionName ?? ''}"` }]
           }
         }
 
         const flowJson = JSON.stringify(
           {
-            seed: {
-              name: explained.seed.name,
-              filePath: explained.seed.filePath,
-              kind: explained.seed.kind,
-              confidence: explained.seed.confidence
-            },
-            tree: {
-              nodeCount: explained.tree.nodeCount,
-              upCount: explained.tree.upTree.length,
-              downCount: explained.tree.downTree.length,
-              coverage: explained.tree.coverage
-            },
-            flowContext: explained.flowContext.text,
-            tokenCount: explained.flowContext.tokenCount,
-            chunksIncluded: explained.flowContext.chunks.length,
-            compression: explained.flowContext.compression
+            action: explained.action,
+            ...explained.payload,
           },
           null,
           2
         )
 
-        // Fire-and-forget wiki auto-capture
-        if (wikiAutoCapture) {
+        if (wikiAutoCapture && explained.capture?.type === 'flow') {
           wikiAutoCapture.captureFlowResult(
-            query, explained.flowContext.text, explained.seed.name,
+            explained.capture.query, explained.capture.text, explained.capture.seedName,
             explained.relatedFiles, explained.relatedSymbols
           ).catch(err => getLogger().warn({ err }, 'Wiki auto-capture (flow) failed'))
+        }
+        if (wikiAutoCapture && explained.capture?.type === 'tree') {
+          wikiAutoCapture.captureTreeResult(
+            explained.capture.seedQuery, explained.capture.seedName, flowJson,
+            explained.relatedFiles, explained.relatedSymbols
+          ).catch(err => getLogger().warn({ err }, 'Wiki auto-capture (tree) failed'))
         }
 
         return {
@@ -1094,6 +1274,375 @@ export function createMCPServer(
   // --- Memory tools (only registered when memory layer is available) ---
 
   if (memorySearch && memoryIndexer) {
+    registerTool(
+      'memory',
+      {
+        description:
+          'Project memory verb tool. Use action=recall|explain|list for reads and action=store|forget for explicit memory writes. Memory is independent of the code index.',
+        inputSchema: {
+          action: z
+            .enum(['recall', 'explain', 'list', 'store', 'forget'])
+            .describe('Memory action to run'),
+          query: z.string().min(1).optional().describe('Search query for recall/explain'),
+          limit: z.number().int().min(1).max(50).optional().describe('Max results'),
+          tokenBudget: z.number().min(0).optional().describe('Memory token budget for action=explain'),
+          types: z.array(z.enum(['user', 'feedback', 'project', 'reference'])).optional().describe('Filter by memory type'),
+          classes: z.array(z.enum(['rule', 'fact', 'episode', 'working'])).optional().describe('Filter by memory class'),
+          scopes: z.array(z.enum(['global', 'project', 'branch'])).optional().describe('Filter by memory scope'),
+          statuses: z.array(z.enum(['active', 'archived', 'superseded'])).optional().describe('Filter by memory status'),
+          activeFiles: z.array(z.string()).optional().describe('Active file paths for contextual boosting'),
+          topCodeFiles: z.array(z.string()).optional().describe('Top code file paths for contextual boosting'),
+          topCodeSymbols: z.array(z.string()).optional().describe('Top code symbols for contextual boosting'),
+          minConfidence: z.number().min(0).max(1).optional().describe('Minimum confidence score'),
+          memoryType: z.enum(['user', 'feedback', 'project', 'reference']).optional().describe('Memory type for list/store'),
+          memoryClass: z.enum(['rule', 'fact', 'episode', 'working']).optional().describe('Memory class for list/store'),
+          memoryScope: z.enum(['global', 'project', 'branch']).optional().describe('Memory scope for list/store'),
+          memoryStatus: z.enum(['active', 'archived', 'superseded']).optional().describe('Memory status for list/store'),
+          name: z.string().min(1).max(200).optional().describe('Memory name for store/forget'),
+          description: z.string().min(1).max(500).optional().describe('One-line memory description for store'),
+          content: z.string().min(1).optional().describe('Memory markdown content for store'),
+          summary: z.string().max(500).optional().describe('Optional compressed summary for store'),
+          sourceKind: z.enum(['claude_auto', 'reporecall_local', 'generated']).optional().describe('Optional source kind for store'),
+          pinned: z.boolean().optional().describe('Whether the stored memory should stay pinned'),
+          relatedFiles: z.array(z.string()).optional().describe('Related file paths for store'),
+          relatedSymbols: z.array(z.string()).optional().describe('Related symbols for store'),
+          supersedesId: z.string().optional().describe('Superseded memory ID for store'),
+          confidence: z.number().min(0).max(1).optional().describe('Confidence score for store'),
+          reason: z.string().max(500).optional().describe('Lifecycle or compaction reason for store'),
+        }
+      },
+      async ({
+        action,
+        query,
+        limit,
+        tokenBudget,
+        types,
+        classes,
+        scopes,
+        statuses,
+        activeFiles,
+        topCodeFiles,
+        topCodeSymbols,
+        minConfidence,
+        memoryType,
+        memoryClass,
+        memoryScope,
+        memoryStatus,
+        name,
+        description,
+        content,
+        summary,
+        sourceKind,
+        pinned,
+        relatedFiles,
+        relatedSymbols,
+        supersedesId,
+        confidence,
+        reason
+      }) => {
+        try {
+          if (action === 'recall') {
+            if (!query) throw new Error('query is required for memory action=recall')
+            const doRecall = async () => {
+              const results = await memorySearch.search(query, {
+                limit,
+                types: types as MemoryType[] | undefined,
+                classes: classes as MemoryClass[] | undefined,
+                scopes: scopes as MemoryScope[] | undefined,
+                statuses: statuses as MemoryStatus[] | undefined,
+                activeFiles,
+                topCodeFiles,
+                topCodeSymbols,
+                minConfidence,
+              })
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      action: 'recall',
+                      memories: results.map((r) => ({
+                        name: r.name,
+                        description: r.description,
+                        type: r.type,
+                        class: r.class,
+                        scope: r.scope,
+                        status: r.status,
+                        summary: r.summary,
+                        confidence: r.confidence,
+                        content: r.content,
+                        score: r.score,
+                        filePath: r.filePath
+                      })),
+                      count: results.length
+                    }, null, 2)
+                  }
+                ]
+              }
+            }
+            return lock ? await lock.withRead(doRecall) : doRecall()
+          }
+
+          if (action === 'explain') {
+            if (!query) throw new Error('query is required for memory action=explain')
+            const doExplain = async () => {
+              const budget = tokenBudget ?? 500
+              const results = await memorySearch.search(query, {
+                limit: limit ?? 8,
+                types: types as MemoryType[] | undefined,
+                classes: classes as MemoryClass[] | undefined,
+                scopes: scopes as MemoryScope[] | undefined,
+                statuses: statuses as MemoryStatus[] | undefined,
+                activeFiles,
+                topCodeFiles,
+                topCodeSymbols,
+                minConfidence,
+              })
+              const assembled = assembleMemoryContext(results, budget, {
+                classBudgets: memoryClassBudgets(budget),
+              })
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      action: 'explain',
+                      route: assembled.route,
+                      budget: assembled.budget,
+                      selected: assembled.memories.map((memory) => ({
+                        name: memory.name,
+                        class: resolveMemoryClass(memory),
+                        scope: resolveMemoryScope(memory),
+                        status: resolveMemoryStatus(memory),
+                        summary: resolveMemorySummary(memory),
+                        score: memory.score,
+                        filePath: memory.filePath,
+                      })),
+                      dropped: assembled.dropped.map((memory) => ({
+                        name: memory.name,
+                        class: memory.class ?? resolveMemoryClass(memory),
+                        reason: memory.dropReason,
+                        filePath: memory.filePath,
+                      })),
+                      text: assembled.text,
+                      tokenCount: assembled.tokenCount,
+                    }, null, 2)
+                  }
+                ]
+              }
+            }
+            return lock ? await lock.withRead(doExplain) : doExplain()
+          }
+
+          if (action === 'list') {
+            const doList = () => {
+              if (!memoryStore) {
+                return {
+                  content: [
+                    {
+                      type: 'text' as const,
+                      text: JSON.stringify({ action: 'list', memories: [], count: 0 })
+                    }
+                  ]
+                }
+              }
+              const memories = memoryType
+                ? memoryStore.getByType(memoryType as MemoryType)
+                : memoryStore.getAll()
+              const filtered = memories.filter((memory) => {
+                if (memoryClass && resolveMemoryClass(memory) !== memoryClass) return false
+                if (memoryScope && resolveMemoryScope(memory) !== memoryScope) return false
+                if (memoryStatus && resolveMemoryStatus(memory) !== memoryStatus) return false
+                return true
+              })
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      action: 'list',
+                      memories: filtered.map((m) => ({
+                        name: m.name,
+                        type: m.type,
+                        class: resolveMemoryClass(m),
+                        scope: resolveMemoryScope(m),
+                        status: resolveMemoryStatus(m),
+                        description: m.description,
+                        summary: resolveMemorySummary(m),
+                        accessCount: m.accessCount,
+                        lastAccessed: m.lastAccessed,
+                        importance: m.importance,
+                        pinned: m.pinned,
+                        sourceKind: m.sourceKind,
+                        confidence: m.confidence,
+                        relatedFiles: m.relatedFiles,
+                        relatedSymbols: m.relatedSymbols,
+                        supersedesId: m.supersedesId,
+                        reason: m.reason,
+                        filePath: m.filePath
+                      })),
+                      count: filtered.length
+                    }, null, 2)
+                  }
+                ]
+              }
+            }
+            return lock ? await lock.withRead(async () => doList()) : doList()
+          }
+
+          if (action === 'store') {
+            if (!name) throw new Error('name is required for memory action=store')
+            if (!description) throw new Error('description is required for memory action=store')
+            if (!memoryType) throw new Error('memoryType is required for memory action=store')
+            if (!content) throw new Error('content is required for memory action=store')
+            const doStore = async (): Promise<{ content: Array<{ type: 'text'; text: string }> } | { __filePath: string }> => {
+              const writableDirs = memoryIndexer.getWritableDirs()
+              if (writableDirs.length === 0) {
+                throw new Error('No memory directory configured')
+              }
+
+              const targetDir = writableDirs[0]!
+              mkdirSync(targetDir, { recursive: true })
+
+              if (memoryStore) {
+                const existing = memoryStore.getByName(name)
+                if (!existing) {
+                  const similar = memoryStore.search(name, 5)
+                  const nameLower = name.toLowerCase()
+                  const blocked = similar.find((match) => {
+                    const existingMem = memoryStore.get(match.id)
+                    if (!existingMem || existingMem.name === name) return false
+                    if (match.rank > -25) return false
+                    const existingLower = existingMem.name.toLowerCase()
+                    const overlapLen = Math.max(10, Math.floor(Math.max(existingLower.length, nameLower.length) * 0.40))
+                    const nameOverlap =
+                      existingLower.includes(nameLower.slice(0, overlapLen)) ||
+                      nameLower.includes(existingLower.slice(0, overlapLen))
+                    return nameOverlap
+                  })
+                  if (blocked) {
+                    const existingMem = memoryStore.get(blocked.id)!
+                    return {
+                      content: [
+                        {
+                          type: 'text' as const,
+                          text: JSON.stringify({
+                            action: 'store',
+                            stored: false,
+                            warning: `Similar memory already exists: "${existingMem.name}". Consider updating that memory instead, or use the same name to overwrite.`,
+                            existingName: existingMem.name,
+                            existingDescription: existingMem.description
+                          })
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+
+              const safeName = name
+                .replace(/[^a-zA-Z0-9_-]/g, '_')
+                .toLowerCase()
+                .slice(0, 100)
+
+              const filePath = writeManagedMemoryFile(targetDir, safeName, {
+                name,
+                description,
+                memoryType,
+                content,
+                class: memoryClass,
+                scope: memoryScope,
+                status: memoryStatus,
+                summary,
+                sourceKind,
+                pinned,
+                relatedFiles,
+                relatedSymbols,
+                supersedesId,
+                confidence,
+                reason,
+              })
+              await memoryIndexer.indexFile(filePath)
+              return { __filePath: filePath }
+            }
+
+            const outcome = lock ? await lock.withWrite(doStore) : await doStore()
+            if ('__filePath' in outcome) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({ action: 'store', stored: true, filePath: outcome.__filePath, name })
+                  }
+                ]
+              }
+            }
+            return outcome
+          }
+
+          if (action === 'forget') {
+            if (!name) throw new Error('name is required for memory action=forget')
+            const doForget = async () => {
+              const match = memoryStore
+                ? memoryStore.getByName(name)
+                : (await memorySearch.search(name, { limit: 5 })).find(
+                    (r) => r.name === name || r.name.toLowerCase() === name.toLowerCase()
+                  )
+
+              if (!match) {
+                return {
+                  content: [
+                    {
+                      type: 'text' as const,
+                      text: `No memory found with name "${name}"`
+                    }
+                  ]
+                }
+              }
+
+              const memDirs = memoryIndexer.getMemoryDirs()
+              const abs = resolve(match.filePath)
+              const pathAllowed = memDirs.some((dir) => {
+                return abs.startsWith(dir + sep) || abs === dir
+              })
+              if (!pathAllowed) {
+                return {
+                  content: [{ type: 'text' as const, text: `Memory file path is outside allowed directories` }]
+                }
+              }
+              try {
+                unlinkSync(abs)
+              } catch {
+                // File may already be gone.
+              }
+
+              await memoryIndexer.removeByFilePath(abs)
+
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      action: 'forget',
+                      forgotten: true,
+                      name: match.name,
+                      filePath: match.filePath
+                    })
+                  }
+                ]
+              }
+            }
+
+            return lock ? await lock.withWrite(doForget) : doForget()
+          }
+
+          return errorResult(new Error(`Unsupported memory action: ${action}`))
+        } catch (err) {
+          return errorResult(err)
+        }
+      }
+    )
+
     registerTool(
       'recall_memories',
       {

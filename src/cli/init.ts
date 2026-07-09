@@ -267,17 +267,17 @@ Reporecall can provide codebase context through Claude Code hooks and MCP tools.
 
 1. **Check freshness first.** If injected context or an MCP response says the index is EMPTY or STALE, say so and refresh with \`refresh_context\` or \`reporecall index\` before relying on results.
 2. **Use injected context when it is fresh and relevant.** It may contain files, symbols, and call graphs for the query. Do not reread files only to duplicate context already shown, but verify with normal tools when evidence is incomplete or surprising.
-3. **Fill gaps with the right tool.** For multi-file questions, prefer Reporecall MCP \`search_context\` because it returns routed, token-budgeted context with compressed secondary evidence. Use \`search_code\` for raw hit lists, \`explain_flow\`/call graph tools for navigation, and \`read_code_chunk\` to expand compressed chunkId refs. Grep/Read/Glob remain appropriate for exact matches and sanity checks.
+3. **Fill gaps with the right tool.** For multi-file questions, prefer Reporecall MCP \`search_context\` because it returns routed, token-budgeted context with compressed secondary evidence. Use \`search_code\` for raw hit lists or \`action=read_chunk\` source expansion, and \`explain_flow\` actions for navigation. Grep/Read/Glob remain appropriate for exact matches and sanity checks.
 4. **Notice hook failures.** If Claude reports that the Reporecall hook cannot reach the daemon, do not assume context was injected. Start \`reporecall serve\` or use MCP/CLI tools directly.
 
 If the injected context is marked "low confidence", steps 2 and 3 are appropriate immediately.
 
 ### Memory
 
-Reporecall maintains persistent project memory across sessions. Use these MCP tools:
-- **store_memory** — Save important project context, decisions, or patterns for future sessions.
-- **recall_memories** — Retrieve previously stored memories relevant to the current task.
-- **forget_memory** — Remove outdated or incorrect memories.
+Reporecall maintains persistent project memory across sessions. Use the \`memory\` MCP tool:
+- \`action=store\` — Save important project context, decisions, or patterns for future sessions.
+- \`action=recall\` — Retrieve previously stored memories relevant to the current task.
+- \`action=forget\` — Remove outdated or incorrect memories.
 
 Memories are automatically injected alongside code context when relevant to the query.
 ${MEMORY_MARKER}`

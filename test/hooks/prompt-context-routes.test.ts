@@ -172,7 +172,7 @@ describe("handlePromptContext — route integration", () => {
     );
 
     expect(result.advisoryText).toContain("Compressed 2 secondary chunks");
-    expect(result.advisoryText).toContain("read_code_chunk");
+    expect(result.advisoryText).toContain("search_code with action=read_chunk");
   });
 
   it("lookup mode uses existing searchWithContext behavior", async () => {

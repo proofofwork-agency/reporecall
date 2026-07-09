@@ -3,7 +3,7 @@
  *
  * Reads from MetadataStore (communities, hub nodes, surprises, chunks)
  * and writes wiki pages as memory files with type=wiki. Runs during
- * index_codebase — no LLM needed.
+ * index/refresh completion — no LLM needed.
  */
 
 import { execFileSync } from "child_process";
