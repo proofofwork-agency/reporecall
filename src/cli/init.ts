@@ -272,6 +272,8 @@ Reporecall can provide codebase context through Claude Code hooks and MCP tools.
 
 If the injected context is marked "low confidence", steps 2 and 3 are appropriate immediately.
 
+Use \`get_stats\` to inspect index freshness (indexed commit vs HEAD), storage footprint, and chunk/file counts when retrieval looks stale or incomplete.
+
 ### Memory
 
 Reporecall maintains persistent project memory across sessions. Use the \`memory\` MCP tool:

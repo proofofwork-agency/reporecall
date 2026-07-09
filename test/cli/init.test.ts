@@ -146,6 +146,7 @@ describe('initCommand — real file creation', () => {
     expect(content).toContain('action=recall')
     expect(content).toContain('action=store')
     expect(content).toContain('action=forget')
+    expect(content).toContain('get_stats')
     expect(content).not.toContain('recall_memories')
     expect(content).not.toContain('store_memory')
     expect(content).not.toContain('forget_memory')
