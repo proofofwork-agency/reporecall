@@ -17,6 +17,7 @@ Automatic injection + an explicit **Trust Contract** so agents (and you) always 
 Reporecall helps Claude Code, Codex, Cline, Aider and other agents work more effectively on **large, high-churn or unfamiliar codebases**.
 
 ### What you actually get
+
 - **Auto-injection via hooks** — relevant code, call graph, wiki, memory and business context are pushed into every prompt *before* the model starts thinking.
 - **Brutally honest freshness** — every response includes `indexedCommit`, dirty-file count, and a clear banner when the index is EMPTY or STALE, plus direct guidance to `refresh_context`.
 - **Smart local retrieval** — intent routing + hybrid search + graph expansion + extractive compression (expand any chunk on demand).
@@ -24,6 +25,11 @@ Reporecall helps Claude Code, Codex, Cline, Aider and other agents work more eff
 - **Zero cloud by default** — no external vector DB, no recurring costs, works completely offline.
 
 **v0.8.1 focus (factual):** clearer Trust Contract docs, hooks as the primary experience, new reproducible `benchmark:tokens` script, public competitive positioning page, and cleaned release metadata.
+
+### Standout Features
+- **6-tool MCP surface** — deliberately small and reliable after the v0.8 surface collapse.
+- **Deterministic Lens** — one HTML file + JSON export for the whole codebase topology, communities, and business context.
+- **Full-stack local** — code indexing, call-graph analysis, wiki generation, business context, and memory — all without leaving your machine.
 
 ```
 User prompt
@@ -62,28 +68,28 @@ npm install -g @proofofwork-agency/reporecall
 reporecall init && reporecall serve
 ```
 
-Done. Context is **pushed** into every prompt via hooks. The agent reads the good stuff first.
+That's it. Hooks push fresh, compressed context into every prompt. The agent reads it first.
 
 Handy one-liners:
 ```bash
-reporecall lens --serve --open     # single-file architecture dashboard
-reporecall explain "..."           # per-question evidence + diagnostics
+reporecall lens --serve --open     # one-file architecture dashboard
+reporecall explain "..."           # per-question diagnostics + evidence
 reporecall stats                   # Trust Contract + freshness at a glance
 ```
 
-(The `memory` binary can collide with other tools — `reporecall` is the canonical name.)
+(The `memory` binary alias may collide with other tools; `reporecall` is the canonical command.)
 
 ### Designed for hard problems
 
-**Reporecall is built for:**
+**Reporecall shines on:**
 - Large or fast-moving codebases
 - Architecture, trace, cross-cutting change, and "where would this break?" questions
-- Teams that want **automatic** high-signal context (instead of hoping the agent calls the right tool)
-- Anyone who cares about explicit honesty ("is this context still good?")
+- Teams that want **automatic** high-signal context instead of hoping the agent calls the right tool
+- Anyone who values explicit honesty about freshness
 
-**You probably don't need it for** tiny greenfield projects or when plain grep + the agent's built-in tools are already enough.
+**You probably don't need it for** tiny greenfield projects or when plain `grep` + the agent's built-in tools are already sufficient.
 
-See the full, honest comparison + threat analysis: [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md).
+See the full, honest comparison + threat analysis in [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md).
 
 ---
 
@@ -94,6 +100,8 @@ One command, one HTML file, your whole codebase at a glance:
 ```bash
 reporecall lens --serve --open
 ```
+
+See communities, hubs, surprises, wiki pages, product areas, and business context — all in a portable single file. Export JSON with `reporecall lens --json`.
 
 `reporecall init` only writes project configuration, Claude hook settings, MCP config, and memory directories. It does not index code.
 
@@ -413,7 +421,7 @@ The JSON export also includes machine-readable wiki graph data, `productAreas[]`
 
 Reporecall is a **context layer**, not a full AI editor, hosted model, or PR review SaaS.
 
-The combination that actually matters for agents: **automatic per-prompt hooks + explicit trust/freshness + real compression + full stack + zero external infrastructure**. Very few local tools ship all of it together.
+The rare combination that actually moves the needle for agents: **automatic per-prompt hooks + explicit trust/freshness + real compression + full stack + zero external infrastructure**. Very few local tools deliver all of it.
 
 | Tool          | Auto-Inject Hooks | Trust/Freshness                          | Compress + Expand | Local + OSS + Zero Infra | Adoption     |
 |---------------|-------------------|------------------------------------------|-------------------|--------------------------|--------------|
