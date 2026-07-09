@@ -9,17 +9,21 @@
           |_|
 ```
 
-**The local-first, auto-injecting, self-aware-about-staleness context + memory layer for coding agents.**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/) [![MCP](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io/)
 
-Reporecall gives Claude Code, Codex, Cline, Aider and other agents **better context** by:
-- Automatically injecting relevant code, wiki, graph, business, and memory evidence into every prompt via Claude Code hooks.
-- Being brutally honest about freshness (it tells you when the index is stale or empty and how to fix it).
-- Using intent routing + hybrid retrieval + extractive compression (expand full chunks on demand).
-- Maintaining persistent project memory across sessions.
+**Local-first context + memory for coding agents**  
+Automatic injection + an explicit **Trust Contract** so agents (and you) always know when the context is fresh.
 
-Everything runs locally with zero external services required by default.
+Reporecall helps Claude Code, Codex, Cline, Aider and other agents work more effectively on **large, high-churn or unfamiliar codebases**.
 
-**Core promise (the Trust Contract):** Reporecall will never silently give you stale or missing context. It surfaces `indexedCommit`, dirty files, and explicit repair guidance (`refresh_context`).
+### What you actually get
+- **Auto-injection via hooks** — relevant code, call graph, wiki, memory and business context are pushed into every prompt *before* the model starts thinking.
+- **Brutally honest freshness** — every response includes `indexedCommit`, dirty-file count, and a clear banner when the index is EMPTY or STALE, plus direct guidance to `refresh_context`.
+- **Smart local retrieval** — intent routing + hybrid search + graph expansion + extractive compression (expand any chunk on demand).
+- **Persistent local memory** — rules, facts and working notes that survive across sessions.
+- **Zero cloud by default** — no external vector DB, no recurring costs, works completely offline.
+
+**v0.8.1 focus (factual):** clearer Trust Contract docs, hooks as the primary experience, new reproducible `benchmark:tokens` script, public competitive positioning page, and cleaned release metadata.
 
 ```
 User prompt
@@ -34,40 +38,52 @@ Claude Code hook ──► Reporecall (local)
 Injected context + banner   (optional MCP tools for gaps)
 ```
 
-**📖 Full documentation + comparison:** [proofofwork-agency.github.io/reporecall](https://proofofwork-agency.github.io/reporecall/) — hosted on GitHub Pages.
+### Why teams reach for Reporecall
 
-## Quick Start
+| What you get                      | Why it matters in practice |
+|-----------------------------------|----------------------------|
+| **Automatic per-prompt injection** | Context is pushed via hooks — the agent doesn't have to remember to call tools |
+| **Explicit Trust Contract**        | `indexedCommit`, dirty count + banner on *every* response; `get_stats` + `refresh_context` as first-class citizens |
+| **Local + zero external infra**    | Works completely offline; no vector DB, no cloud costs |
+| **Tiny, reliable MCP surface**     | Only 6 tools after v0.8 — deliberately small so agents use it correctly |
+| **Full deterministic bundle**      | Code + call graph + wiki + persistent memory + business context + Lens (HTML + JSON) |
+
+**Plays nicely with:** Claude Code (hooks), Codex (MCP/CLI), Cline, Aider, and any MCP-compatible coding agent.
+
+**📖 Full docs + honest competitive analysis** (6/10 → 9/10 positioning review + threat matrix):  
+https://proofofwork-agency.github.io/reporecall/
+
+> **v0.8.1 in practice** — clearer Trust Contract docs, hooks as the main UX, new `benchmark:tokens` script, public competitive positioning page, and cleaned release metadata. All factual, all shipped.
+
+## Quick Start (30 seconds)
 
 ```bash
 npm install -g @proofofwork-agency/reporecall
-
-reporecall init          # Wires hooks + MCP + memory dirs (no indexing yet)
-reporecall serve         # Indexes + starts watcher + auto-injects via hooks
+reporecall init && reporecall serve
 ```
 
-Context is **pushed** into every Claude Code prompt automatically. No tool calls required from the agent.
+Done. Context is **pushed** into every prompt via hooks. The agent reads the good stuff first.
 
+Handy one-liners:
 ```bash
-reporecall lens --serve --open   # Beautiful architecture dashboard
-reporecall explain "..."         # Diagnostics + selected evidence
+reporecall lens --serve --open     # single-file architecture dashboard
+reporecall explain "..."           # per-question evidence + diagnostics
+reporecall stats                   # Trust Contract + freshness at a glance
 ```
 
-The `memory` binary alias may collide with other tools; use `reporecall` for the canonical command.
+(The `memory` binary can collide with other tools — `reporecall` is the canonical name.)
 
-### When Reporecall Shines (and When You Can Skip It)
+### Designed for hard problems
 
-**Use Reporecall when:**
-- Large, high-churn, or unfamiliar codebases
-- Cross-module changes, architecture, trace, or "what would break" questions
-- You want **automatic** per-prompt context injection instead of hoping the agent calls the right tool
-- You care about honesty: "is this index still good?"
+**Reporecall is built for:**
+- Large or fast-moving codebases
+- Architecture, trace, cross-cutting change, and "where would this break?" questions
+- Teams that want **automatic** high-signal context (instead of hoping the agent calls the right tool)
+- Anyone who cares about explicit honesty ("is this context still good?")
 
-**You probably don't need it for:**
-- Tiny greenfield projects
-- Code you already know perfectly
-- Workflows where native Claude Code grep + file tools are "good enough" (they often are)
+**You probably don't need it for** tiny greenfield projects or when plain grep + the agent's built-in tools are already enough.
 
-See the full honest comparison in [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md).
+See the full, honest comparison + threat analysis: [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md).
 
 ---
 
@@ -105,14 +121,16 @@ Full documentation is hosted on **GitHub Pages** at **https://proofofwork-agency
 
 ## What Reporecall Provides
 
-- **Automatic per-prompt injection** via Claude Code hooks (the agent doesn't have to ask).
-- **Explicit Trust Contract** — staleness banners, `indexedCommit`, auto-refresh, `refresh_context` as the universal repair verb.
-- **Intent-routed hybrid retrieval** with extractive compression + expand-on-demand.
-- **Full local bundle**: code + call graph + wiki + persistent memory + business/product areas + Lens.
-- **Compact 6-tool MCP surface** that is easy for agents to use correctly.
-- **Deterministic exports** (`lens --json`, `explain --json`) for other tools.
+| Capability                        | What it delivers |
+|-----------------------------------|------------------|
+| Automatic injection               | Claude Code hooks push routed, compressed evidence before the model starts thinking |
+| Trust & freshness                 | Every response includes `indexedCommit`, dirty-file count, and an explicit banner when stale or empty |
+| Retrieval quality                 | Intent classification + hybrid (keyword + semantic) search + graph expansion + extractive compression |
+| Local-only by default             | Zero external services required; works completely offline |
+| Agent-friendly surface            | Deliberately reduced to 6 tools after v0.8 (search_context, search_code, explain_flow, memory, refresh_context, get_stats) |
+| Structured exports                | `lens --json`, `explain --json`, deterministic wiki/business pages, and a single-file HTML dashboard |
 
-We do **not** try to replace your agent or editor. We make the context they receive dramatically better — especially on large, high-churn, or unfamiliar codebases.
+We do **not** replace your agent or editor. We simply make the context it receives higher quality and more honest — especially on large, high-churn, or unfamiliar codebases.
 
 ## How Agents Use It
 
@@ -320,7 +338,8 @@ Business context is not fed back into core search as hard-coded rules. Hooks may
 
 ## The Trust Contract (Our Differentiator)
 
-Most context tools are silent when they're wrong. Reporecall is not.
+> Most context tools are silent when they're wrong.  
+> Reporecall is not.
 
 Every response (hooks + MCP) carries:
 
@@ -337,9 +356,7 @@ This is why we collapsed the MCP surface and made freshness signals unavoidable.
 
 See `src/core/staleness.ts` and the daemon auto-refresh logic.
 
-Example `reporecall stats` output always starts with the Trust Contract section (banner + commits + dirty count).
-
-Example `get_stats` (MCP/CLI) now includes:
+**Example** — `reporecall stats` always leads with the Trust Contract data:
 
 ```json
 {
@@ -394,27 +411,27 @@ The JSON export also includes machine-readable wiki graph data, `productAreas[]`
 
 ## Comparison — Why Reporecall
 
-Reporecall is a context layer, not a full AI editor, hosted model, or PR review SaaS.
+Reporecall is a **context layer**, not a full AI editor, hosted model, or PR review SaaS.
 
-**The unique local combination:** auto-injecting hooks + explicit trust/freshness + real compression + full stack (memory + wiki + graph + Lens) + zero infra.
+The combination that actually matters for agents: **automatic per-prompt hooks + explicit trust/freshness + real compression + full stack + zero external infrastructure**. Very few local tools ship all of it together.
 
-| Tool          | Auto-Inject Hooks | Trust/Freshness          | Compress+Expand | Local + OSS + Zero-Infra | Adoption     |
-|---------------|-------------------|--------------------------|-----------------|--------------------------|--------------|
-| Reporecall    | ✅ per-prompt    | ✅ Full (banners + commit + auto-refresh) | ✅ + read_chunk | ✅                      | nascent     |
-| CodeGraph     | ❌ tool-calls    | ✅ Banner               | ⚠️ limited     | ✅                      | ~50k        |
-| Cline         | ❌               | ⚠️ "always fresh" claim | ❌             | ✅                      | 64k         |
-| Cognee        | ✅               | ⚠️                      | ❌             | ✅                      | +funding    |
-| Native Claude | ✅ (but thin)    | ✅ live files           | ❌             | ✅ (limited)            | default     |
+| Tool          | Auto-Inject Hooks | Trust/Freshness                          | Compress + Expand | Local + OSS + Zero Infra | Adoption     |
+|---------------|-------------------|------------------------------------------|-------------------|--------------------------|--------------|
+| Reporecall    | ✅ per-prompt    | ✅ Full (banners + `indexedCommit` + auto-refresh) | ✅ + `read_chunk` | ✅                       | nascent     |
+| CodeGraph     | ❌ (tool calls)  | ✅ Banner                                | ⚠️ limited       | ✅                       | ~50k        |
+| Cline         | ❌               | ⚠️ "always fresh" claim                  | ❌                | ✅                       | 64k         |
+| Cognee        | ✅               | ⚠️                                       | ❌                | ✅                       | + funding   |
+| Native Claude | ✅ (but thin)    | ✅ (live files)                          | ❌                | ✅ (limited)             | default     |
 
-Full matrix, threat tiers, and honest assessment: [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md) and the competitor comparison doc.
+Full matrix, threat tiers, and honest self-assessment: [docs/competitive-positioning-2026.md](docs/competitive-positioning-2026.md).
 
-## MCP Tools (Compact 6-Tool Surface)
+## MCP Tools — deliberately small on purpose
 
 ```bash
 reporecall mcp --project .
 ```
 
-We deliberately collapsed to six tools in v0.8 to reduce agent confusion and increase reliability:
+After v0.8 we collapsed the surface to exactly six tools. Fewer choices, less confusion, easier for agents to use correctly.
 
 | Tool            | Purpose |
 |-----------------|---------|
@@ -538,6 +555,12 @@ npm run benchmark -- --provider keyword --output /tmp/reporecall-keyword.json
 npm run stress:large-repo -- --files 10000 --changes 1000 --output /tmp/reporecall-large-repo.json
 npm run stress:large-repo:ci
 ```
+
+## Contributing
+
+Bug reports, reproducible benchmarks on real repos, and documentation improvements are very welcome.
+
+See `docs/competitive-positioning-2026.md` for the current honest self-assessment and the areas we're actively working on.
 
 ## License
 
