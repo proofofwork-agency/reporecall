@@ -15,6 +15,8 @@ Reporecall indexes a repository locally, classifies codebase questions by intent
 
 No cloud embeddings API is required. The default keyword provider uses local SQLite/FTS indexes; optional semantic backends can be configured separately.
 
+**📖 Full documentation: [proofofwork-agency.github.io/reporecall](https://proofofwork-agency.github.io/reporecall/)** — hosted on GitHub Pages.
+
 ## Quick Start
 
 ```bash
@@ -52,6 +54,17 @@ reporecall search "checkout session"
 reporecall mcp --project .
 reporecall lens --json
 ```
+
+## Documentation
+
+Full documentation is hosted on **GitHub Pages** at **https://proofofwork-agency.github.io/reporecall/**:
+
+- [Introduction](https://proofofwork-agency.github.io/reporecall/docs/intro)
+- [Installation & Quick Start](https://proofofwork-agency.github.io/reporecall/docs/installation)
+- [CLI Reference](https://proofofwork-agency.github.io/reporecall/docs/cli-reference)
+- [MCP Tools](https://proofofwork-agency.github.io/reporecall/docs/mcp-tools)
+- [Configuration](https://proofofwork-agency.github.io/reporecall/docs/configuration)
+- [Architecture](https://proofofwork-agency.github.io/reporecall/docs/architecture)
 
 ## What Reporecall Provides
 
