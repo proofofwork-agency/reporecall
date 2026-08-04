@@ -43,7 +43,9 @@ jobs:
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts test/parser/multilang-chunker.test.ts
+      # One process each: the two together exhaust a single worker as well.
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check
