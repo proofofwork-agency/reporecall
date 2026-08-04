@@ -38,7 +38,12 @@ jobs:
       # dies with "Fatal process out of memory: Zone". Exclude them here and run
       # them below in sharded, separate processes; the split costs no coverage
       # because they exercise paths already covered elsewhere.
-      - run: |
+      # shell: bash is explicit so these keep working if this job ever gains a
+      # Windows runner — PowerShell cannot parse line continuations, `for` loops
+      # or VAR=value command prefixes, which is exactly how publish.yml broke.
+      - name: Coverage (multi-language suites excluded)
+        shell: bash
+        run: |
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
@@ -48,6 +53,7 @@ jobs:
       # and OOMed on the next, so this keeps real headroom rather than sitting at
       # the ceiling. Totals: pipeline 2+6+6+5+5 = 24, chunker 2+5+5+5+5 = 22.
       - name: Multi-language suites (per-language shards)
+        shell: bash
         run: |
           for shard in 2 3 4 5; do
             MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
@@ -63,6 +69,7 @@ jobs:
       # actually-installed package on Node 24 across all three OSes.
       - name: All-language tests (Node 22 only)
         if: matrix.node == 22
+        shell: bash
         run: |
           MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
             npx vitest run test/integration/multilang-pipeline.test.ts

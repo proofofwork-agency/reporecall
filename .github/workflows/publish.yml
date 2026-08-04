@@ -26,11 +26,17 @@ jobs:
       - run: npm run lint
       # Mirrors ci.yml exactly — see the comments there for why the two
       # multi-language suites run in sharded, separate processes.
-      - run: |
+      # shell: bash is required — this matrix includes windows-latest, where the
+      # default shell is PowerShell and cannot parse line continuations, `for`
+      # loops, or VAR=value command prefixes.
+      - name: Coverage (multi-language suites excluded)
+        shell: bash
+        run: |
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
       - name: Multi-language suites (per-language shards)
+        shell: bash
         run: |
           for shard in 2 3 4 5; do
             MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
@@ -40,6 +46,7 @@ jobs:
           done
       - name: All-language tests (Node 22 only)
         if: matrix.node == 22
+        shell: bash
         run: |
           MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
             npx vitest run test/integration/multilang-pipeline.test.ts
