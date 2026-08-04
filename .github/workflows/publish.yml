@@ -24,11 +24,14 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      # Matches ci.yml: the all-languages integration test needs a fresh worker
-      # or it OOMs on Node 24 (tree-sitter WASM accumulates across reused
-      # vitest workers). Together these steps still run the whole suite.
-      - run: npm run coverage -- --exclude 'test/integration/multilang-pipeline.test.ts'
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+      # Matches ci.yml: the two all-languages suites need a fresh worker or they
+      # OOM on Node 24 (tree-sitter WASM accumulates across reused vitest
+      # workers). Together these steps still run the whole suite.
+      - run: |
+          npm run coverage -- \
+            --exclude 'test/integration/multilang-pipeline.test.ts' \
+            --exclude 'test/parser/multilang-chunker.test.ts'
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check
