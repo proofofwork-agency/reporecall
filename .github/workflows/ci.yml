@@ -32,55 +32,42 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      # Two suites load tree-sitter WASM grammars for every supported language.
-      # Vitest reuses worker processes across files and WASM memory is not
-      # released with the module registry, so on Node 24 whichever of them lands
-      # on an already-loaded worker dies with "Fatal process out of memory:
-      # Zone" (excluding only one just moved the failure to the other). Run both
-      # in a fresh process. The two steps together still run the whole suite,
-      # and the split costs no coverage — they exercise paths covered elsewhere.
+      # The two multi-language suites load a tree-sitter WASM grammar per
+      # language. Vitest reuses worker processes and WASM memory is not released
+      # with the module registry, so on Node 24 a process holding many grammars
+      # dies with "Fatal process out of memory: Zone". Exclude them here and run
+      # them below in sharded, separate processes; the split costs no coverage
+      # because they exercise paths already covered elsewhere.
       - run: |
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
-      # The pipeline suite builds an IndexingPipeline per language on top of all
-      # 22 grammars, which is too much for one Node 24 process even alone, so it
-      # runs in shards: 1 = the all-languages tests, 2 and 3 = half the
-      # per-language tests each (2 + 11 + 11 = 24, the full file).
-      # Shard 1 holds the two tests that index all 22 languages in a single pass.
-      # That is irreducible — one process must hold every grammar plus a full
-      # pipeline — and it does not fit on a Node 24 runner even with nothing else
-      # loaded. Gate those two on Node 22 (our supported floor, and what most
-      # users run); Node 24 still gates the other 944 tests, and the packed-demo
-      # matrix exercises the installed package on Node 24 across all three OSes.
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+      # Shards 2-5 hold the per-language tests, at most 6 languages per process.
+      # Each npx invocation is its own process, which is the whole point — an
+      # earlier 3-way split left ~11 grammars per shard, which passed on one run
+      # and OOMed on the next, so this keeps real headroom rather than sitting at
+      # the ceiling. Totals: pipeline 2+6+6+5+5 = 24, chunker 2+5+5+5+5 = 22.
+      - name: Multi-language suites (per-language shards)
+        run: |
+          for shard in 2 3 4 5; do
+            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+              npx vitest run test/integration/multilang-pipeline.test.ts
+            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+              npx vitest run test/parser/multilang-chunker.test.ts
+          done
+      # Shard 1 holds the four tests that walk every language in a single pass.
+      # That is irreducible — one process must hold every grammar at once — and it
+      # does not fit on a Node 24 runner even with nothing else loaded. Gate them
+      # on Node 22, our supported floor and what most users run. Node 24 still
+      # gates every other test, and the packed-demo matrix exercises the
+      # actually-installed package on Node 24 across all three OSes.
+      - name: All-language tests (Node 22 only)
         if: matrix.node == 22
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "1"
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "2"
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "3"
-      # Chunker is sharded the same way: even parse-only, all 22 grammars in one
-      # process is past the Node 24 ceiling (2 + 10 + 10 = 22, the full file).
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        if: matrix.node == 22
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "1"
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "2"
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "3"
+        run: |
+          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+            npx vitest run test/integration/multilang-pipeline.test.ts
+          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+            npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check

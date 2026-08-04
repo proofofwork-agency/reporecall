@@ -24,45 +24,27 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      # Matches ci.yml: the two all-languages suites need a fresh worker or they
-      # OOM on Node 24 (tree-sitter WASM accumulates across reused vitest
-      # workers). Together these steps still run the whole suite.
+      # Mirrors ci.yml exactly — see the comments there for why the two
+      # multi-language suites run in sharded, separate processes.
       - run: |
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
-      # Matches ci.yml: the pipeline suite is sharded across processes
-      # (2 + 11 + 11 = 24, the full file) because one Node 24 process cannot hold
-      # all 22 grammars plus a pipeline per language.
-      # See ci.yml: the two all-languages tests need one process to hold every
-      # grammar plus a full pipeline, which does not fit on a Node 24 runner.
-      # Gate them on Node 22; Node 24 gates everything else.
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+      - name: Multi-language suites (per-language shards)
+        run: |
+          for shard in 2 3 4 5; do
+            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+              npx vitest run test/integration/multilang-pipeline.test.ts
+            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+              npx vitest run test/parser/multilang-chunker.test.ts
+          done
+      - name: All-language tests (Node 22 only)
         if: matrix.node == 22
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "1"
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "2"
-      - run: npx vitest run test/integration/multilang-pipeline.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "3"
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        if: matrix.node == 22
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "1"
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "2"
-      - run: npx vitest run test/parser/multilang-chunker.test.ts
-        env:
-          MULTILANG_SHARDS: "3"
-          MULTILANG_SHARD: "3"
+        run: |
+          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+            npx vitest run test/integration/multilang-pipeline.test.ts
+          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+            npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check
