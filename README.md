@@ -99,12 +99,14 @@ reporecall stats                   # Trust Contract + freshness at a glance
 > [!NOTE]
 > **Your `npm audit` will show 3 high advisories, and we'd rather tell you than let you find them.**
 > `@huggingface/transformers` (local embeddings) requires `sharp ^0.34.5`, and every
-> `sharp` below 0.35.0 inherits four libvips CVEs. npm reports no fix available —
-> transformers 4.2.0 still pins that range — so no release of this package can clear it.
-> Reporecall only uses transformers for **text** embeddings; `sharp` is its image
-> path and is never invoked here, so the CVEs aren't reachable in this usage. If you
-> gate on audit, add `{ "overrides": { "sharp": "0.35.3" } }`. Details and the
-> reasoning: [release verification](docs/release-verification.md).
+> `sharp` below 0.35.0 inherits four libvips CVEs. npm reports no fix available, and
+> no released upstream version changes that — transformers 4.2.0 still pins the same
+> range. Our whole use of that library is one `pipeline("feature-extraction", …)`
+> call; no code path here hands transformers an image, which is `sharp`'s only entry
+> point, so we consider the CVEs unreachable in this usage. If you gate on audit,
+> add `{ "overrides": { "sharp": "0.35.3" } }` — note that our own override does not
+> reach you, because npm honors overrides only from the root project.
+> Reasoning in full: [release verification](docs/release-verification.md).
 
 ### Designed for hard problems
 

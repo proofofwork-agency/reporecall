@@ -2,6 +2,7 @@
 import { createHash } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
+import { findQuantitativeClaims } from "./claim-detector.js";
 
 interface Claim {
   id: string;
@@ -42,21 +43,13 @@ for (const file of registry.files) {
     errors.push(`claim source is missing: ${file}`);
     continue;
   }
-  const lines = readFileSync(path, "utf-8").split(/\r?\n/);
-  let inFence = false;
-  lines.forEach((line, index) => {
-    if (line.trim().startsWith("```")) {
-      inFence = !inFence;
-      return;
+  for (const claim of findQuantitativeClaims(readFileSync(path, "utf-8"))) {
+    if (!claim.marker) {
+      errors.push(`${file}:${claim.lineNumber} quantitative claim has no registry marker`);
+    } else if (!byId.has(claim.marker)) {
+      errors.push(`${file}:${claim.lineNumber} references unknown claim ${claim.marker}`);
     }
-    if (inFence || !looksLikeQuantitativePerformanceClaim(line) || isClearlyNonClaim(line)) return;
-    const marker = line.match(/<!--\s*claim:([a-z0-9_-]+)\s*-->/i)?.[1];
-    if (!marker) {
-      errors.push(`${file}:${index + 1} quantitative claim has no registry marker`);
-    } else if (!byId.has(marker)) {
-      errors.push(`${file}:${index + 1} references unknown claim ${marker}`);
-    }
-  });
+  }
 }
 
 for (const claim of registry.claims) {
@@ -87,16 +80,6 @@ if (errors.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(`claims registry valid (${registry.claims.length} supported quantitative claims)\n`);
-}
-
-function looksLikeQuantitativePerformanceClaim(line: string): boolean {
-  const percent = /\b\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?\s*%\b/;
-  const performance = /\b(token|recall|precision|accuracy|pollution|latency|response|saving|reduction|regression|improv)/i;
-  return percent.test(line) && performance.test(line);
-}
-
-function isClearlyNonClaim(line: string): boolean {
-  return /\b(example|placeholder|target|threshold|gate|insufficient evidence|historical|reported)\b/i.test(line);
 }
 
 /**

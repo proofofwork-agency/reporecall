@@ -16,6 +16,13 @@ claude-code-source-main
 .tmp/
 test/.test-data-server-*/
 test/.test-data-server-*/graphify-3/
+# Scratch projects the suite builds under test/. They are removed on teardown,
+# but a crashed or interrupted run leaves them behind, and only the
+# .test-data-server-* pattern above was ignored — so an interrupted run followed
+# by `git add -A` could commit fixture junk. Cover the whole family instead of
+# naming each one, since new suites keep adding them:
+# .test-explain-project, .test-keyword-project, .test-routing-project, ...
+test/.test-*/
 
 .env
 .env.*

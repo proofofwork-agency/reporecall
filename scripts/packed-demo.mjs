@@ -58,10 +58,11 @@ function runNpm(args, options = {}) {
  * against.
  *
  * `npm audit` at the repo root is not the same measurement. The root
- * package.json carries an `overrides` block, and npm overrides apply only to the
- * project that declares them — they are not published and do not reach anyone
- * installing this package. So the repo can report zero advisories while a fresh
- * `npm install @proofofwork-agency/reporecall` reports several, which is exactly
+ * package.json carries an `overrides` block, and that block *is* published — but
+ * npm honors overrides only from the root project being installed, never from an
+ * installed dependency. So our own tree gets the pinned versions while a consumer
+ * gets the unpinned ones, and the repo can report zero advisories while a fresh
+ * `npm install @proofofwork-agency/reporecall` reports several. That is exactly
  * what happened: the release gate was auditing a tree no user has.
  *
  * This install root is the closest thing we have to a real consumer, so audit it
@@ -83,21 +84,52 @@ function auditConsumerResolution(cwd) {
     },
   );
   // A non-zero exit only means advisories were found, which is the normal case
-  // here; the payload is still on stdout. Only unparseable output is a failure.
+  // here, so the exit code cannot distinguish "audited, found things" from
+  // "never audited anything". The payload has to be validated instead: a
+  // registry or transport failure also exits non-zero and also prints valid
+  // JSON, just `{ message, error }` with no counts. Defaulting those to zero
+  // would report a clean consumer install because the audit never ran — the
+  // same silently-green failure this whole gate exists to prevent.
+  if (result.error) {
+    throw new Error(`consumer audit could not run: ${result.error.message}`);
+  }
   let report;
   try {
     report = JSON.parse(result.stdout);
   } catch {
     throw new Error(
-      `consumer audit produced no parseable JSON:\n${result.stderr || result.stdout}`,
+      `consumer audit produced no parseable JSON (exit ${result.status}):\n`
+      + `${result.stderr || result.stdout}`,
     );
   }
-  const counts = report.metadata?.vulnerabilities ?? {};
-  const summary = ["critical", "high", "moderate", "low", "info"]
-    .map((level) => `${level} ${counts[level] ?? 0}`)
-    .join(", ");
-  process.stdout.write(`  consumer-resolution advisories: ${summary}\n`);
-  if ((counts.critical ?? 0) > 0) {
+  if (report.error) {
+    // npm leaves error.summary and error.detail as empty strings for transport
+    // failures and puts the real reason in the top-level message, so fall
+    // through to it rather than reporting an empty error.
+    const detail = [report.error.summary, report.error.detail, report.message]
+      .find((value) => typeof value === "string" && value.length > 0)
+      ?? JSON.stringify(report.error);
+    throw new Error(`consumer audit reported an error instead of a result: ${detail}`);
+  }
+  const levels = ["critical", "high", "moderate", "low", "info"];
+  const counts = report.metadata?.vulnerabilities;
+  if (!counts || typeof counts !== "object") {
+    throw new Error(
+      "consumer audit returned no metadata.vulnerabilities — treating as a failed "
+      + `audit rather than a clean one (exit ${result.status}):\n${result.stdout.slice(0, 500)}`,
+    );
+  }
+  const missing = levels.filter((level) => typeof counts[level] !== "number");
+  if (missing.length > 0) {
+    throw new Error(
+      `consumer audit omitted severity counts [${missing.join(", ")}] — treating as a `
+      + "failed audit rather than a clean one",
+    );
+  }
+  process.stdout.write(
+    `  consumer-resolution advisories: ${levels.map((l) => `${l} ${counts[l]}`).join(", ")}\n`,
+  );
+  if (counts.critical > 0) {
     throw new Error(
       `consumer install carries ${counts.critical} critical advisory/advisories — see docs/release-verification.md`,
     );

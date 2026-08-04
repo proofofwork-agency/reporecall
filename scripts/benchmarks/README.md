@@ -22,11 +22,34 @@ Key metrics:
 
 ## Project Context Audit
 
-Run the project-context audit against a target repository:
+**Index the target repository first.** The audit measures retrieval quality; it
+does not build the index it measures.
 
 ```bash
+node dist/memory.js init  --project /path/to/repo
+node dist/memory.js index --project /path/to/repo
 npm run benchmark:project-context -- --project /path/to/repo --reporecall-only --output /tmp/reporecall-project-context
 ```
+
+Skip the indexing step and the audit still completes and still writes a report —
+it just measures an empty index, and the result looks like a convincing quality
+regression rather than a setup mistake. This is what an unindexed run of the same
+repository and the same fixture printed, next to its real result:
+
+```text
+unindexed  FAIL  route 100%  precision 41%  recall 33%  freshness 0%
+indexed    PASS  route 100%  precision 92%  recall 96%  freshness 100%
+```
+
+Freshness is the tell. At 0% nothing was answering at all, which is a different
+failure from retrieval getting worse. Confirm before believing any FAIL:
+
+```bash
+node -p "require('/tmp/reporecall-project-context.json').health"
+```
+
+`explainRunnable: false`, `daemonHealthy: false`, or a `blockedReasons` array
+containing `explain_failed` means the numbers describe your setup, not the code.
 
 ## Token + Trust Evidence
 

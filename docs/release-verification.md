@@ -30,10 +30,12 @@ Do not soft-fail security, test, build, or packaging gates.
 ## Two audits, because they measure different trees
 
 `npm audit` at the repo root does **not** tell you what a user gets. The root
-`package.json` carries an `overrides` block, and npm overrides apply only to the
-project that declares them — they are not published and do not reach anyone
-installing this package. The repo can therefore report zero advisories while a
-fresh `npm install @proofofwork-agency/reporecall` reports several.
+`package.json` carries an `overrides` block, and that block *is* published — you
+can read it in the installed `package.json`. But npm honors overrides only from
+the root project being installed, never from an installed dependency. Our tree
+therefore resolves the pinned versions while a consumer's tree resolves the
+unpinned ones, and the repo can report zero advisories while a fresh
+`npm install @proofofwork-agency/reporecall` reports several.
 
 That is not hypothetical. It was true through v0.9.1 and went unnoticed because
 `scripts/packed-demo.mjs` — the only step that installs the tarball the way a user
@@ -49,14 +51,19 @@ As of v0.9.1: **3 high, 0 critical.**
 `@huggingface/transformers` depends on `sharp` `^0.34.5`, and every `sharp` below
 0.35.0 inherits four libvips CVEs
 ([GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj)). npm
-reports **no fix available**: the latest `@huggingface/transformers` (4.2.0) still
-requires `sharp ^0.34.5`, so no version of this package can resolve it.
+reports **no fix available**, and no currently released upstream version changes
+that: `@huggingface/transformers` 4.2.0, the latest, still requires
+`sharp ^0.34.5`. Bumping our dependency — including across the 3.x→4.x major —
+would not clear the advisory.
 
-Reporecall uses `@huggingface/transformers` only for local **text** embeddings.
-`sharp` is that library's image-decoding path and is never invoked by any
-Reporecall code path, so the CVEs are not reachable in this usage — but they will
-appear in your `npm audit` output, and that deserves to be said out loud rather
-than discovered.
+Reporecall's entire use of that library is one call site,
+`pipeline("feature-extraction", …)` in `src/indexer/local-embedder.ts`. No
+Reporecall code path passes an image to transformers, imports `RawImage`, or
+constructs a processor, and `sharp` is reached only through transformers'
+image-decoding path. That is why we consider the CVEs unreachable in this usage —
+argued from that call site rather than from a proof that libvips can never be
+entered. Either way they will appear in your `npm audit`, which deserves to be
+said out loud rather than discovered.
 
 If your organization gates on `npm audit`, pin `sharp` yourself:
 
