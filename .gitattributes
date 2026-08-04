@@ -1,0 +1,20 @@
+# Normalize line endings on checkout everywhere.
+#
+# Without this, Windows checks text files out with CRLF, which changes their
+# bytes. That silently broke the claims registry: fixture hashes are content
+# hashes, so the same fixture produced a different digest on Windows and every
+# registered claim failed as "stale". validate-claims also normalizes before
+# hashing, but pinning the checkout keeps the two from ever disagreeing.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.wasm binary
+*.tgz binary
+*.db binary

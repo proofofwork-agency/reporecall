@@ -99,8 +99,18 @@ function isClearlyNonClaim(line: string): boolean {
   return /\b(example|placeholder|target|threshold|gate|insufficient evidence|historical|reported)\b/i.test(line);
 }
 
+/**
+ * Hash a fixture's *content*, not its bytes on disk.
+ *
+ * Hashing raw bytes made every registered claim fail on Windows, where git
+ * checks text files out with CRLF — same fixture, different bytes, "stale hash".
+ * A claim is a statement about the questions asked, which line endings do not
+ * change, so normalize them before hashing. .gitattributes pins eol=lf as well;
+ * this keeps the hash correct even when a checkout ignores it.
+ */
 function sha256(path: string): string {
-  return `sha256:${createHash("sha256").update(readFileSync(resolve(root, path))).digest("hex")}`;
+  const content = readFileSync(resolve(root, path), "utf-8").replace(/\r\n/g, "\n");
+  return `sha256:${createHash("sha256").update(content, "utf-8").digest("hex")}`;
 }
 
 function readJson<T>(path: string): T {
