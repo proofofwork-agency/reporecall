@@ -55,10 +55,10 @@ jobs:
       - name: Multi-language suites (per-language shards)
         shell: bash
         run: |
-          for shard in 2 3 4 5; do
-            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+          for shard in 2 3 4 5 6 7 8 9 10 11 12; do
+            MULTILANG_SHARDS=12 MULTILANG_SHARD=$shard \
               npx vitest run test/integration/multilang-pipeline.test.ts
-            MULTILANG_SHARDS=5 MULTILANG_SHARD=$shard \
+            MULTILANG_SHARDS=12 MULTILANG_SHARD=$shard \
               npx vitest run test/parser/multilang-chunker.test.ts
           done
       # Shard 1 holds the four tests that walk every language in a single pass.
@@ -71,9 +71,9 @@ jobs:
         if: matrix.node == 22
         shell: bash
         run: |
-          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+          MULTILANG_SHARDS=12 MULTILANG_SHARD=1 \
             npx vitest run test/integration/multilang-pipeline.test.ts
-          MULTILANG_SHARDS=5 MULTILANG_SHARD=1 \
+          MULTILANG_SHARDS=12 MULTILANG_SHARD=1 \
             npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
