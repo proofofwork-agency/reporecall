@@ -95,6 +95,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: npm publish package/*.tgz --access public
+      # The ./ prefix is required. Without it npm parses `package/<name>.tgz` as
+      # GitHub shorthand (owner/repo) and tries to `git ls-remote
+      # ssh://git@github.com/package/<name>.tgz.git`, which fails with a publickey
+      # error that looks like a credentials problem but is really a spec-parsing
+      # one. A leading ./ forces the local-tarball interpretation.
+      - run: npm publish ./package/*.tgz --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
