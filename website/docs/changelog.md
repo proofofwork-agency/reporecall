@@ -6,6 +6,24 @@ sidebar_position: 9
 
 # Changelog
 
+## v0.9.1 — Freshness Integrity (2026-08-04)
+
+- **Fixed:** a modified file could stay indexed as fresh indefinitely. Change
+  detection skips hashing when mtime, ctime and size all match, but filesystem
+  timestamps are coarse — the Windows clock advances in ~15.6ms steps, HFS+
+  stores whole seconds, FAT32 two-second steps — so two writes inside one step
+  share an mtime exactly. A file hashed between them lost the second write on
+  every later scan. On Windows `ctime` is the creation time and does not move on
+  modification, so a length-preserving edit cleared all three signals at once.
+  Files written within that granularity are now marked timestamp-untrusted and
+  re-hashed on the next scan.
+- Added: the full test suite runs on Windows and macOS in CI, not only Ubuntu.
+- Added: offline documentation search, rendered Mermaid architecture diagrams,
+  a custom 404, and a social preview card.
+- Both registered claims re-measured against a freshly cloned and re-indexed
+  1,306-file repository with this release's build. Retrieval gate unchanged;
+  context-assembly cost moved inside measurement variance.
+
 ## v0.9.0 — Engineering Hardening (2026-08-04)
 
 - Added reproducible evidence, compatibility snapshots, claims validation, and
