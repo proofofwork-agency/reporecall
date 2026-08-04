@@ -33,3 +33,6 @@ pnpm-lock.yaml
 
 # Generated pre-publish review reports (machine paths, hostnames, PIDs, log metadata)
 .codex/
+
+# Local resume/handoff notes (contain machine paths)
+/RESUME-*.md
