@@ -23,7 +23,36 @@ The Trust Contract (freshness banners, indexedCommit, auto-refresh, explicit rep
 | **MCP/CLI** | Exposes search, flow explanation, memory, business context, lens export, and indexing operations. |
 | **Lens/Wiki** | Generates deterministic project views over code topology and business-facing capability evidence. |
 
+## Request flow
+
+What happens between typing a prompt and the model seeing context. `R0`/`R1`/`R2`
+are route-depth shorthand used in diagnostics and benchmarks — the public intent
+names are `lookup`, `trace`, `bug`, `architecture`, and `change`.
+
+```mermaid
+flowchart TD
+  Prompt["Developer prompt"] --> Hook["UserPromptSubmit hook"]
+  Hook --> Daemon["Loopback daemon"]
+  Daemon --> Intent{"Intent classifier"}
+
+  Intent -- "lookup" --> R0
+  Intent -- "trace · strong seed" --> R1["R1 · focused trace"]
+  Intent -- "trace fallback · bug · architecture · change" --> R2["R2 · deep route"]
+  R0["R0 · direct lookup"]
+
+  R0 & R1 & R2 --> Retrieve[("Retrieve over metadata · FTS · vector indexes")]
+  Retrieve --> Assemble["Budgeted context assembly"]
+  Assemble --> Enrich["Optional memory · wiki · topology"]
+
+  Daemon --> Trust["Trust Contract banner<br/>indexedCommit · dirty files<br/>FRESH / STALE / EMPTY"]
+  Enrich --> Output["additionalContext before the model runs"]
+  Trust --> Output
+```
+
 ## The pipeline
+
+How the index that serves those requests is built. Each numbered stage below
+corresponds to a step in this diagram.
 
 ```mermaid
 flowchart TB

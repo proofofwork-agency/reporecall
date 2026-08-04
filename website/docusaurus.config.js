@@ -25,6 +25,31 @@ const config = {
     locales: ['en'],
   },
 
+  markdown: {
+    mermaid: true,
+  },
+
+  themes: [
+    '@docusaurus/theme-mermaid',
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        indexDocs: true,
+        indexBlog: false,
+        indexPages: false,
+        docsRouteBasePath: '/docs',
+        language: 'en',
+        hashed: 'filename',
+        highlightSearchTermsOnTargetPage: true,
+        explicitSearchResultPath: true,
+        searchBarShortcut: true,
+        searchBarShortcutHint: true,
+        searchBarShortcutKeymap: 'mod+k',
+        searchBarPosition: 'right',
+      },
+    ],
+  ],
+
   presets: [
     [
       'classic',
@@ -50,6 +75,25 @@ const config = {
       colorMode: {
         defaultMode: 'dark',
         respectPrefersColorScheme: true,
+      },
+      // PNG, not the SVG source: X, Slack, LinkedIn and Facebook all ignore
+      // SVG og:images, so an SVG card renders as no card at all. The PNG is
+      // rasterized from reporecall-social-card.svg at 1200x630 — keep both in
+      // sync if the card changes.
+      image: 'img/reporecall-social-card.png',
+      mermaid: {
+        theme: {
+          light: 'neutral',
+          dark: 'dark',
+        },
+        options: {
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          flowchart: {
+            curve: 'basis',
+            htmlLabels: true,
+          },
+        },
       },
       navbar: {
         title: 'Reporecall',

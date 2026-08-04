@@ -653,6 +653,446 @@ html {
   justify-content: center;
 }
 
+/* ── Documentation surface ──────────────────────────────────────────── */
+
+:root {
+  --search-local-modal-background: var(--rr-surface);
+  --search-local-modal-shadow: 0 22px 55px -28px rgba(11, 18, 32, 0.45);
+  --search-local-hit-background: var(--rr-surface-2);
+  --search-local-hit-color: var(--rr-ink);
+  --search-local-hit-shadow: inset 0 0 0 1px var(--rr-line);
+  --search-local-highlight-color: var(--rr-accent);
+  --search-local-muted-color: var(--rr-ink-soft);
+  --search-local-modal-width: min(560px, calc(100vw - 2rem));
+}
+
+.docs-wrapper {
+  background:
+    linear-gradient(180deg, var(--rr-accent-dim), transparent 15rem),
+    var(--rr-surface);
+}
+
+.theme-doc-markdown {
+  color: var(--rr-ink);
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.theme-doc-markdown > h1:first-child {
+  margin-bottom: 1.25rem;
+  font-size: clamp(2.15rem, 4vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.theme-doc-markdown h2 {
+  margin-top: 2.7rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rr-line);
+  font-size: clamp(1.5rem, 2.4vw, 1.9rem);
+  letter-spacing: -0.018em;
+}
+
+.theme-doc-markdown h3 {
+  margin-top: 2rem;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+}
+
+.theme-doc-markdown :is(h1, h2, h3, h4) {
+  color: var(--rr-ink);
+  scroll-margin-top: calc(var(--ifm-navbar-height) + 1.2rem);
+}
+
+.theme-doc-markdown p,
+.theme-doc-markdown li {
+  color: var(--rr-ink-soft);
+}
+
+.theme-doc-markdown strong {
+  color: var(--rr-ink);
+  font-weight: 650;
+}
+
+.theme-doc-markdown a:not(.hash-link) {
+  text-decoration-color: color-mix(in srgb, var(--rr-accent) 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  transition:
+    color 0.16s ease,
+    text-decoration-color 0.16s ease;
+}
+
+.theme-doc-markdown a:not(.hash-link):hover {
+  text-decoration-color: var(--rr-accent);
+}
+
+.hash-link {
+  color: var(--rr-accent);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+:is(h2, h3, h4):hover > .hash-link,
+.hash-link:focus-visible {
+  opacity: 0.72;
+}
+
+/* Code reads as a first-class evidence surface rather than an inset default. */
+.theme-code-block {
+  margin: 1.45rem 0;
+  border: 1px solid var(--rr-line);
+  border-radius: 12px;
+  background: var(--rr-surface-2);
+  box-shadow: 0 16px 38px -30px rgba(11, 18, 32, 0.55);
+  overflow: hidden;
+}
+
+.theme-code-block pre {
+  margin: 0;
+  line-height: 1.62;
+}
+
+.theme-code-block button {
+  border-radius: 7px;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.theme-doc-markdown :not(pre) > code,
+.breadcrumbs code,
+.pagination-nav code {
+  padding: 0.14em 0.4em;
+  border: 1px solid var(--rr-line);
+  border-radius: 5px;
+  background: var(--rr-surface-3);
+  color: var(--rr-accent);
+  font-size: 0.87em;
+  font-weight: 560;
+  overflow-wrap: anywhere;
+}
+
+/* Tables keep their data-grid feel in both schemes and stay usable on mobile. */
+.theme-doc-markdown table {
+  display: table;
+  width: 100%;
+  margin: 1.5rem 0 1.8rem;
+  border: 1px solid var(--rr-line);
+  border-radius: 11px;
+  border-spacing: 0;
+  border-collapse: separate;
+  background: var(--rr-surface);
+  box-shadow: 0 14px 34px -30px rgba(11, 18, 32, 0.5);
+  overflow: hidden;
+}
+
+.theme-doc-markdown table th,
+.theme-doc-markdown table td {
+  padding: 0.72rem 0.84rem;
+  border: 0;
+  border-bottom: 1px solid var(--rr-line);
+  vertical-align: top;
+}
+
+.theme-doc-markdown table th {
+  background: var(--rr-surface-3);
+  color: var(--rr-ink);
+  font-family: var(--rr-mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.theme-doc-markdown table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.theme-doc-markdown table tbody tr {
+  transition: background-color 0.16s ease;
+}
+
+.theme-doc-markdown table tbody tr:hover {
+  background: var(--rr-accent-dim);
+}
+
+/* Admonitions use the teal evidence accent; amber remains exclusive to stale. */
+.theme-admonition {
+  margin: 1.5rem 0;
+  border: 1px solid var(--rr-line);
+  border-left: 3px solid var(--rr-accent);
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--rr-accent-dim), transparent 42%);
+  box-shadow: none;
+}
+
+.theme-admonition [class*='admonitionHeading'] {
+  color: var(--rr-ink);
+  font-family: var(--rr-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.theme-admonition [class*='admonitionIcon'] svg {
+  fill: var(--rr-accent);
+  stroke: var(--rr-accent);
+}
+
+/* Navigation uses a quiet telemetry selection state, not a loud fill. */
+.theme-doc-sidebar-container {
+  border-right-color: var(--rr-line) !important;
+}
+
+.menu__link,
+.table-of-contents__link {
+  border-radius: 7px;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.menu__link:hover,
+.table-of-contents__link:hover {
+  color: var(--rr-accent);
+  background: var(--rr-accent-dim);
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  color: var(--rr-accent);
+  background: var(--rr-accent-dim);
+  box-shadow: inset 2px 0 0 var(--rr-accent);
+  font-weight: 650;
+}
+
+.table-of-contents {
+  border-left-color: var(--rr-line);
+}
+
+.table-of-contents__link--active {
+  color: var(--rr-accent);
+  font-weight: 620;
+}
+
+.breadcrumbs {
+  margin-bottom: 1.4rem;
+  font-family: var(--rr-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.015em;
+}
+
+.breadcrumbs__link {
+  border-radius: 6px;
+  color: var(--rr-ink-soft);
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.breadcrumbs__link:hover,
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--rr-accent);
+  background: var(--rr-accent-dim);
+}
+
+.pagination-nav__link {
+  position: relative;
+  border: 1px solid var(--rr-line);
+  border-radius: 11px;
+  background: var(--rr-surface-2);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.pagination-nav__link:hover {
+  transform: translateY(-2px);
+  border-color: var(--rr-accent);
+  box-shadow: 0 14px 30px -26px var(--rr-glow);
+}
+
+.pagination-nav__sublabel {
+  color: var(--rr-ink-soft);
+  font-family: var(--rr-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.pagination-nav__label {
+  color: var(--rr-ink);
+}
+
+/* Search remains entirely static: these variables only skin the bundled index UI. */
+.navbar__search-input {
+  border: 1px solid var(--rr-line);
+  border-radius: 8px;
+  background-color: var(--rr-surface-2);
+  color: var(--rr-ink);
+  font-family: var(--rr-mono);
+  transition:
+    width 0.18s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.navbar__search-input:focus {
+  border-color: var(--rr-accent);
+  box-shadow: 0 0 0 3px var(--rr-accent-dim);
+}
+
+.theme-doc-markdown mark {
+  padding: 0.04em 0.16em;
+  border-radius: 3px;
+  background: var(--rr-accent-dim);
+  color: var(--rr-ink);
+}
+
+/* Mermaid gets a framed canvas and uses neutral/dark renderer themes per mode. */
+.docusaurus-mermaid-container {
+  margin: 1.5rem 0 1.8rem;
+  padding: clamp(1rem, 3vw, 1.65rem);
+  border: 1px solid var(--rr-line);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 78% 10%, var(--rr-accent-dim), transparent 38%),
+    var(--rr-surface-2);
+  box-shadow: 0 18px 42px -34px rgba(11, 18, 32, 0.55);
+  overflow-x: auto;
+}
+
+.docusaurus-mermaid-container svg {
+  min-width: 760px;
+  margin: 0 auto;
+}
+
+/* ── Search-first 404 ───────────────────────────────────────────────── */
+
+.rrNotFound {
+  min-height: calc(100vh - var(--ifm-navbar-height));
+  padding: clamp(4rem, 11vw, 8rem) 0;
+  background:
+    radial-gradient(circle at 50% 5%, var(--rr-accent-dim), transparent 38rem),
+    linear-gradient(var(--rr-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rr-line) 1px, transparent 1px),
+    var(--rr-surface);
+  background-size: auto, 56px 56px, 56px 56px, auto;
+}
+
+.rrNotFoundInner {
+  max-width: 850px;
+}
+
+.rrNotFoundTitle {
+  max-width: 700px;
+  margin: 0 0 1rem;
+  color: var(--rr-ink);
+  font-size: clamp(2.4rem, 6vw, 4.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.rrNotFoundLead {
+  max-width: 620px;
+  margin-bottom: 1.7rem;
+  color: var(--rr-ink-soft);
+  font-size: var(--rr-step-lead);
+  line-height: 1.6;
+}
+
+.rrNotFoundSearch {
+  position: relative;
+  z-index: 2;
+  max-width: 620px;
+  margin-bottom: 1.6rem;
+  padding: 0.7rem;
+  border: 1px solid var(--rr-line);
+  border-radius: 12px;
+  background: var(--rr-surface-2);
+  box-shadow: 0 18px 44px -34px rgba(11, 18, 32, 0.65);
+}
+
+.rrNotFoundSearch .navbar__search {
+  width: 100%;
+  margin: 0;
+}
+
+.rrNotFoundSearch .navbar__search-input {
+  width: 100%;
+  height: 3rem;
+}
+
+.rrNotFoundGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.rrNotFoundCard {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem 0.8rem;
+  padding: 1rem;
+  border: 1px solid var(--rr-line);
+  border-radius: 11px;
+  background: var(--rr-surface-2);
+  color: var(--rr-ink);
+  text-decoration: none;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.rrNotFoundCard span {
+  font-weight: 650;
+}
+
+.rrNotFoundCard small {
+  grid-column: 1 / -1;
+  color: var(--rr-ink-soft);
+  line-height: 1.5;
+}
+
+.rrNotFoundCard strong {
+  color: var(--rr-accent);
+}
+
+.rrNotFoundCard:hover {
+  transform: translateY(-2px);
+  border-color: var(--rr-accent);
+  box-shadow: 0 14px 30px -26px var(--rr-glow);
+  color: var(--rr-ink);
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .theme-doc-markdown table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .docusaurus-mermaid-container svg {
+    min-width: 680px;
+  }
+
+  .rrNotFoundGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .rrNotFoundSearch [role='listbox'] {
+    left: -0.75rem !important;
+    right: auto !important;
+    width: calc(100vw - 2rem) !important;
+    max-width: calc(100vw - 2rem) !important;
+  }
+}
+
 /* ── Motion & a11y ───────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
@@ -669,11 +1109,23 @@ html {
   }
   .rrCard,
   .rrBtn,
-  .rrCard::after {
+  .rrCard::after,
+  .theme-doc-markdown a,
+  .hash-link,
+  .theme-code-block button,
+  .theme-doc-markdown table tbody tr,
+  .menu__link,
+  .table-of-contents__link,
+  .breadcrumbs__link,
+  .pagination-nav__link,
+  .navbar__search-input,
+  .rrNotFoundCard {
     transition: none;
   }
   .rrCard:hover,
-  .rrBtn:hover {
+  .rrBtn:hover,
+  .pagination-nav__link:hover,
+  .rrNotFoundCard:hover {
     transform: none;
   }
 }
