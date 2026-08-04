@@ -1,9 +1,9 @@
-import type { MemoryType } from "./types.js";
 import type {
   MemoryClass,
   MemoryScope,
   MemorySourceKind,
   MemoryStatus,
+  MemoryType,
 } from "./types.js";
 
 const VALID_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference", "wiki"]);

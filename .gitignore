@@ -30,3 +30,6 @@ pnpm-lock.yaml
 
 # Local MCP config (non-portable absolute paths) — copy from .mcp.json.example
 .mcp.json
+
+# Generated pre-publish review reports (machine paths, hostnames, PIDs, log metadata)
+.codex/

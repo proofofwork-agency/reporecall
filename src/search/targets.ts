@@ -8,10 +8,11 @@ import type {
   TargetKind,
 } from "../storage/types.js";
 import { GENERIC_QUERY_ACTION_TERMS, STOP_WORDS, expandQueryTerms, getQueryTermVariants, isTestFile, tokenizeQueryTerms } from "./utils.js";
+import { splitIdentifierTokens } from "./target-text.js";
+export { splitIdentifierTokens } from "./target-text.js";
 
 export const INDEX_FORMAT_VERSION = "0.3.6-rebuild-execution-roots";
 
-const CODE_DELIMITER_RE = /[^a-z0-9]+/g;
 const PATH_LIKE_TARGET_RE = /\b[\w./-]+\b/g;
 const SLUG_RE = /\b[a-z0-9]+(?:[-_][a-z0-9]+)+\b/;
 const INDEX_FILE_RE = /^index\.[^.]+$/i;
@@ -37,16 +38,6 @@ export interface ResolvedTargetCandidate {
   source: TargetAliasSource | "query" | "subsystem";
   confidence: number;
   phrase: string;
-}
-
-export function splitIdentifierTokens(value: string): string[] {
-  return value
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[_.:/-]+/g, " ")
-    .toLowerCase()
-    .split(CODE_DELIMITER_RE)
-    .filter(Boolean);
 }
 
 export function normalizeTargetText(value: string): string {
@@ -444,6 +435,7 @@ export function resolveTargetsForQuery(
   const targetKindRank = (kind: TargetKind): number => {
     switch (kind) {
       case "endpoint":
+      case "route":
         return 4;
       case "file_module":
         return 3;
@@ -451,8 +443,6 @@ export function resolveTargetsForQuery(
         return 2;
       case "subsystem":
         return 1;
-      default:
-        return 0;
     }
   };
   const queryTerms = expandQueryTerms(query);

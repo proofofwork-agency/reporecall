@@ -107,8 +107,8 @@ function makeMockMetadata(overrides?: Partial<any>): any {
 
 function makeConfig(): any {
   return {
-    projectRoot: "/tmp/test-mcp",
-    dataDir: "/tmp/test-mcp/.memory",
+    projectRoot: tmpdir(),
+    dataDir: join(tmpdir(), ".memory"),
     embeddingProvider: "keyword",
     embeddingModel: "",
     embeddingDimensions: 0,

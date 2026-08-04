@@ -4,6 +4,10 @@ import type { StackTree } from "./tree-builder.js";
 import type { StoredChunk } from "../storage/types.js";
 import { getLogger } from "../core/logger.js";
 import { compressEvidenceChunk, type EvidenceCompressionMode, type EvidenceCompressionResult } from "./evidence-compressor.js";
+import { formatChunk, storedChunkToSearchResult, type HydratableMetadata } from "./context-chunks.js";
+import { inferFlowFamilies, scoreFlowChunkAffinity, tokenizeFlowAssemblyQuery } from "./context-flow-scoring.js";
+import { buildConceptFacts, type ConceptContextKind } from "./context-concept-facts.js";
+export type { ConceptContextKind } from "./context-concept-facts.js";
 
 let encoder: ReturnType<typeof encoding_for_model> | undefined;
 
@@ -36,6 +40,7 @@ function buildFileListLine(chunks: SearchResult[], maxFiles = 8): string {
 export interface AssembleOptions {
   scoreFloorRatio?: number;   // default 0.7
   maxChunks?: number;         // default Infinity (no cap unless config passes one)
+  preferFileDiversity?: boolean; // cover distinct files before secondary chunks
   directiveHeader?: boolean;  // default true
   query?: string;
   factExtractors?: Array<{ keyword: string; pattern: string; label: string }>;
@@ -56,8 +61,6 @@ interface RenderedChunk {
   compressed: boolean;
   compression?: EvidenceCompressionResult;
 }
-
-export type ConceptContextKind = "ast" | "call_graph" | "search_pipeline" | "storage" | "daemon" | "embedding" | "cli" | "context_assembly" | (string & {});
 
 export function assembleContext(
   results: SearchResult[],
@@ -101,6 +104,10 @@ export function assembleContext(
 
   // Drop results scoring below scoreFloorRatio of the top result
   const scoreFloor = results.length > 0 ? (results[0]?.score ?? 0) * scoreFloorRatio : 0;
+  const eligibleResults = results.filter((result) => result.score >= scoreFloor);
+  const assemblyResults = opts.preferFileDiversity
+    ? orderForFileDiversity(eligibleResults)
+    : eligibleResults;
 
   // Track file headers already emitted
   const emittedHeaders = new Set<string>();
@@ -108,9 +115,8 @@ export function assembleContext(
   // Reserve space for summary/facts that will be appended after the loop
   const SUMMARY_RESERVE = 80;
 
-  for (const result of results) {
+  for (const result of assemblyResults) {
     if (included.length >= maxChunks) break;
-    if (result.score < scoreFloor) continue;
     const fullText = formatChunk(result);
     const fullTokens = countTokens(fullText);
     const shouldPreferCompressed =
@@ -226,7 +232,7 @@ export function assembleContext(
     scoreFloor: +scoreFloor.toFixed(3),
     includedChunks: included.length,
     droppedByScoreFloor: results.filter(r => r.score < scoreFloor).length,
-    droppedByBudget: results.filter(r => r.score >= scoreFloor).length - included.length,
+    droppedByBudget: eligibleResults.length - included.length,
     totalTokens: finalTokenCount,
     tokenBudget,
     compressedChunks: compression.compressedChunks,
@@ -241,6 +247,23 @@ export function assembleContext(
     deliveryMode: "code_context",
     compression,
   };
+}
+
+function orderForFileDiversity(results: SearchResult[]): SearchResult[] {
+  const firstPerFile: SearchResult[] = [];
+  const remaining: SearchResult[] = [];
+  const seenFiles = new Set<string>();
+
+  for (const result of results) {
+    if (seenFiles.has(result.filePath)) {
+      remaining.push(result);
+      continue;
+    }
+    seenFiles.add(result.filePath);
+    firstPerFile.push(result);
+  }
+
+  return [...firstPerFile, ...remaining];
 }
 
 function buildRenderedChunk(
@@ -449,176 +472,7 @@ function extractUniqueMatches(
   return Array.from(values);
 }
 
-function longestBacktickRun(content: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const ch of content) {
-    if (ch === "`") {
-      current++;
-      if (current > longest) longest = current;
-    } else {
-      current = 0;
-    }
-  }
-  return longest;
-}
-
-function formatChunk(result: SearchResult): string {
-  const lang = result.language || "";
-  const location = `Lines ${result.startLine}-${result.endLine}: ${result.kind} ${result.name}`;
-  const fence = "`".repeat(Math.max(3, longestBacktickRun(result.content) + 1));
-  return `${fence}${lang}\n// ${location}\n${result.content}\n${fence}\n`;
-}
-
-// --- Metadata-aware chunk type for hydration ---
-
-interface HydratableMetadata {
-  getChunksByIds(ids: string[]): StoredChunk[];
-}
-
-function storedChunkToSearchResult(chunk: StoredChunk, score: number = 1.0): SearchResult {
-  return {
-    id: chunk.id,
-    score,
-    filePath: chunk.filePath,
-    name: chunk.name,
-    kind: chunk.kind,
-    startLine: chunk.startLine,
-    endLine: chunk.endLine,
-    content: chunk.content,
-    docstring: chunk.docstring,
-    parentName: chunk.parentName,
-    language: chunk.language,
-  };
-}
-
 // --- Flow context assembly (R1) ---
-
-function tokenizeFlowAssemblyQuery(query?: string): string[] {
-  if (!query) return [];
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 3);
-}
-
-function countFlowQueryMatches(terms: string[], ...texts: Array<string | undefined>): number {
-  if (terms.length === 0) return 0;
-  const haystack = texts
-    .filter((text): text is string => !!text)
-    .join(" ")
-    .toLowerCase()
-    .replace(/[_-]/g, " ");
-  let count = 0;
-  for (const term of terms) {
-    const prefix = term.length >= 6 ? term.slice(0, 4) : term;
-    if (haystack.includes(term) || (prefix.length >= 4 && haystack.includes(prefix))) count++;
-  }
-  return count;
-}
-
-function commonFlowPathPrefixLength(left: string, right: string): number {
-  const leftParts = left.toLowerCase().split("/").filter(Boolean);
-  const rightParts = right.toLowerCase().split("/").filter(Boolean);
-  let count = 0;
-  while (count < leftParts.length && count < rightParts.length && leftParts[count] === rightParts[count]) {
-    count++;
-  }
-  return count;
-}
-
-function inferFlowFamilies(queryTerms: string[]) {
-  return {
-    auth: queryTerms.some((term) => /^auth|token|session|login|signin|credential|callback|redirect|protect/.test(term)),
-    generation: queryTerms.some((term) => /^image|generate|generation|render|shot|regen/.test(term)),
-    billing: queryTerms.some((term) => /^bill|checkout|portal|subscription|invoice|payment|credit|customer/.test(term)),
-    upload: queryTerms.some((term) => /^upload|storage|media|signed|bucket|file/.test(term)),
-  };
-}
-
-function scoreFlowChunkAffinity(
-  chunk: StoredChunk,
-  seedChunk: StoredChunk,
-  queryTerms: string[],
-  families: ReturnType<typeof inferFlowFamilies>,
-  direction: "caller" | "callee",
-  implementationFirst: boolean,
-  callerFocused: boolean,
-  nodeDepth: number = 99
-): number {
-  let score = 0;
-  const sameFile = chunk.filePath === seedChunk.filePath;
-  const prefix = commonFlowPathPrefixLength(seedChunk.filePath, chunk.filePath);
-  const queryMatches = countFlowQueryMatches(
-    queryTerms,
-    chunk.filePath,
-    chunk.name,
-    chunk.parentName,
-    chunk.docstring
-  );
-  const fileText = `${chunk.filePath} ${chunk.name} ${chunk.parentName ?? ""}`.toLowerCase();
-  const sharedFile = /(?:^|\/)_shared\//.test(chunk.filePath);
-  const seedInHooks = /(?:^|\/)hooks\//.test(seedChunk.filePath);
-  const seedInEndpoint = /supabase\/functions\//.test(seedChunk.filePath);
-  const candidateInUi = /(?:^|\/)(pages|components|routes)\//.test(chunk.filePath);
-  const candidateInClient = /^src\//.test(chunk.filePath);
-
-  if (sameFile) score += 140;
-  score += prefix * 18;
-  score += queryMatches * 35;
-
-  if (implementationFirst) {
-    if (direction === "callee") score += 8;
-    if (direction === "caller") score -= 8;
-  }
-  if (callerFocused) {
-    if (direction === "caller") score += 40;
-    if (direction === "callee") score -= 10;
-  }
-  if (implementationFirst && direction === "caller" && !callerFocused) {
-    if (seedInHooks && candidateInUi && queryMatches < 2) score -= 70;
-    if (seedInEndpoint && candidateInClient && queryMatches < 2) score -= 75;
-  }
-  // Penalize generic workers and shared middleware when the query isn't about them
-  if (/\/workers\//.test(chunk.filePath) && !queryTerms.some((t) => /\bworker\b/.test(t))) {
-    score -= 150;
-  }
-  if (/\/(?:cors|rate[-_]?limit)[^/]*\./.test(chunk.filePath) && !queryTerms.some((t) => /\b(cors|rate|limit|middleware)\b/.test(t)) && queryMatches < 1) {
-    score -= 100;
-  }
-  // For hook seeds: suppress callers with zero query-term overlap (they are just importers, not related)
-  if (seedInHooks && direction === "caller" && queryMatches === 0) {
-    score -= 100;
-  }
-
-  if (families.auth) {
-    if (/(auth|callback|protected|session|login|signin|redirect|token)/.test(fileText)) score += 30;
-    if (/(storage|analytics|project|dashboard|admin)/.test(fileText)) score -= 35;
-    if (/(?:cors|rate[-_]?limit|logger)/.test(fileText)) score -= 25;
-  }
-  if (families.generation) {
-    if (/(generate|generation|render|image|shot|regener)/.test(fileText)) score += 30;
-    if (/(upload|storage|media|bucket)/.test(fileText)) score -= 25;
-  }
-  if (families.billing) {
-    if (/(billing|checkout|portal|subscription|invoice|payment|customer|credit)/.test(fileText)) score += 28;
-    if (/(analytics|dashboard|project)/.test(fileText)) score -= 20;
-  }
-  if (families.upload) {
-    if (/(upload|storage|media|signed|bucket|file)/.test(fileText)) score += 24;
-    if (families.auth && /auth/.test(fileText)) score += 18;
-  }
-
-  if (sharedFile && queryMatches === 0 && !families.auth && !families.billing && !families.generation && !families.upload) {
-    score -= 22;
-  }
-  // Skip harsh penalty for direct neighbors (depth 1) — they're in the call graph and always relevant
-  if (queryTerms.length > 0 && !sameFile && prefix < 2 && queryMatches === 0 && nodeDepth > 1) score -= 60;
-  if (/schema|migration|fixture|example|test|spec/i.test(chunk.filePath)) score -= 120;
-
-  return score;
-}
 
 interface FlowEntry {
   node: StackTree["upTree"][number];
@@ -688,70 +542,6 @@ function selectFlowEntries(
   }
 
   return { parts, results, rendered, totalTokens: currentTokens };
-}
-
-function describeChunk(chunk: SearchResult | StoredChunk | undefined): string | null {
-  if (!chunk) return null;
-  return `\`${chunk.name}\` (${chunk.filePath}:${chunk.startLine}-${chunk.endLine})`;
-}
-
-function buildConceptFacts(
-  kind: ConceptContextKind,
-  chunks: SearchResult[]
-): string[] {
-  const byName = new Map(chunks.map((chunk) => [chunk.name, chunk]));
-
-  const CONCEPT_FACTS: Record<string, (m: Map<string, SearchResult>) => string[]> = {
-    ast: (m) => [
-      `Main entry point: ${describeChunk(m.get("chunkFileWithCalls")) ?? "`chunkFileWithCalls`"} parses a file, builds the syntax tree, and orchestrates chunk, import, and call-edge extraction.`,
-      `Parser setup: ${describeChunk(m.get("initTreeSitter")) ?? "`initTreeSitter`"} initializes Tree-sitter, and ${describeChunk(m.get("createParser")) ?? "`createParser`"} creates the parser instance for the loaded grammar.`,
-      `AST traversal: ${describeChunk(m.get("walkForExtractables")) ?? "`walkForExtractables`"} walks the tree for extractable nodes, while ${describeChunk(m.get("extractName")) ?? "`extractName`"} derives stable symbol names for chunks.`,
-    ],
-    call_graph: (m) => [
-      `Main entry point: ${describeChunk(m.get("extractCallEdges")) ?? "`extractCallEdges`"} walks AST call sites and emits persisted call edges.`,
-      `Callee resolution: ${describeChunk(m.get("extractCalleeInfo")) ?? "`extractCalleeInfo`"} resolves the callee name and receiver, and ${describeChunk(m.get("extractReceiver")) ?? "`extractReceiver`"} normalizes chained member receivers.`,
-      `Consumers: ${describeChunk(m.get("graphCommand")) ?? "`graphCommand`"} exposes the CLI view, and ${describeChunk(m.get("buildStackTree")) ?? "`buildStackTree`"} builds higher-level caller/callee navigation from stored edges.`,
-    ],
-    search_pipeline: (m) => [
-      `Routing: ${describeChunk(m.get("classifyIntent")) ?? "`classifyIntent`"} classifies the query into lookup, trace, bug, architecture, or change, and ${describeChunk(m.get("handlePromptContextDetailed")) ?? "`handlePromptContextDetailed`"} dispatches the chosen mode.`,
-      `Lookup and bug retrieval: ${describeChunk(m.get("searchWithContext")) ?? "`searchWithContext`"} builds the prompt bundle, while ${describeChunk(m.get("search")) ?? "`search`"} runs retrieve, fuse, expand, and hydrate.`,
-      `Trace path: ${describeChunk(m.get("resolveSeeds")) ?? "`resolveSeeds`"} chooses seeds for implementation traces, and weak broad architecture candidates degrade to summary-only guidance instead of noisy code bundles.`,
-    ],
-    storage: (m) => [
-      `Facade: ${describeChunk(m.get("MetadataStore")) ?? "`MetadataStore`"} delegates to sub-stores for chunks, call edges, stats, conventions, and imports.`,
-      `Keyword search: ${describeChunk(m.get("FTSStore")) ?? "`FTSStore`"} provides FTS5 full-text search with Porter stemming and camelCase splitting.`,
-      `Chunk persistence: ${describeChunk(m.get("ChunkStore")) ?? "`ChunkStore`"} stores parsed code chunks with schema migrations and batch queries.`,
-    ],
-    daemon: (m) => [
-      `Server: ${describeChunk(m.get("createDaemonServer")) ?? "`createDaemonServer`"} creates the HTTP server with bearer auth, rate limiting, and hook endpoints.`,
-      `Query processing: ${describeChunk(m.get("sanitizeQuery")) ?? "`sanitizeQuery`"} strips code fragments from hook payloads before intent classification.`,
-      `Incremental updates: ${describeChunk(m.get("IndexScheduler")) ?? "`IndexScheduler`"} queues file changes from the watcher and flushes them through the pipeline.`,
-    ],
-    embedding: (m) => [
-      `Local embedder: ${describeChunk(m.get("LocalEmbedder")) ?? "`LocalEmbedder`"} runs all-MiniLM-L6-v2 in-process via ONNX for zero-dependency vector encoding.`,
-      `Keyword fallback: ${describeChunk(m.get("NullEmbedder")) ?? "`NullEmbedder`"} provides a no-op embedder for keyword-only mode.`,
-      `Remote provider: ${describeChunk(m.get("OllamaEmbedder")) ?? "`OllamaEmbedder`"} connects to Ollama with circuit breaker and retry logic.`,
-    ],
-    cli: (m) => [
-      `Entry point: ${describeChunk(m.get("createCLI")) ?? "`createCLI`"} registers all commands using Commander.`,
-      `Initialization: ${describeChunk(m.get("initCommand")) ?? "`initCommand`"} sets up .memory/, hooks, and .mcp.json configuration.`,
-      `Daemon startup: ${describeChunk(m.get("serveCommand")) ?? "`serveCommand`"} manages the daemon lifecycle with PID locking and graceful shutdown.`,
-    ],
-    context_assembly: (m) => [
-      `Standard assembly: ${describeChunk(m.get("assembleContext")) ?? "`assembleContext`"} builds token-budgeted context from ranked search results.`,
-      `Concept assembly: ${describeChunk(m.get("assembleConceptContext")) ?? "`assembleConceptContext`"} builds subsystem-specific context bundles with targeted facts.`,
-      `Token counting: ${describeChunk(m.get("countTokens")) ?? "`countTokens`"} uses tiktoken gpt-4o encoding for accurate budget tracking.`,
-    ],
-  };
-
-  const factBuilder = CONCEPT_FACTS[kind];
-  if (factBuilder) {
-    return factBuilder(byName).map((fact) => `- ${fact}`);
-  }
-
-  // Generic fallback for user-defined concept kinds
-  const names = chunks.slice(0, 3).map((c) => describeChunk(c) ?? `\`${c.name}\``);
-  return names.map((n) => `- Key symbol: ${n}`);
 }
 
 export function assembleConceptContext(

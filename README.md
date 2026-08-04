@@ -24,7 +24,7 @@ Reporecall helps Claude Code, Codex, Cline, Aider and other agents work more eff
 - **Persistent local memory** — rules, facts and working notes that survive across sessions.
 - **Zero cloud by default** — no external vector DB, no recurring costs, works completely offline.
 
-**v0.8.1 focus (factual):** clearer Trust Contract docs, hooks as the primary experience, new reproducible `benchmark:tokens` script, public competitive positioning page, and cleaned release metadata.
+**v0.9.0 focus:** trustworthy retrieval evidence, unified project-boundary safety, deterministic quality gates, and behavior-preserving module decomposition.
 
 ### Standout Features
 - **6-tool MCP surface** — deliberately small and reliable after the v0.8 surface collapse.
@@ -56,12 +56,12 @@ Injected context + banner   (optional MCP tools for gaps)
 
 **Plays nicely with:** Claude Code (hooks), Codex (MCP/CLI), Cline, Aider, and any MCP-compatible coding agent.
 
-**📖 Full docs + honest competitive analysis** (6/10 → 9/10 positioning review + threat matrix):  
+**📖 Full docs + honest competitive analysis** (current position, target position, and threat matrix):
 https://proofofwork-agency.github.io/reporecall/
 
-> **v0.8.1 in practice** — clearer Trust Contract docs, hooks as the main UX, new `benchmark:tokens` script, public competitive positioning page, and cleaned release metadata. All factual, all shipped.
+> **v0.9.0 in practice** — reproducible evidence, stricter path containment, contamination-resistant hooks, and a release gate that stays blocked when current proof is missing.
 
-## Quick Start (30 seconds)
+## Quick Start
 
 ```bash
 npm install -g @proofofwork-agency/reporecall
@@ -379,18 +379,17 @@ See `src/core/staleness.ts` and the daemon auto-refresh logic.
 }
 ```
 
-## Benchmarking & Token Savings (Work in Progress)
+## Benchmarking & Token Evidence (Work in Progress)
 
-We are publishing measured results on token reduction and retrieval quality vs baseline (plain files + grep).
-
-Placeholder results (to be replaced with real runs):
-
-- Typical 40–70% context token reduction on trace/architecture questions while maintaining or improving recall
-- 100% of responses include freshness metadata
+RepoRecall does not currently publish a quantitative token-savings claim. Such a
+claim requires paired native-tools and RepoRecall tasks using the same
+model/settings and fresh sessions. Missing paired measurements are reported as
+`insufficient_evidence`; they are never replaced with estimates or fallback
+numbers.
 
 Run `npm run benchmark` or see `scripts/benchmarks/`. 
 
-For token savings + freshness:
+For redacted aggregate injection + freshness evidence:
 
 ```bash
 npm run benchmark:tokens -- --project .
@@ -426,8 +425,8 @@ The rare combination that actually moves the needle for agents: **automatic per-
 | Tool          | Auto-Inject Hooks | Trust/Freshness                          | Compress + Expand | Local + OSS + Zero Infra | Adoption     |
 |---------------|-------------------|------------------------------------------|-------------------|--------------------------|--------------|
 | Reporecall    | ✅ per-prompt    | ✅ Full (banners + `indexedCommit` + auto-refresh) | ✅ + `read_chunk` | ✅                       | nascent     |
-| CodeGraph     | ❌ (tool calls)  | ✅ Banner                                | ⚠️ limited       | ✅                       | ~50k        |
-| Cline         | ❌               | ⚠️ "always fresh" claim                  | ❌                | ✅                       | 64k         |
+| CodeGraph     | ❌ (tool calls)  | ✅ Banner                                | ⚠️ limited       | ✅                       | Established |
+| Cline         | ❌               | ⚠️ "always fresh" claim                  | ❌                | ✅                       | Established |
 | Cognee        | ✅               | ⚠️                                       | ❌                | ✅                       | + funding   |
 | Native Claude | ✅ (but thin)    | ✅ (live files)                          | ❌                | ✅ (limited)             | default     |
 
@@ -488,11 +487,29 @@ reporecall search "query"
 reporecall mcp
 reporecall doctor
 reporecall stats
+reporecall stats --json --output ./reporecall-evidence.json
 reporecall graph
 reporecall conventions
 ```
 
 ## Changelog
+
+### v0.9.0 - Engineering Hardening
+
+This release made the engineering behind the trust contract verifiable:
+
+- Reproducible evidence: compatibility snapshots, a claims registry, and
+  machine-readable release gates under `quality/`.
+- One canonical filesystem boundary across indexing, watcher, removal, MCP, and
+  daemon entry points.
+- Type-aware linting, coverage gates, module/cycle checks, multi-OS CI, packed
+  tarball demos, and nightly stress/benchmark jobs.
+- Retrieval trust metrics for high-confidence-wrong results and fresh/stale/empty
+  classification.
+- Precise lookups no longer inject wiki overview pages about unrelated code that
+  matched on a single shared token; breadth queries still get them in full.
+- Large internals decomposed behind unchanged CLI, MCP, config, JSON, and package
+  façades.
 
 ### v0.8.0 - Trust Contract Remediation (The Foundation)
 
@@ -550,9 +567,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the full package history.
 
 ```bash
 npm install
+npm run typecheck
 npm run lint
-npm test
+npm run coverage
 npm run build
+npm run demo:packed
 ```
 
 Useful verification:

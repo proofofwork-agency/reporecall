@@ -458,7 +458,6 @@ export function serveCommand(): Command {
           log.error(`Graceful shutdown timed out after ${config.shutdownTimeoutMs}ms, forcing exit`)
           process.exit(1)
         }, config.shutdownTimeoutMs)
-        forceExitTimer.unref()
 
         try {
           // Step 1: Stop accepting new connections; wait for in-flight requests
@@ -552,17 +551,20 @@ export function serveCommand(): Command {
         // Step 12: Flush pino logger before exiting to ensure all log lines are written
         log.flush()
 
-        // All handles closed/unreffed — Node.js will exit naturally.
-        // forceExitTimer is .unref()'d so it won't prevent exit,
-        // but will fire after 10s if something hangs.
-        // NOT calling process.exit(0) avoids libc++abi native
-        // addon destructor races.
+        // All handles and native stores are closed; allow Node to exit
+        // naturally so native addon destructors do not race process.exit().
+        clearTimeout(forceExitTimer)
+        process.exitCode = 0
       }
 
       // Windows: SIGTERM is not sent by Task Manager/services. Only SIGINT (Ctrl+C) works.
       // Node.js emulates SIGINT on Windows, so graceful shutdown via Ctrl+C is supported.
-      process.on('SIGINT', shutdown)
-      process.on('SIGTERM', shutdown)
+      process.on('SIGINT', () => {
+        void shutdown()
+      })
+      process.on('SIGTERM', () => {
+        void shutdown()
+      })
 
       // Prevent unhandled promise rejections from crashing the process noisily
       process.on('unhandledRejection', (reason) => {

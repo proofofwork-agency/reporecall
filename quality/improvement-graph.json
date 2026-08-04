@@ -1,0 +1,375 @@
+{
+  "schemaVersion": "reporecall-improvement-graph/v1",
+  "baselineVersion": "0.8.1",
+  "targetVersion": "0.9.0",
+  "releasePriority": [
+    "security",
+    "correctness",
+    "compatibility",
+    "platform_reliability",
+    "maintainability",
+    "efficiency",
+    "adoption"
+  ],
+  "invalidation": {
+    "inputs": [
+      "source",
+      "fixture",
+      "dependency",
+      "node",
+      "ci_matrix"
+    ],
+    "rule": "A passed node is invalid when its stored SHA-256 input fingerprint differs from the current fingerprint."
+  },
+  "retryPolicy": {
+    "requireNewRootCauseHypothesis": true,
+    "freezeAfterSameSignature": 3,
+    "lowerGatesToPass": false
+  },
+  "ratchet": {
+    "qualifyingReleaseMarginPoints": 5,
+    "qualifyingReleaseCount": 2,
+    "tightenByPoints": 2,
+    "direction": "toward_declared_target"
+  },
+  "nodes": [
+    {
+      "id": "baseline_contracts",
+      "category": "compatibility",
+      "dependencies": [],
+      "commands": [
+        "npm run typecheck",
+        "npm test -- --run",
+        "npm run quality:check"
+      ],
+      "thresholds": {
+        "cliCommands": 11,
+        "mcpTools": 6,
+        "baselineTests": 895
+      },
+      "evidencePaths": [
+        "quality/contracts/v0.8.1.json",
+        "quality/evidence/baseline.json"
+      ],
+      "inputGlobs": [
+        "src/cli/**/*.ts",
+        "src/daemon/mcp-server.ts",
+        "src/core/config.ts",
+        "src/index.ts",
+        "package.json",
+        "package-lock.json",
+        "test/**/*.test.ts"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": [
+        {
+          "attemptedAt": "2026-07-30T21:27:33.000Z",
+          "signature": "memory-runtime-refresh-timeout",
+          "rootCauseHypothesis": "Polling raced the watcher and consumed the test timeout before an observable refresh completion.",
+          "result": "failed"
+        }
+      ]
+    },
+    {
+      "id": "evaluation_claims",
+      "category": "correctness",
+      "dependencies": [
+        "baseline_contracts"
+      ],
+      "commands": [
+        "npm run quality:claims",
+        "npm run benchmark:production",
+        "npm run benchmark:project-context -- --reporecall-only"
+      ],
+      "thresholds": {
+        "unsupportedCurrentVersionClaims": 0,
+        "estimatedSavingsClaims": 0
+      },
+      "evidencePaths": [
+        "quality/claims.json",
+        "quality/evidence/evaluation.json"
+      ],
+      "inputGlobs": [
+        "README.md",
+        "docs/**/*.md",
+        "website/docs/**/*.md",
+        "scripts/benchmarks/**/*",
+        "benchmark/**/*"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "path_safety",
+      "category": "security",
+      "dependencies": [
+        "baseline_contracts"
+      ],
+      "commands": [
+        "npx vitest run test/core/path-safety.test.ts test/indexer/file-scanner.test.ts test/indexer/pipeline-edge-cases.test.ts test/daemon/watcher.test.ts test/daemon/mcp-server.test.ts"
+      ],
+      "thresholds": {
+        "branchCoveragePercent": 100,
+        "knownEscapeCasesAllowed": 0
+      },
+      "evidencePaths": [
+        "quality/evidence/path-safety.json"
+      ],
+      "inputGlobs": [
+        "src/core/path-safety.ts",
+        "src/indexer/file-scanner.ts",
+        "src/indexer/pipeline.ts",
+        "src/daemon/watcher.ts",
+        "src/daemon/mcp-server.ts",
+        "test/core/path-safety.test.ts",
+        "test/indexer/file-scanner.test.ts",
+        "test/indexer/pipeline-edge-cases.test.ts",
+        "test/daemon/watcher.test.ts",
+        "test/daemon/mcp-server.test.ts"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "quality_platform",
+      "category": "platform_reliability",
+      "dependencies": [
+        "baseline_contracts"
+      ],
+      "commands": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run coverage",
+        "npm run build",
+        "npm run smoke",
+        "npm audit --omit=dev --audit-level=high",
+        "npm pack --dry-run"
+      ],
+      "thresholds": {
+        "eslintWarnings": 0,
+        "timingSynchronizationSleeps": 0,
+        "requiredOperatingSystems": 3
+      },
+      "evidencePaths": [
+        "quality/evidence/quality-platform.json"
+      ],
+      "inputGlobs": [
+        ".github/workflows/*.yml",
+        "eslint.config.mjs",
+        "vitest.config.ts",
+        "tsconfig.json",
+        "package.json",
+        "package-lock.json",
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "module_decomposition",
+      "category": "maintainability",
+      "dependencies": [
+        "evaluation_claims",
+        "path_safety",
+        "quality_platform"
+      ],
+      "commands": [
+        "npm run quality:modules",
+        "npm test -- --run"
+      ],
+      "thresholds": {
+        "facadeNonCommentLinesMax": 500,
+        "moduleNonCommentLinesMax": 800,
+        "dependencyCycles": 0
+      },
+      "evidencePaths": [
+        "quality/evidence/module-decomposition.json"
+      ],
+      "inputGlobs": [
+        "src/hooks/**/*.ts",
+        "src/daemon/**/*.ts",
+        "src/indexer/**/*.ts",
+        "src/search/**/*.ts",
+        "test/hooks/**/*.ts",
+        "test/daemon/**/*.ts",
+        "test/indexer/**/*.ts",
+        "test/search/**/*.ts"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "retrieval_confidence",
+      "category": "correctness",
+      "dependencies": [
+        "evaluation_claims",
+        "module_decomposition"
+      ],
+      "commands": [
+        "npm run benchmark:project-context -- --reporecall-only",
+        "npm run benchmark:production"
+      ],
+      "thresholds": {
+        "routeAccuracyMin": 0.9,
+        "averageContextRecallMin": 0.85,
+        "averageContextPrecisionMin": 0.6,
+        "contextPollutionMax": 0.1,
+        "highConfidenceWrongRateMax": 0,
+        "freshnessClassificationMin": 1
+      },
+      "evidencePaths": [
+        "quality/evidence/retrieval-confidence.json"
+      ],
+      "inputGlobs": [
+        "src/search/**/*.ts",
+        "src/hooks/prompt-context.ts",
+        "scripts/benchmarks/project-context-audit-lib.ts",
+        "scripts/benchmarks/production-gate-lib.ts",
+        "benchmark/**/*",
+        "test/benchmark/**/*"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "v0.9_release",
+      "category": "correctness",
+      "dependencies": [
+        "path_safety",
+        "quality_platform",
+        "retrieval_confidence"
+      ],
+      "commands": [
+        "npm run quality:gate -- --release v0.9"
+      ],
+      "thresholds": {
+        "requiredDependenciesPassed": 3
+      },
+      "evidencePaths": [
+        "quality/evidence/v0.9-release.json"
+      ],
+      "inputGlobs": [
+        "quality/**/*",
+        "package.json",
+        "package-lock.json"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "external_pilot",
+      "category": "adoption",
+      "dependencies": [
+        "v0.9_release"
+      ],
+      "commands": [
+        "npm run pilot:validate"
+      ],
+      "thresholds": {
+        "users": 5,
+        "repositories": 5,
+        "weeks": 4,
+        "pairedTasksMin": 100,
+        "sourceFilesPerRepositoryMin": 500,
+        "codeLinesPerRepositoryAlternativeMin": 50000
+      },
+      "evidencePaths": [
+        "quality/pilot/README.md",
+        "quality/evidence/pilot-redacted.json"
+      ],
+      "inputGlobs": [
+        "quality/pilot/**/*",
+        "quality/evidence/pilot-redacted.json"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "regression_fixtures",
+      "category": "correctness",
+      "dependencies": [
+        "external_pilot"
+      ],
+      "commands": [
+        "npm test -- --run"
+      ],
+      "thresholds": {
+        "confirmedMissesWithoutFixture": 0,
+        "privateSourceIncluded": 0
+      },
+      "evidencePaths": [
+        "quality/evidence/regression-fixtures.json"
+      ],
+      "inputGlobs": [
+        "test/fixtures/**/*",
+        "test/**/*.test.ts",
+        "quality/evidence/regression-fixtures.json"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "failure_classification",
+      "category": "correctness",
+      "dependencies": [
+        "regression_fixtures"
+      ],
+      "commands": [
+        "npm run quality:check"
+      ],
+      "thresholds": {
+        "unownedFailures": 0
+      },
+      "evidencePaths": [
+        "quality/evidence/failure-classification.json"
+      ],
+      "inputGlobs": [
+        "quality/**/*"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    },
+    {
+      "id": "v1.0_release",
+      "category": "adoption",
+      "dependencies": [
+        "external_pilot",
+        "failure_classification"
+      ],
+      "commands": [
+        "npm run quality:gate -- --release v1.0"
+      ],
+      "thresholds": {
+        "correctnessNonInferiorityMargin": 0.05,
+        "highConfidenceWrongRateMax": 0.05,
+        "medianEfficiencyImprovementMin": 0.2,
+        "otherEfficiencyRegressionMax": 0.1,
+        "successfulInstalls": 5,
+        "medianTimeToContextMinutesMax": 10,
+        "retainedUsersMin": 4
+      },
+      "evidencePaths": [
+        "quality/evidence/v1.0-release.json"
+      ],
+      "inputGlobs": [
+        "quality/**/*",
+        "package.json",
+        "package-lock.json"
+      ],
+      "inputFingerprint": null,
+      "status": "pending",
+      "retryHistory": []
+    }
+  ]
+}

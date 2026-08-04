@@ -1,5 +1,5 @@
 import { escapeRegExp } from "../core/strings.js";
-import { splitIdentifierTokens } from "./targets.js";
+import { splitIdentifierTokens } from "./target-text.js";
 
 /**
  * Common English stop words shared across search modules.
@@ -861,4 +861,3 @@ export function textMatchesQueryTerm(text: string, term: string): boolean {
     return compactText.includes(compactVariant);
   });
 }
-

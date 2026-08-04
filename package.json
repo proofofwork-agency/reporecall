@@ -1,6 +1,6 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Local-first, auto-injecting, self-aware-about-staleness context + memory layer for coding agents (Claude Code, Codex, MCP). Trust contract, hooks-first, hybrid retrieval + compression, zero infra.",
   "type": "module",
   "main": "./dist/index.js",
@@ -54,18 +54,27 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest",
-    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src bin --max-warnings 0",
+    "coverage": "vitest run --coverage",
+    "quality:check": "tsx scripts/quality/quality-gate.ts",
+    "quality:claims": "tsx scripts/quality/validate-claims.ts",
+    "quality:gate": "tsx scripts/quality/quality-gate.ts",
+    "quality:modules": "tsx scripts/quality/module-gate.ts",
+    "pilot:validate": "tsx scripts/quality/validate-pilot.ts",
     "benchmark": "tsx scripts/benchmarks/benchmark.ts",
     "benchmark:external": "tsx scripts/benchmarks/benchmark-external.ts",
     "benchmark:project-context": "tsx scripts/benchmarks/project-context-audit.ts",
     "benchmark:production": "tsx scripts/benchmarks/production-gate.ts",
     "stress:large-repo": "tsx scripts/benchmarks/large-repo-stress.ts",
     "stress:large-repo:ci": "node --expose-gc --import tsx scripts/benchmarks/large-repo-stress.ts --quiet --files 2000 --changes 200 --topology-max-chunks 1000 --lens-max-graph-chunks 1000 --max-heap-mb 256 --max-no-change-files 0 --max-lens-ms 1000",
-    "benchmark:memory": "vitest run test/benchmark/metrics.test.ts test/benchmark/memory-benchmark.test.ts test/daemon/memory-runtime.test.ts test/benchmark/live-memory-benchmark.test.ts",
+    "benchmark:memory": "vitest run --config vitest.benchmark.config.ts test/benchmark/metrics.test.ts test/benchmark/memory-benchmark.test.ts test/daemon/memory-runtime.test.ts test/benchmark/live-memory-benchmark.test.ts",
     "benchmark:tokens": "tsx scripts/benchmarks/token-savings.ts",
     "benchmark:live-memory": "tsx scripts/benchmarks/memory-v1-live.ts",
     "smoke": "node scripts/smoke-test.mjs",
-    "prepublishOnly": "npm run lint && npm test -- --run && npm run build"
+    "demo": "node scripts/demo-project.mjs",
+    "demo:packed": "node scripts/packed-demo.mjs",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run coverage && npm run build"
   },
   "engines": {
     "node": ">=20"
@@ -74,14 +83,21 @@
     "access": "public"
   },
   "overrides": {
-    "hono": "4.12.26",
-    "protobufjs": "7.6.3"
+    "@hono/node-server": "2.0.12",
+    "body-parser": "2.3.0",
+    "brace-expansion": "5.0.9",
+    "fast-uri": "4.1.1",
+    "hono": "4.12.32",
+    "protobufjs": "7.6.5",
+    "qs": "6.15.3",
+    "sharp": "0.35.3",
+    "tar": "7.5.22"
   },
   "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@lancedb/lancedb": "^0.27.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.3",
@@ -99,11 +115,15 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.39.5",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.0"
   }
 }

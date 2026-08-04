@@ -95,6 +95,7 @@ export interface HookDebugRecord {
   recommendedNextReads?: string[];
   dominantFamily?: string;
   familyConfidence?: number;
+  evidenceConfidence?: number;
   deferredReason?: string;
   compression?: ContextCompressionMetadata;
 }

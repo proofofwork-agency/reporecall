@@ -1,0 +1,40 @@
+name: Nightly benchmarks
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: mkdir -p artifacts
+      - name: Deterministic retrieval benchmark
+        run: npm run benchmark -- --provider keyword --output artifacts/retrieval.json
+      - name: Large-repository stress benchmark
+        run: >-
+          node --expose-gc --import tsx scripts/benchmarks/large-repo-stress.ts
+          --quiet
+          --files 10000
+          --changes 1000
+          --output artifacts/large-repo-stress.json
+          --max-no-change-files 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-benchmark-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

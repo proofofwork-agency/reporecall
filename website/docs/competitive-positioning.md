@@ -1,26 +1,26 @@
 # Reporecall Competitive Positioning (July 2026)
 
-**Overall Rating: 6/10 → Target 9/10**
+**Overall position: early product → externally validated hard-repository tool**
 
-> Built like an 8, positioned like a 3.  
+> The engineering foundation is ahead of the available adoption evidence.
 > Reporecall is a genuinely well-engineered local context + memory layer. The technology is not the problem. Adoption, messaging, and distribution are.
 
-## Rating Breakdown
+## Qualitative assessment
 
-| Axis                    | Score | Notes |
-|-------------------------|-------|-------|
-| Engineering & Design    | 8/10  | Hybrid retrieval + intent routing, deterministic extractive compression with expand-on-demand (`search_code action=read_chunk`), real freshness/trust contract (indexedCommit + banners + auto-refresh), strict 6-tool MCP discipline, embedded zero-infra local stack (SQLite + local embeddings + no external DBs), clean release hygiene (hundreds of tests). |
-| Differentiation (the bundle) | 7/10 | Individual features exist elsewhere. The full combination — local + auto-injecting hooks + compression + explicit trust signals + memory + wiki + topology + Lens — is unique. |
-| Adoption / Market Position | 3/10 | Out-adopted by competitors 50–1000×. Strongest weakness. |
-| Moat Durability         | 5/10 | Squeezed between free first-party defaults (Claude Code native tools) and loud free OSS clones. Category is a graveyard. |
+| Axis | Assessment | Notes |
+|---|---|---|
+| Engineering & Design | Strong | Hybrid retrieval, deterministic compression, freshness signals, a compact MCP surface, and an embedded local stack. |
+| Differentiation | Meaningful bundle | The individual features exist elsewhere; the local hooks, compression, trust signals, memory, wiki, topology, and Lens combination is the differentiator. |
+| Adoption / Market Position | Early | External pilot evidence is still missing and remains the strongest weakness. |
+| Moat Durability | Unproven | The product sits between first-party defaults and established open-source alternatives. |
 
 ## Competitive Landscape — Threat Tiers
 
 ### 🔴 HIGH / Existential
-- **Native Claude Code agentic search** — Free, first-party, always-fresh. Grep gets >90% of RAG value for many repos (per 2026 studies). The default many users never move past.
-- **CodeGraph** (~48–59k stars) — 100% local, staleness banners, token-savings pitch. Your positioning twin, ~50× louder.
-- **Cline** (64.5k stars) — Explicit "no index, no RAG" thesis attacks the premise.
-- **Cognee** — Local, OSS, MCP + Claude hooks + codebase memory, $7.5M seed. Closest direct quadrant competitor.
+- **Native Claude Code agentic search** — Free, first-party, and always fresh. It is the default many users never move past.
+- **CodeGraph** — Local, with staleness and token-savings positioning, and a much larger public footprint.
+- **Cline** — Its explicit "no index, no RAG" thesis attacks the premise.
+- **Cognee** — Local, OSS, MCP + Claude hooks + codebase memory. Closest direct quadrant competitor.
 - **Augment Code** — Cloud Context Engine, massive funding, real-time indexing for huge repos.
 - Others: GitNexus, Serena (LSP + memory).
 
@@ -35,9 +35,9 @@ bloop (archived), Mutable AI (dead), CodeSee, Continue (acquired/winding down), 
 | Tool          | Retrieval          | Compress+Expand | Trust/Freshness     | Auto-inject Hooks | Local + OSS     | Adoption |
 |---------------|--------------------|-----------------|---------------------|-------------------|-----------------|----------|
 | **Reporecall** | 🟢 hybrid+intent  | ✅ + expand    | ✅ banners + indexedCommit + auto-refresh | ✅ per-prompt    | ✅ / ✅        | 🔴 nascent |
-| CodeGraph     | 🟡 graph+FTS      | ⚠️ fewer calls | ✅ banner           | ❌ tool-call     | ✅ / ✅        | 🟢 ~50k |
-| Cline         | ❌ agentic reads  | ❌             | ⚠️ always-fresh claim | ❌               | ✅ / ✅        | 🟢 64k |
-| Cognee        | 🟢 graph KG       | ❌             | ⚠️                 | ✅ hooks         | ✅ / ✅        | 🟡 26k+$ |
+| CodeGraph     | 🟡 graph+FTS      | ⚠️ fewer calls | ✅ banner           | ❌ tool-call     | ✅ / ✅        | 🟢 established |
+| Cline         | ❌ agentic reads  | ❌             | ⚠️ always-fresh claim | ❌               | ✅ / ✅        | 🟢 established |
+| Cognee        | 🟢 graph KG       | ❌             | ⚠️                 | ✅ hooks         | ✅ / ✅        | 🟡 growing |
 | Native CC     | 🟡 agentic grep   | ❌             | ✅ files            | ✅ (it *is* the loop) | ✅ / ⚠️     | 🌊 default |
 
 **Nobody else has columns 2–5 + 6 together in a pure local OSS package.** That quadrant is the moat.
@@ -58,7 +58,7 @@ bloop (archived), Mutable AI (dead), CodeSee, Continue (acquired/winding down), 
 
 ### ❌ Lose (Honest)
 - Adoption & marketing (CodeGraph and grepai tell parts of your story louder).
-- Funding & team size (solo/ small vs $7.5M–$977M competitors).
+- Funding & team size (solo/small vs well-funded competitors).
 - Memory depth (Mem0 / Zep / Cognee are more sophisticated on long-term memory).
 - Graph scale/precision on very large repos (some rivals use LSP or heavier graphs).
 - Not a full agent — you feed Claude Code / Codex / Cline / Aider.
@@ -104,10 +104,10 @@ bloop (archived), Mutable AI (dead), CodeSee, Continue (acquired/winding down), 
 - Local everything (no cloud required by default).
 - Deterministic outputs (wiki, Lens, business pages).
 
-## Path to 9/10
+## Path to external validation
 
-- Engineering is already near 8–9.  
-- The leap comes from **messaging + distribution + proof**:
+- The engineering foundation is strong, but the external evidence is incomplete.
+- The next step is **messaging + distribution + proof**:
   - Repositioned README + docs (this work).
   - Published benchmark with real numbers.
   - Consistent "trust + hooks" narrative everywhere.
@@ -117,5 +117,5 @@ This document is the north star. Every change to README, docs, examples, and mar
 
 ---
 
-*Updated for v0.8.1 release (July 2026) — all recommended positioning, docs, benchmark, stats, and sync work complete.*  
+*Updated for v0.9.0 release (July 2026). Quantitative release claims still require current benchmark artifacts.*
 *Engineering claims cross-checked against source (staleness, MCP surface, hooks, compression, etc.).*

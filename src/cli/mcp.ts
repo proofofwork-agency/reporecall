@@ -213,8 +213,12 @@ export function mcpCommand(): Command {
 
       // Windows: SIGTERM is not sent by Task Manager/services. Only SIGINT (Ctrl+C) works.
       // Node.js emulates SIGINT on Windows, so graceful shutdown via Ctrl+C is supported.
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
+      process.on("SIGINT", () => {
+        void shutdown();
+      });
+      process.on("SIGTERM", () => {
+        void shutdown();
+      });
 
       // Global safety nets so the long-running stdio process never hangs or
       // exits ungracefully on an unhandled async failure.

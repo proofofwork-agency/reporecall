@@ -16,11 +16,6 @@ import type { VectorStore } from "../storage/vector-store.js";
 import type { FTSStore } from "../storage/fts-store.js";
 import type { MetadataStore } from "../storage/metadata-store.js";
 import {
-  GENERIC_BROAD_TERMS,
-  GENERIC_QUERY_ACTION_TERMS,
-  textMatchesQueryTerm,
-} from "./utils.js";
-import {
   assembleContext,
 } from "./context-assembler.js";
 import { getLogger } from "../core/logger.js";
@@ -29,17 +24,11 @@ import type { ReadWriteLock } from "../core/rwlock.js";
 import { resolveSeeds } from "./seed.js";
 import type { SeedResult } from "./seed.js";
 import { classifyIntent } from "./intent.js";
-import { normalizeTargetText } from "./targets.js";
+import { filterSeedsForMode } from "./hybrid-seed-filter.js";
 
 // ── Strategy modules ────────────────────────────────────────────────
 import { RetrievalPipeline } from "./pipeline-core.js";
-import {
-  BugStrategy,
-  BUG_GENERIC_SEED_ALIAS_TERMS,
-  BUG_LOW_SPECIFICITY_TERMS,
-  BUG_STRUCTURAL_NOISE_RE,
-  BUG_STRUCTURAL_ROLE_ALIAS_TERMS,
-} from "./bug-strategy.js";
+import { BugStrategy } from "./bug-strategy.js";
 import type { BugSelectionDiagnostics } from "./bug-strategy.js";
 import {
   ArchitectureStrategy,
@@ -50,8 +39,7 @@ import {
   buildTraceRetrievalQuery,
   isInfrastructureTracePrompt,
   prependTraceTargetResults,
-  extractTraceSalientTerms,
-  getTraceFocusedExpandedTerms,
+  selectFocusedTraceBundle,
 } from "./trace-strategy.js";
 import {
   buildFocusedExactResults,
@@ -235,7 +223,7 @@ export class HybridSearch {
     this.lastBroadSelection = null;
     this.lastBugSelection = null;
     const rawSeeds = seedResult ?? resolveSeeds(query, metadata, this.fts);
-    const seeds = this.filterSeedsForMode(query, rawSeeds, queryMode);
+    const seeds = filterSeedsForMode(this.bugStrategy, query, rawSeeds, queryMode);
 
     // Set seed community for community-aware scoring
     this.seedCommunityId = seeds.bestSeed && typeof metadata.getCommunityForChunk === "function"
@@ -345,10 +333,30 @@ export class HybridSearch {
       : prioritized;
     this.lastBugSelection = this.bugStrategy.lastDiagnostics;
 
+    const focusedProductTrace =
+      queryMode === "trace"
+      && !isInfrastructureTracePrompt(query);
+    const traceWorkflowBundle = focusedProductTrace
+      ? this.archStrategy.selectBroadWorkflowBundle(query, prioritized, seeds, maxContextChunks)
+      : [];
+    const focusedTraceBundle = focusedProductTrace
+      ? selectFocusedTraceBundle(
+          query,
+          prioritized,
+          traceWorkflowBundle,
+          seeds,
+          metadata,
+          maxContextChunks
+        )
+      : [];
     const selectedBundle = isBroadWorkflow
       ? this.archStrategy.selectBroadWorkflowBundle(query, prioritized, seeds, maxContextChunks)
-      : bugBundle;
-    this.lastBroadSelection = this.archStrategy.lastBroadSelection;
+      : focusedProductTrace && focusedTraceBundle.length > 0
+        ? focusedTraceBundle
+        : bugBundle;
+    this.lastBroadSelection = isBroadWorkflow
+      ? this.archStrategy.lastBroadSelection
+      : null;
 
     const broadDiagnostics = this.lastBroadSelection;
     const broadDeliveryMode = broadDiagnostics ? broadDiagnostics.deliveryMode : undefined;
@@ -377,8 +385,19 @@ export class HybridSearch {
       selectedBundle,
       budget,
       {
-        maxChunks: isBroadWorkflow || queryMode === "bug" ? Math.min(maxContextChunks, 5) : maxContextChunks,
-        scoreFloorRatio: isBroadWorkflow ? 0.25 : queryMode === "bug" ? 0.05 : 0.7,
+        maxChunks: isBroadWorkflow
+          ? Math.min(maxContextChunks, 8)
+          : queryMode === "bug"
+            ? Math.min(maxContextChunks, 5)
+            : maxContextChunks,
+        scoreFloorRatio: isBroadWorkflow
+          ? 0.25
+          : queryMode === "bug"
+            ? 0.05
+            : queryMode === "trace"
+              ? 0.25
+              : 0.7,
+        preferFileDiversity: isBroadWorkflow || queryMode === "trace" || queryMode === "bug",
         query,
         factExtractors: this.config.factExtractors,
         compressionRank: isBroadWorkflow || queryMode === "bug"
@@ -420,7 +439,7 @@ export class HybridSearch {
     seedResult?: SeedResult
   ): SeedResult {
     const rawSeeds = seedResult ?? resolveSeeds(query, this.pipeline.getMetadata(), this.fts);
-    return this.filterSeedsForMode(query, rawSeeds, queryMode);
+    return filterSeedsForMode(this.bugStrategy, query, rawSeeds, queryMode);
   }
 
   hasConceptContext(query: string): boolean {
@@ -460,157 +479,6 @@ export class HybridSearch {
   private _fts: FTSStore;
 
   // ── Private: seed filtering ─────────────────────────────────────
-
-  private filterSeedsForMode(
-    query: string,
-    seedResult: SeedResult,
-    queryMode: "lookup" | "trace" | "bug" | "architecture" | "change" | "skip"
-  ): SeedResult {
-    if (queryMode !== "bug" && queryMode !== "trace" && queryMode !== "architecture" && queryMode !== "change") {
-      return seedResult;
-    }
-
-    const focusTerms = queryMode === "bug"
-      ? this.bugStrategy.extractBugSalientTerms(query)
-      : extractTraceSalientTerms(query);
-    const familyTerms = (queryMode === "bug"
-      ? this.bugStrategy.getModeFocusedExpandedTerms(query, "bug")
-      : getTraceFocusedExpandedTerms(query)
-    )
-      .filter((term) => term.family && !term.generic && term.weight >= 0.72)
-      .flatMap((term) => normalizeTargetText(term.term).split(" ").filter(Boolean));
-    const bugProfile = queryMode === "bug"
-      ? this.bugStrategy.buildBugSubjectProfile(focusTerms, query)
-      : null;
-    const handoffPrompt = bugProfile ? this.bugStrategy.isBugRedirectHandoffPrompt(bugProfile) : false;
-    const schemaPrompt = bugProfile
-      ? bugProfile.subjectTerms.some((term) => ["migration", "migrations", "schema", "sql", "table", "column", "database", "db"].includes(term))
-        || bugProfile.primaryTags.has("storage")
-        || bugProfile.primaryTags.has("billing")
-      : false;
-
-    const filteredSeeds = seedResult.seeds.filter((seed) => {
-      const seedText = `${seed.filePath} ${seed.name} ${seed.resolvedAlias ?? ""}`;
-      const lowerSeedText = seedText.toLowerCase();
-      const normalizedSeedText = normalizeTargetText(seedText);
-      const normalizedNameTokens = normalizeTargetText(seed.name).split(" ").filter(Boolean);
-      const leadingToken = normalizedNameTokens[0] ?? "";
-      const focusMatch = focusTerms.some((term) => textMatchesQueryTerm(seedText, term));
-      const familyMatch = familyTerms.some((term) => textMatchesQueryTerm(seedText, term));
-
-      if (
-        queryMode === "bug"
-        && !schemaPrompt
-        && (/(?:^|\/)(migrations?|schema)\//.test(seed.filePath.toLowerCase()) || /\.sql$/i.test(seed.filePath))
-      ) {
-        return false;
-      }
-
-      if (
-        queryMode === "bug"
-        && handoffPrompt
-        && /\b(navigation|drawer|menu|segment|mobile|keyboard|floating|tab|skip|signout|logout)\b/.test(lowerSeedText)
-        && !/\b(protected|guard|redirect|callback|auth|route|router|destination|pending|session)\b/.test(lowerSeedText)
-      ) {
-        return false;
-      }
-      if (
-        queryMode === "bug"
-        && handoffPrompt
-        && /(?:^|\/)(src\/)?(components|pages|views|screens)\//.test(seed.filePath.toLowerCase())
-        && /\b(auth|login|signin|signup)\b/.test(normalizedSeedText)
-        && !/\b(callback|redirect|protected|guard|pending|destination|route|router|session|return)\b/.test(normalizedSeedText)
-      ) {
-        return false;
-      }
-
-        if (
-          queryMode === "bug"
-          && !focusMatch
-          && !familyMatch
-          && seed.reason !== "explicit_target"
-          && BUG_STRUCTURAL_ROLE_ALIAS_TERMS.has(normalizeTargetText(seed.resolvedAlias ?? seed.name))
-        ) {
-          return false;
-        }
-
-      if (
-        queryMode === "bug"
-        && seed.reason !== "explicit_target"
-        && normalizeTargetText(seed.resolvedAlias ?? seed.name).split(" ").length <= 1
-        && BUG_LOW_SPECIFICITY_TERMS.has(normalizeTargetText(seed.resolvedAlias ?? seed.name))
-        && BUG_STRUCTURAL_NOISE_RE.test(seed.filePath.toLowerCase())
-        && !familyMatch
-      ) {
-        return false;
-      }
-
-      if (
-        seed.reason === "explicit_target"
-        && GENERIC_QUERY_ACTION_TERMS.has(leadingToken)
-        && !focusMatch
-        && !familyMatch
-      ) {
-        return false;
-      }
-
-      if (
-        (seed.reason === "explicit_target" || seed.reason === "resolved_target")
-        && familyTerms.length > 0
-        && !focusMatch
-        && !familyMatch
-      ) {
-        return false;
-      }
-
-      if (
-        (queryMode === "architecture" || queryMode === "change")
-        && seed.reason === "explicit_target"
-        && (/^(what|where|which|when|why|how)$/i.test(seed.name) || /^(what|where|which|when|why|how)[A-Z_]/.test(seed.name))
-      ) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (filteredSeeds.length === 0) return seedResult;
-    const rankedSeeds = [...filteredSeeds].sort((a, b) => {
-      const scoreSeed = (seed: SeedResult["seeds"][number]): number => {
-        const seedText = `${seed.filePath} ${seed.name} ${seed.resolvedAlias ?? ""}`;
-        const focusMatches = focusTerms.filter((term) => textMatchesQueryTerm(seedText, term)).length;
-        const familyMatches = familyTerms.filter((term) => textMatchesQueryTerm(seedText, term)).length;
-        const aliasTokens = normalizeTargetText(seed.resolvedAlias ?? seed.name).split(" ").filter(Boolean);
-        const aliasIsGeneric = aliasTokens.length === 1
-          && (
-            GENERIC_BROAD_TERMS.has(aliasTokens[0] ?? "")
-            || GENERIC_QUERY_ACTION_TERMS.has(aliasTokens[0] ?? "")
-            || BUG_GENERIC_SEED_ALIAS_TERMS.has(aliasTokens[0] ?? "")
-          );
-        const genericResolvedFilePenalty =
-          seed.reason === "resolved_target"
-          && seed.targetKind === "file_module"
-          && aliasIsGeneric
-            ? (queryMode === "trace" ? 3.4 : queryMode === "architecture" || queryMode === "change" ? 2.8 : 0)
-            : 0;
-        const compoundBonus = /[A-Z_]/.test(seed.name) ? 1.5 : aliasTokens.length >= 2 ? 1 : 0;
-        const reasonBonus =
-          seed.reason === "explicit_target" ? 1.4
-            : seed.reason === "fts_exact" ? 1.2
-              : seed.targetKind === "symbol" ? 1.1
-                : seed.targetKind === "file_module" ? 0.8
-                  : 0.5;
-        return focusMatches * 5 + familyMatches * 3 + compoundBonus + reasonBonus - (aliasIsGeneric ? 2.2 : 0) - genericResolvedFilePenalty;
-      };
-      const diff = scoreSeed(b) - scoreSeed(a);
-      if (Math.abs(diff) > 0.01) return diff;
-      return b.confidence - a.confidence;
-    });
-    return {
-      seeds: rankedSeeds,
-      bestSeed: rankedSeeds[0] ?? null,
-    };
-  }
 
   // ── Private: merge multi-query result sets (bug mode) ───────────
 

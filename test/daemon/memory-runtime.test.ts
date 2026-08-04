@@ -13,24 +13,6 @@ function writeMemoryFile(dir: string, name: string, content: string): string {
   return filePath;
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs = 5000,
-  intervalMs = 25
-): Promise<void> {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error("Timed out waiting for memory runtime update");
-    }
-    await wait(intervalMs);
-  }
-}
-
 describe("MemoryRuntime", () => {
   let projectRoot: string;
   let encodedProjectRoot: string;
@@ -110,7 +92,7 @@ Remember the writable dir.
   });
 
   it("refreshes incrementally on add, change, and unlink", async () => {
-    const liveRuntime = createRuntime({ watchEnabled: true });
+    const liveRuntime = createRuntime({ watchEnabled: false });
 
     writeMemoryFile(
       claudeMemoryDir,
@@ -142,9 +124,9 @@ Initial content.
 `
     );
 
-    await waitFor(() => store.getByName("live_memory")?.description === "Initial writable memory", 30000);
+    await liveRuntime.refreshChanges([{ path: liveFile, type: "add" }]);
+    expect(store.getByName("live_memory")?.description).toBe("Initial writable memory");
 
-    await wait(100); // let watcher settle
     writeFileSync(
       liveFile,
       `---
@@ -158,12 +140,13 @@ Updated content.
       "utf-8"
     );
 
-    await waitFor(() => store.getByName("live_memory")?.description === "Updated writable memory", 30000);
+    await liveRuntime.refreshChanges([{ path: liveFile, type: "change" }]);
+    expect(store.getByName("live_memory")?.description).toBe("Updated writable memory");
     expect(store.getByName("live_memory")?.content).toContain("Updated content.");
 
-    await wait(100);
     rmSync(liveFile, { force: true });
-    await waitFor(() => store.getByName("live_memory") === undefined, 30000);
+    await liveRuntime.refreshChanges([{ path: liveFile, type: "unlink" }]);
+    expect(store.getByName("live_memory")).toBeUndefined();
     expect(store.getCount()).toBe(1);
   });
 

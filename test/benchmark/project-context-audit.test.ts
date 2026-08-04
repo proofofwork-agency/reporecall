@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  auditRouteFromQueryMode,
+  auditExitCode,
   buildSummary,
   computeContextMetrics,
   extractClaudeToolUses,
@@ -10,7 +12,62 @@ import {
   type ProjectContextAuditReport,
 } from "../../scripts/benchmarks/project-context-audit-lib.js";
 
+function makeAuditResult(pollutionRatio: number): AuditQueryResult {
+  return {
+    id: `pollution-${pollutionRatio}`,
+    query: "trace the authentication flow",
+    expectedRoute: "R1",
+    category: "auth",
+    directExplain: {
+      ok: true,
+      route: "R1",
+      selectedFiles: ["src/hooks/useAuth.tsx"],
+    },
+    hookContext: {
+      ok: true,
+      freshnessLevel: "fresh",
+      route: "R1",
+      files: ["src/hooks/useAuth.tsx"],
+      sections: [],
+      text: "",
+      tokensInjected: 10,
+      chunksInjected: 1,
+    },
+    contextMetrics: {
+      routeMatch: true,
+      contextPrecision: 1,
+      contextRecall: 1,
+      mustIncludeHitRate: 1,
+      mustNotIncludeViolation: false,
+      pollutionRatio,
+      tokenPollutionRatio: pollutionRatio,
+      explorerUsed: false,
+      redundantExplorerUsed: false,
+      contextFailed: false,
+      legitimateGap: false,
+      highConfidenceWrong: false,
+      relevantInjectedFiles: ["src/hooks/useAuth.tsx"],
+      irrelevantInjectedFiles: [],
+      missingRelevantFiles: [],
+      mustIncludeMisses: [],
+      mustNotIncludeHits: [],
+    },
+    reporecallVsControlTokenDelta: 0,
+    reporecallVsControlToolDelta: 0,
+  };
+}
+
 describe("project context audit helpers", () => {
+  it("maps current query modes onto the versioned audit routes", () => {
+    expect(auditRouteFromQueryMode("skip")).toBe("skip");
+    expect(auditRouteFromQueryMode("lookup")).toBe("R0");
+    expect(auditRouteFromQueryMode("trace")).toBe("R1");
+    expect(auditRouteFromQueryMode("architecture")).toBe("R2");
+    expect(auditRouteFromQueryMode("bug")).toBe("R2");
+    expect(auditRouteFromQueryMode("change")).toBe("R2");
+    expect(auditRouteFromQueryMode("unknown")).toBeUndefined();
+  });
+
   it("parses injected files from hook context headers and file sections", () => {
     const text = [
       "## Relevant codebase context",
@@ -103,6 +160,56 @@ describe("project context audit helpers", () => {
     expect(metrics.pollutionRatio).toBeCloseTo(0.333, 3);
     expect(metrics.tokenPollutionRatio).toBeCloseTo(0.5, 3);
     expect(metrics.legitimateGap).toBe(true);
+    expect(metrics.highConfidenceWrong).toBe(false);
+  });
+
+  it("flags strong code context that misses required evidence", () => {
+    const metrics = computeContextMetrics({
+      expectedRoute: "R2",
+      actualRoute: "R2",
+      deliveryMode: "code_context",
+      confidence: 0.92,
+      injectedFiles: ["src/pages/Auth.tsx"],
+      sections: [{ filePath: "src/pages/Auth.tsx", text: "auth", tokens: 4 }],
+      relevance: {
+        "src/pages/Auth.tsx": 3,
+        "src/hooks/useAuth.tsx": 3,
+      },
+      mustInclude: ["src/pages/Auth.tsx", "src/hooks/useAuth.tsx"],
+    });
+
+    expect(metrics.highConfidenceWrong).toBe(true);
+    expect(metrics.mustIncludeMisses).toEqual(["src/hooks/useAuth.tsx"]);
+  });
+
+  it("enforces a maximum average context pollution ratio of ten percent", () => {
+    const atGate = [
+      ...Array.from({ length: 9 }, () => makeAuditResult(0)),
+      makeAuditResult(1),
+    ];
+    const aboveGate = [
+      ...Array.from({ length: 8 }, () => makeAuditResult(0)),
+      makeAuditResult(1),
+    ];
+
+    expect(buildSummary(atGate).avgPollutionRatio).toBe(0.1);
+    expect(buildSummary(atGate).reporecallOnlyPass).toBe(true);
+    expect(buildSummary(aboveGate).avgPollutionRatio).toBe(0.111);
+    expect(buildSummary(aboveGate).reporecallOnlyPass).toBe(false);
+  });
+
+  it("fails the process gate when deterministic retrieval thresholds fail", () => {
+    const report = {
+      metadata: { mode: "reporecall-only" },
+      summary: { reporecallOnlyPass: false, claudeE2ePass: null },
+    } as ProjectContextAuditReport;
+
+    expect(auditExitCode(report)).toBe(1);
+    report.summary.reporecallOnlyPass = true;
+    expect(auditExitCode(report)).toBe(0);
+    report.metadata.mode = "full";
+    report.summary.claudeE2ePass = false;
+    expect(auditExitCode(report)).toBe(1);
   });
 
   it("renders a markdown report from aggregated results", () => {
@@ -114,6 +221,7 @@ describe("project context audit helpers", () => {
       directExplain: { ok: true, route: "R2", selectedFiles: ["src/pages/Auth.tsx"] },
       hookContext: {
         ok: true,
+        freshnessLevel: "fresh",
         route: "R2",
         files: ["src/pages/Auth.tsx"],
         sections: [],
@@ -133,6 +241,7 @@ describe("project context audit helpers", () => {
         redundantExplorerUsed: false,
         contextFailed: false,
         legitimateGap: false,
+        highConfidenceWrong: false,
         relevantInjectedFiles: ["src/pages/Auth.tsx"],
         irrelevantInjectedFiles: [],
         missingRelevantFiles: [],
@@ -171,7 +280,10 @@ describe("project context audit helpers", () => {
     } satisfies ProjectContextAuditReport;
 
     const markdown = renderMarkdownReport(report);
+    expect(report.summary.freshnessSignalingRate).toBe(1);
+    expect(report.summary.reporecallOnlyPass).toBe(true);
     expect(markdown).toContain("# Project Context Audit");
+    expect(markdown).toContain("Fresh/stale/empty signaling: 100%");
     expect(markdown).toContain("Claude E2E pass: BLOCKED");
     expect(markdown).toContain("auth-flow");
   });

@@ -25,7 +25,14 @@ export class IndexScheduler {
   }
 
   drain(): Promise<void> {
-    if (!this.processing && !this.flushScheduled) return Promise.resolve();
+    if (
+      !this.processing
+      && !this.flushScheduled
+      && this.queue.size === 0
+      && this.deleteQueue.size === 0
+    ) {
+      return Promise.resolve();
+    }
     return new Promise<void>((resolve) => {
       this.flushDoneCallbacks.push(resolve);
     });
@@ -74,7 +81,7 @@ export class IndexScheduler {
     // Use queueMicrotask to coalesce rapid enqueue calls
     queueMicrotask(() => {
       this.flushScheduled = false;
-      this.flush();
+      void this.flush();
     });
   }
 
@@ -159,14 +166,13 @@ export class IndexScheduler {
     } finally {
       this.processing = false;
 
-      // Notify drain() waiters that flush is complete
-      const cbs = this.flushDoneCallbacks;
-      this.flushDoneCallbacks = [];
-      for (const cb of cbs) cb();
-
       // If new items arrived during processing, flush again
       if (this.queue.size > 0 || this.deleteQueue.size > 0) {
         this.scheduleFlush();
+      } else {
+        const cbs = this.flushDoneCallbacks;
+        this.flushDoneCallbacks = [];
+        for (const cb of cbs) cb();
       }
     }
   }

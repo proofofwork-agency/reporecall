@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { afterEach, describe, it, expect, beforeAll } from "vitest";
 import Parser from "web-tree-sitter";
-import { resolve } from "path";
-import { readFileSync } from "fs";
+import { join, resolve } from "path";
+import { tmpdir } from "os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { extractImports, resolveImportPath } from "../../src/analysis/imports.js";
 
 const FIXTURES = resolve(import.meta.dirname, "..", "fixtures");
@@ -159,6 +160,14 @@ describe("extractImports", () => {
 });
 
 describe("resolveImportPath", () => {
+  const temporaryRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns null for external modules", () => {
     expect(resolveImportPath("express", "src/index.ts", FIXTURES)).toBeNull();
     expect(resolveImportPath("@scope/pkg", "src/index.ts", FIXTURES)).toBeNull();
@@ -173,5 +182,24 @@ describe("resolveImportPath", () => {
   it("returns null for unresolvable relative paths", () => {
     const result = resolveImportPath("./nonexistent-file", "dummy.ts", FIXTURES);
     expect(result).toBeNull();
+  });
+
+  it("blocks imports through a symlink that escapes the project", () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "reporecall-import-safety-"));
+    temporaryRoots.push(sandbox);
+    const projectRoot = join(sandbox, "project");
+    const outsideRoot = join(sandbox, "outside");
+    mkdirSync(join(projectRoot, "src"), { recursive: true });
+    mkdirSync(outsideRoot, { recursive: true });
+    writeFileSync(join(outsideRoot, "secret.ts"), "export const secret = true;\n");
+    symlinkSync(
+      outsideRoot,
+      join(projectRoot, "src", "outside"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    expect(
+      resolveImportPath("./outside/secret", "src/importer.ts", projectRoot),
+    ).toBeNull();
   });
 });

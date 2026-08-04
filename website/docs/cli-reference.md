@@ -168,10 +168,17 @@ Show index statistics, session metrics, memory usage, search latency, query-mode
 | Option | Default | Description |
 | --- | --- | --- |
 | `--project <path>` | CWD | Project root. |
+| `--json` | off | Print versioned, aggregate `reporecall-evidence/v1` JSON. |
+| `--output <file>` | — | Write the same redacted evidence JSON to a file. |
 
 ```bash
 reporecall stats
+reporecall stats --json --output ./reporecall-evidence.json
 ```
+
+Evidence output excludes source, prompts, absolute paths, and filenames by
+default. Metrics without samples are marked `insufficient_evidence` rather than
+filled with estimates.
 
 ```text
 Reporecall

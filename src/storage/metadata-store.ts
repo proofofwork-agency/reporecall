@@ -8,6 +8,9 @@ import type {
   StoredTarget,
   StoredTargetAlias,
   TargetKind,
+  ChunkFeature,
+  ChunkTag,
+  FileFeature,
 } from "./types.js";
 import type { CallEdge } from "../analysis/call-graph.js";
 import type { ConventionsReport } from "../analysis/conventions.js";
@@ -22,7 +25,6 @@ import { TargetStore } from "./target-store.js";
 import { SemanticStore } from "./semantic-store.js";
 import { CommunityStore } from "./community-store.js";
 import type { ImportRecord } from "./import-store.js";
-import type { ChunkFeature, ChunkTag, FileFeature } from "./types.js";
 import type {
   TopologySnapshot,
   CommunityRecord,

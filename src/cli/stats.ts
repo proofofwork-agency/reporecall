@@ -1,6 +1,6 @@
 import { Command } from 'commander'
 import { resolve } from 'path'
-import { statSync, existsSync, readFileSync, readdirSync } from 'fs'
+import { statSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'fs'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
 import { isProcessAlive } from '../core/platform.js'
@@ -8,11 +8,14 @@ import { MetadataStore } from '../storage/metadata-store.js'
 import { MemoryStore } from '../storage/memory-store.js'
 import { resolveMemoryStatus } from '../memory/types.js'
 import { banner, computeFreshness } from '../core/staleness.js'
+import { buildRepoRecallEvidence, type RepoRecallEvidenceV1 } from '../evidence/schema.js'
 
 export function statsCommand(): Command {
   return new Command('stats')
     .description('Show index statistics, session metrics, and daemon status')
     .option('--project <path>', 'Project root path')
+    .option('--json', 'Print redacted aggregate evidence as JSON')
+    .option('--output <file>', 'Write redacted aggregate evidence JSON to a file')
     .action(async (options) => {
       const projectRoot = options.project
         ? resolve(options.project)
@@ -21,6 +24,14 @@ export function statsCommand(): Command {
       const config = loadConfig(projectRoot)
 
       if (!existsSync(resolve(config.dataDir, 'metadata.db'))) {
+        if (options.json || options.output) {
+          emitEvidence(
+            buildRepoRecallEvidence(undefined, projectRoot),
+            options.output,
+            options.json
+          )
+        }
+        if (options.json) return
         console.log('No index found. Run "reporecall index" first.')
         return
       }
@@ -35,6 +46,15 @@ export function statsCommand(): Command {
 
       let memoryStore: MemoryStore | undefined
       try {
+        if (options.json || options.output) {
+          emitEvidence(
+            buildRepoRecallEvidence(metadata, projectRoot),
+            options.output,
+            options.json
+          )
+          if (options.json) return
+        }
+
         const stats = metadata.getStats()
         const storageStats = metadata.getStorageStats()
         const lastIndexed = metadata.getStat('lastIndexedAt')
@@ -255,6 +275,20 @@ export function statsCommand(): Command {
         memoryStore?.close()
       }
     })
+}
+
+function emitEvidence(
+  evidence: RepoRecallEvidenceV1,
+  outputPath: string | undefined,
+  printJson: boolean
+): void {
+  const json = `${JSON.stringify(evidence, null, 2)}\n`
+  if (outputPath) {
+    writeFileSync(resolve(outputPath), json, 'utf-8')
+  }
+  if (printJson) {
+    process.stdout.write(json)
+  }
 }
 
 function formatBytes(bytes: number): string {

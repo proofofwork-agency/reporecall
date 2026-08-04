@@ -106,6 +106,28 @@ describe("assembleContext — maxChunks", () => {
     expect(includedIds).toContain("small1");
     expect(includedIds).toContain("small2");
   });
+
+  it("covers distinct files before adding secondary chunks when diversity is requested", () => {
+    const results: SearchResult[] = [
+      { ...makeResult("target-main", 1), filePath: "src/target.ts" },
+      { ...makeResult("target-helper", 0.98), filePath: "src/target.ts" },
+      { ...makeResult("target-validator", 0.96), filePath: "src/target.ts" },
+      { ...makeResult("dependency", 0.82), filePath: "src/dependency.ts" },
+      { ...makeResult("caller", 0.8), filePath: "src/caller.ts" },
+    ];
+
+    const ctx = assembleContext(results, 100_000, {
+      maxChunks: 3,
+      scoreFloorRatio: 0,
+      preferFileDiversity: true,
+    });
+
+    expect(ctx.chunks.map((chunk) => chunk.id)).toEqual([
+      "target-main",
+      "dependency",
+      "caller",
+    ]);
+  });
 });
 
 describe("assembleContext — evidence compression", () => {

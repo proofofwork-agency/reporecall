@@ -11,6 +11,7 @@ import type { MetadataStore } from "../storage/metadata-store.js";
 import { GENERIC_BROAD_TERMS, GENERIC_QUERY_ACTION_TERMS, isTestFile, STOP_WORDS } from "./utils.js";
 import { resolveTargetsForQuery } from "./targets.js";
 import { chunkToSearchResult } from "./shared/mappers.js";
+import { splitIdentifierTokens } from "./target-text.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,45 @@ function selectPrimarySeed(
   return fallback ?? null;
 }
 
+function extractDirectLookupNames(query: string): string[] {
+  const names = query.match(/[A-Za-z_$][A-Za-z0-9_$-]*/g) ?? [];
+  return Array.from(new Set(names.filter((name) => {
+    const normalized = name.toLowerCase();
+    if (name.length < 3) return false;
+    if (STOP_WORDS.has(normalized)) return false;
+    if (GENERIC_BROAD_TERMS.has(normalized)) return false;
+    if (GENERIC_QUERY_ACTION_TERMS.has(normalized)) return false;
+    return true;
+  })));
+}
+
+function resolveDirectNamedChunks(
+  query: string,
+  metadata: MetadataStore,
+): SearchResult[] {
+  const names = extractDirectLookupNames(query);
+  if (names.length === 0) return [];
+
+  const normalizedNames = new Set(names.map((name) => splitIdentifierTokens(name).join(" ")));
+  const matches = metadata.findChunksByNames(names)
+    .filter((chunk) => !isTestFile(chunk.filePath))
+    .filter((chunk) => normalizedNames.has(splitIdentifierTokens(chunk.name).join(" ")));
+  if (matches.length === 0) return [];
+
+  const primary = [...matches].sort((a, b) => {
+    const aExactCase = names.includes(a.name) ? 1 : 0;
+    const bExactCase = names.includes(b.name) ? 1 : 0;
+    if (aExactCase !== bExactCase) return bExactCase - aExactCase;
+    const aExported = a.isExported ? 1 : 0;
+    const bExported = b.isExported ? 1 : 0;
+    if (aExported !== bExported) return bExported - aExported;
+    return a.filePath.localeCompare(b.filePath);
+  })[0];
+  if (!primary) return [];
+
+  return [chunkToSearchResult(primary, 4)];
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -105,9 +145,16 @@ export function buildFocusedExactResults(
   const exactSeeds = seedResult.seeds
     .filter((seed) => isExactSeed(seed) && !isTestFile(seed.filePath))
     .slice(0, 6);
-  if (exactSeeds.length === 0) return null;
+  if (exactSeeds.length === 0) {
+    const directNamed = resolveDirectNamedChunks(query, metadata);
+    if (directNamed.length > 0) return directNamed;
+  }
 
   const primarySeed = selectPrimarySeed(seedResult, exactSeeds, query);
+  if (!primarySeed) {
+    const directNamed = resolveDirectNamedChunks(query, metadata);
+    if (directNamed.length > 0) return directNamed;
+  }
   if (!primarySeed) return null;
 
   const seenChunkIds = new Set<string>();

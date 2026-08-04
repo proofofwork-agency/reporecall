@@ -4,7 +4,7 @@ export default defineConfig([
   {
     entry: { memory: "bin/memory.ts" },
     format: ["esm"],
-    target: "node18",
+    target: "node20",
     platform: "node",
     splitting: false,
     sourcemap: false,
@@ -14,7 +14,7 @@ export default defineConfig([
   {
     entry: { index: "src/index.ts" },
     format: ["esm"],
-    target: "node18",
+    target: "node20",
     platform: "node",
     dts: true,
     splitting: false,

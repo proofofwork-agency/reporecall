@@ -325,6 +325,86 @@ describe("ArchitectureStrategy query helpers", () => {
     expect(merged.find((r) => r.id === "a")!.score).toBe(0.8);
   });
 
+  it("suppresses only generic resolved inventory targets when a specific domain is present", () => {
+    const genericResolvedSeed = {
+      chunkId: "route-target",
+      filePath: "src/router.ts",
+      name: "route",
+      kind: "function_declaration",
+      confidence: 0.8,
+      reason: "resolved_target" as const,
+      resolvedAlias: "route",
+      targetKind: "symbol" as const,
+    };
+
+    expect(
+      strategy.shouldSuppressBroadResolvedTarget(
+        "which files implement authentication route handling",
+        genericResolvedSeed
+      )
+    ).toBe(true);
+    expect(
+      strategy.shouldSuppressBroadResolvedTarget(
+        "how does authentication route handling work",
+        genericResolvedSeed
+      )
+    ).toBe(false);
+    expect(
+      strategy.shouldSuppressBroadResolvedTarget(
+        "which files implement authentication route handling",
+        { ...genericResolvedSeed, reason: "explicit_target" as const }
+      )
+    ).toBe(false);
+  });
+
+  it("selects concept chunks deterministically and prefers implementation over tests", () => {
+    const indexedAt = new Date().toISOString();
+    metadata.upsertChunk({
+      id: "test-stop",
+      filePath: "test/runtime.test.ts",
+      name: "stop",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 2,
+      content: "function stop() {}",
+      language: "typescript",
+      indexedAt,
+    });
+    metadata.upsertChunk({
+      id: "impl-stop",
+      filePath: "src/runtime.ts",
+      name: "stop",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 2,
+      content: "export function stop() {}",
+      language: "typescript",
+      indexedAt,
+    });
+    metadata.upsertChunk({
+      id: "impl-drain",
+      filePath: "src/drain.ts",
+      name: "drain",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 2,
+      content: "export function drain() {}",
+      language: "typescript",
+      indexedAt,
+    });
+
+    const selected = (
+      strategy as unknown as {
+        selectConceptChunks(symbols: string[], maxChunks?: number): Array<{
+          id: string;
+          name: string;
+        }>;
+      }
+    ).selectConceptChunks(["drain", "stop"], 2);
+
+    expect(selected.map((chunk) => chunk.id)).toEqual(["impl-drain", "impl-stop"]);
+  });
+
   it("buildBroadQueryProfile returns a populated profile", () => {
     const profile = strategy.buildBroadQueryProfile("how does the authentication flow work");
     expect(Array.isArray(profile.tokens)).toBe(true);
@@ -344,6 +424,42 @@ describe("ArchitectureStrategy query helpers", () => {
   it("buildBroadQueryProfile detects lifecycle mode for shutdown queries", () => {
     const profile = strategy.buildBroadQueryProfile("how does graceful shutdown work");
     expect(profile.lifecycleMode).toBe(true);
+  });
+
+  it("keeps the explicitly named workflow domain dominant", () => {
+    const generation = strategy.buildBroadQueryProfile(
+      "trace the full image generation flow from UI to edge function"
+    );
+    const upload = strategy.buildBroadQueryProfile(
+      "trace the full upload media flow from request auth to storage write"
+    );
+
+    expect(strategy.chooseDominantBroadFamily(generation, [])).toBe("generation");
+    expect(strategy.chooseDominantBroadFamily(upload, [])).toBe("storage");
+  });
+
+  it("focuses oversized broad evidence around the matched workflow term", () => {
+    const profile = strategy.buildBroadQueryProfile(
+      "which files implement pending navigation"
+    );
+    const scored = strategy.scoreBroadWorkflowCandidate(
+      makeResult({
+        id: "large-pending",
+        filePath: "src/pages/Editor.tsx",
+        name: "Editor",
+        content: `${"const filler = 1;\n".repeat(200)}const pendingNavigation = readPendingNavigation();\n${"const tail = 2;\n".repeat(200)}`,
+      }),
+      profile
+    );
+    const [candidate] = strategy.buildBroadFileCandidates([scored], profile);
+    const focused = strategy.focusBroadCandidateOnContent(
+      candidate!,
+      /\bpending\s*navigation\b|\bpendingnavigation\b/i
+    );
+
+    expect(focused.primary.result.content.length).toBeLessThanOrEqual(1_800);
+    expect(focused.primary.result.content).toContain("pendingNavigation");
+    expect(focused.primary.result.startLine).toBeGreaterThan(1);
   });
 
   it("isCallbackNoiseTarget flags useCallback/navigation/perf when not requested", () => {
@@ -396,6 +512,51 @@ describe("ArchitectureStrategy.selectBroadWorkflowBundle", () => {
     expect(strategy.lastBroadSelection).not.toBeNull();
   });
 
+  it("compacts an image-generation inventory into its coherent four-role backbone", () => {
+    const results = [
+      makeResult({
+        id: "store",
+        filePath: "src/stores/storyboardGenerationStore.ts",
+        name: "storyboardGenerationStore",
+      }),
+      makeResult({
+        id: "hook",
+        filePath: "src/hooks/useStoryboardGeneration.ts",
+        name: "useStoryboardGeneration",
+      }),
+      makeResult({
+        id: "controller",
+        filePath: "supabase/functions/storyboard-controller/index.ts",
+        name: "storyboardController",
+      }),
+      makeResult({
+        id: "endpoint",
+        filePath: "supabase/functions/generate-image/index.ts",
+        name: "generateImage",
+      }),
+      makeResult({
+        id: "noise",
+        score: 10,
+        filePath: "src/lib/imageTelemetry.ts",
+        name: "recordImageMetric",
+      }),
+    ];
+
+    const compact = strategy.compactGenerationBackbone(
+      "which files implement the storyboard image generation flow",
+      results
+    );
+
+    expect(compact.map((result) => result.filePath)).toEqual([
+      "src/stores/storyboardGenerationStore.ts",
+      "src/hooks/useStoryboardGeneration.ts",
+      "supabase/functions/storyboard-controller/index.ts",
+      "supabase/functions/generate-image/index.ts",
+    ]);
+    expect(compact.every((result) => result.selectionReason === "cohesive_generation_backbone"))
+      .toBe(true);
+  });
+
   it("selects an auth-centered bundle for a known auth-family keyword", () => {
     const results = [
       makeResult({ id: "page", score: 0.95, filePath: "src/pages/Auth.tsx", name: "AuthPage" }),
@@ -417,6 +578,92 @@ describe("ArchitectureStrategy.selectBroadWorkflowBundle", () => {
     } else {
       expect(diag.deferredReason).toBeTruthy();
     }
+  });
+
+  it("keeps adjacent concerns from displacing the named workflow backbone", () => {
+    const generationResults = [
+      makeResult({
+        id: "generation-ui",
+        score: 0.1,
+        filePath: "src/components/nodes/TextToImageNode.tsx",
+        name: "TextToImageNode",
+      }),
+      makeResult({
+        id: "generation-handler",
+        score: 0.1,
+        filePath: "src/flow/handlers/textToImageHandler.ts",
+        name: "textToImageHandler",
+      }),
+      makeResult({
+        id: "generation-edge",
+        score: 100,
+        filePath: "functions/generate-image/index.ts",
+        name: "generateImage",
+      }),
+      makeResult({
+        id: "generation-helper",
+        score: 0.99,
+        filePath: "src/shared/image-utils.ts",
+        name: "serializeImage",
+      }),
+    ];
+
+    const generation = strategy.selectBroadWorkflowBundle(
+      "trace the full image generation flow from UI to edge function",
+      generationResults
+    );
+    expect(strategy.lastBroadSelection?.dominantFamily).toBe("generation");
+    expect(generation.map((result) => result.filePath)).toEqual(expect.arrayContaining([
+      "src/components/nodes/TextToImageNode.tsx",
+      "src/flow/handlers/textToImageHandler.ts",
+      "functions/generate-image/index.ts",
+    ]));
+    const generationTopScore = Math.max(...generation.map((result) => result.score));
+    for (const path of [
+      "src/components/nodes/TextToImageNode.tsx",
+      "src/flow/handlers/textToImageHandler.ts",
+      "functions/generate-image/index.ts",
+    ]) {
+      expect(generation.find((result) => result.filePath === path)?.score)
+        .toBeGreaterThanOrEqual(generationTopScore * 0.25);
+    }
+
+    const uploadResults = [
+      makeResult({
+        id: "upload-edge",
+        score: 0.92,
+        filePath: "functions/upload-media/index.ts",
+        name: "uploadMedia",
+      }),
+      makeResult({
+        id: "storage-limit",
+        score: 0.7,
+        filePath: "functions/shared/storage-utils.ts",
+        name: "checkStorageLimit",
+      }),
+      makeResult({
+        id: "auth-helper",
+        score: 0.98,
+        filePath: "functions/shared/auth-utils.ts",
+        name: "authenticateRequest",
+      }),
+      makeResult({
+        id: "auth-route",
+        score: 0.96,
+        filePath: "app/api/auth/session/route.ts",
+        name: "getSession",
+      }),
+    ];
+
+    const upload = strategy.selectBroadWorkflowBundle(
+      "trace the full upload media flow from request auth to storage write",
+      uploadResults
+    );
+    expect(strategy.lastBroadSelection?.dominantFamily).toBe("storage");
+    expect(upload.map((result) => result.filePath)).toEqual(expect.arrayContaining([
+      "functions/upload-media/index.ts",
+      "functions/shared/storage-utils.ts",
+    ]));
   });
 
   it("produces consistent output across repeated identical calls (determinism)", () => {
