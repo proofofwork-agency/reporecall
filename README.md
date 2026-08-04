@@ -379,13 +379,42 @@ See `src/core/staleness.ts` and the daemon auto-refresh logic.
 }
 ```
 
-## Benchmarking & Token Evidence (Work in Progress)
+## Benchmarking & Token Evidence
 
-RepoRecall does not currently publish a quantitative token-savings claim. Such a
-claim requires paired native-tools and RepoRecall tasks using the same
-model/settings and fresh sessions. Missing paired measurements are reported as
-`insufficient_evidence`; they are never replaced with estimates or fallback
-numbers.
+**Context-assembly cost.** Getting the right evidence in front of the model costs
+a median of 75.8% fewer tokens than reading the relevant files whole. <!-- claim:context_cost_median_reduction -->
+
+Measured, not estimated — and scoped precisely:
+
+```text
+Fixture:  benchmark/project-context-queries.json (30 queries, real 1,306-file repo)
+Baseline: whole-file tokens for the files that actually contain the answer,
+          i.e. what grep-then-read costs. Counts ONLY known-relevant files,
+          never the wrong files a real search would also open — so the
+          measured saving is a floor, not a best case.
+Candidate: tokens RepoRecall injects for the same query.
+Guard:    a query counts only if RepoRecall delivered every mustInclude file,
+          so omitting evidence can never register as a saving. 30/30 passed.
+Model calls: none. Deterministic and reproducible.
+
+median baseline    5,215 tokens  ->  median injected  1,434 tokens
+median reduction   75.8%             aggregate        86.5%
+by route           R0 54.6%   R1 70.5%   R2 90.7%
+```
+
+Reproduce it:
+
+```bash
+npm run benchmark:context-cost -- --project /path/to/repo --output ./context-cost.json
+```
+
+**What this is not.** This measures context-assembly cost only. It excludes
+reasoning tokens, tool-call overhead and multi-turn exploration, so it is *not* an
+end-to-end agent token measurement and is never presented as one. A full paired
+agentic run — native tools vs RepoRecall, same model and settings, fresh sessions,
+blind grading — is a separate artifact and is not yet published. Missing paired
+measurements are reported as `insufficient_evidence`, never replaced with
+estimates or fallback numbers.
 
 Run `npm run benchmark` or see `scripts/benchmarks/`. 
 

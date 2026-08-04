@@ -1,0 +1,324 @@
+{
+  "schemaVersion": "reporecall-evidence/v1",
+  "evidenceKind": "paired-context-cost",
+  "repoRecallVersion": "0.9.0",
+  "generatedAt": "2026-08-04T14:26:22.298Z",
+  "status": "measured",
+  "method": {
+    "modelCalls": 0,
+    "baseline": "sum of whole-file tokens for the fixture's known-relevant files (grep-then-read), counting only known-relevant files and never the wrong files a real search would also open",
+    "candidate": "tokens Reporecall injects for the same query (reporecall explain --json)",
+    "correctnessGuard": "a query is counted only when Reporecall delivered every mustInclude file, so omitting evidence cannot register as a saving",
+    "limitation": "context-assembly cost only; excludes reasoning tokens, tool-call overhead and multi-turn exploration. Not an end-to-end agent token measurement.",
+    "tokenizer": "tiktoken via src/search/context-assembler.countTokens"
+  },
+  "privacy": {
+    "redactedByDefault": true,
+    "containsSource": false,
+    "containsPrompts": false,
+    "containsAbsolutePaths": false,
+    "containsFileNames": false
+  },
+  "fixture": {
+    "path": "benchmark/project-context-queries.json",
+    "queryCount": 30
+  },
+  "cohortSize": 30,
+  "aggregate": {
+    "medianBaselineTokens": 5215,
+    "medianRepoRecallTokens": 1434.5,
+    "medianReductionRatio": 0.7582535655206222,
+    "meanReductionRatio": 0.7019737832011128,
+    "totalBaselineTokens": 317527,
+    "totalRepoRecallTokens": 42797,
+    "totalReductionRatio": 0.8652177610093,
+    "queriesWithCompleteEvidence": 30,
+    "queriesSkipped": 0
+  },
+  "perRoute": {
+    "R0": {
+      "count": 10,
+      "medianReductionRatio": 0.545585823497776
+    },
+    "R1": {
+      "count": 10,
+      "medianReductionRatio": 0.705300619533147
+    },
+    "R2": {
+      "count": 10,
+      "medianReductionRatio": 0.9074740666417086
+    }
+  },
+  "rows": [
+    {
+      "id": "r0-generate-image-implemented",
+      "category": "R0",
+      "repoRecallTokens": 1658,
+      "baselineTokens": 3396,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.5117785630153121
+    },
+    {
+      "id": "r0-upload-media-implemented",
+      "category": "R0",
+      "repoRecallTokens": 1368,
+      "baselineTokens": 5132,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7334372564302416
+    },
+    {
+      "id": "r0-auth-callback",
+      "category": "R0",
+      "repoRecallTokens": 1269,
+      "baselineTokens": 1206,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": -0.05223880597014925
+    },
+    {
+      "id": "r0-use-auth",
+      "category": "R0",
+      "repoRecallTokens": 187,
+      "baselineTokens": 1072,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.8255597014925373
+    },
+    {
+      "id": "r0-protected-route",
+      "category": "R0",
+      "repoRecallTokens": 1266,
+      "baselineTokens": 1291,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.019364833462432222
+    },
+    {
+      "id": "r0-stripe-checkout-implemented",
+      "category": "R0",
+      "repoRecallTokens": 1788,
+      "baselineTokens": 4251,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.5793930839802399
+    },
+    {
+      "id": "r0-billing-controller-file",
+      "category": "R0",
+      "repoRecallTokens": 1320,
+      "baselineTokens": 1394,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.05308464849354376
+    },
+    {
+      "id": "r0-auth-modal",
+      "category": "R0",
+      "repoRecallTokens": 1392,
+      "baselineTokens": 4781,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7088475214390295
+    },
+    {
+      "id": "r0-subscription-update-implemented",
+      "category": "R0",
+      "repoRecallTokens": 1307,
+      "baselineTokens": 2143,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.3901073261782548
+    },
+    {
+      "id": "r0-storyboard-controller-implemented",
+      "category": "R0",
+      "repoRecallTokens": 528,
+      "baselineTokens": 12613,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9581384286054071
+    },
+    {
+      "id": "r1-generate-image-work",
+      "category": "R1",
+      "repoRecallTokens": 1933,
+      "baselineTokens": 16009,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.8792554188269098
+    },
+    {
+      "id": "r1-upload-authenticate",
+      "category": "R1",
+      "repoRecallTokens": 1505,
+      "baselineTokens": 5132,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7067420109119251
+    },
+    {
+      "id": "r1-auth-callback-login",
+      "category": "R1",
+      "repoRecallTokens": 1466,
+      "baselineTokens": 4916,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7017900732302685
+    },
+    {
+      "id": "r1-protected-route-redirect",
+      "category": "R1",
+      "repoRecallTokens": 1481,
+      "baselineTokens": 5001,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7038592281543691
+    },
+    {
+      "id": "r1-use-auth-state",
+      "category": "R1",
+      "repoRecallTokens": 414,
+      "baselineTokens": 3710,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.8884097035040431
+    },
+    {
+      "id": "r1-stripe-checkout-session",
+      "category": "R1",
+      "repoRecallTokens": 2177,
+      "baselineTokens": 5298,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.5890902227255568
+    },
+    {
+      "id": "r1-subscription-update-plan-changes",
+      "category": "R1",
+      "repoRecallTokens": 1711,
+      "baselineTokens": 4927,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.6527298558960828
+    },
+    {
+      "id": "r1-storyboard-controller-shot-images",
+      "category": "R1",
+      "repoRecallTokens": 898,
+      "baselineTokens": 16009,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9439065525641827
+    },
+    {
+      "id": "r1-billing-controller-subscription-info",
+      "category": "R1",
+      "repoRecallTokens": 1702,
+      "baselineTokens": 3179,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.4646115130544196
+    },
+    {
+      "id": "r1-storyboard-generation-controller",
+      "category": "R1",
+      "repoRecallTokens": 955,
+      "baselineTokens": 26850,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9644320297951583
+    },
+    {
+      "id": "r2-auth-flow-files",
+      "category": "R2",
+      "repoRecallTokens": 1249,
+      "baselineTokens": 12892,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9031182128451753
+    },
+    {
+      "id": "r2-auth-flow-logging",
+      "category": "R2",
+      "repoRecallTokens": 1424,
+      "baselineTokens": 12892,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.8895439031957804
+    },
+    {
+      "id": "r2-auth-redirects",
+      "category": "R2",
+      "repoRecallTokens": 1538,
+      "baselineTokens": 11295,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.8638335546702081
+    },
+    {
+      "id": "r2-image-generation-flow",
+      "category": "R2",
+      "repoRecallTokens": 1333,
+      "baselineTokens": 30246,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.955928056602526
+    },
+    {
+      "id": "r2-billing-checkout-files",
+      "category": "R2",
+      "repoRecallTokens": 1998,
+      "baselineTokens": 26180,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9236822001527883
+    },
+    {
+      "id": "r2-upload-media-flow",
+      "category": "R2",
+      "repoRecallTokens": 1649,
+      "baselineTokens": 6302,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7383370358616312
+    },
+    {
+      "id": "r2-route-protection-pending-nav",
+      "category": "R2",
+      "repoRecallTokens": 2445,
+      "baselineTokens": 29649,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9175351613882424
+    },
+    {
+      "id": "r2-auth-callback-loops",
+      "category": "R2",
+      "repoRecallTokens": 1445,
+      "baselineTokens": 6514,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.7781700951796131
+    },
+    {
+      "id": "r2-billing-portal-checkout-flow",
+      "category": "R2",
+      "repoRecallTokens": 2028,
+      "baselineTokens": 23001,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9118299204382418
+    },
+    {
+      "id": "r2-storyboard-image-regeneration",
+      "category": "R2",
+      "repoRecallTokens": 1363,
+      "baselineTokens": 30246,
+      "baselineFiles": [],
+      "evidenceComplete": true,
+      "reductionRatio": 0.9549361899094095
+    }
+  ]
+}

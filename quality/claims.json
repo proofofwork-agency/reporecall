@@ -16,5 +16,16 @@
     "website/docs/competitive-positioning.md",
     "website/docs/mcp-tools.md"
   ],
-  "claims": []
+  "claims": [
+    {
+      "id": "context_cost_median_reduction",
+      "location": "README.md:385",
+      "artifact": "quality/evidence/context-cost.json",
+      "repoRecallVersion": "0.9.0",
+      "fixture": "benchmark/project-context-queries.json",
+      "fixtureHash": "sha256:a525c0d0756e5afc3d66d48769359f8fa6478a4088775ff667ed0bc4677bea80",
+      "cohortSize": 30,
+      "measuredAt": "2026-08-04T14:26:22.298Z"
+    }
+  ]
 }

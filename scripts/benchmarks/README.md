@@ -37,8 +37,24 @@ npm run benchmark:tokens -- --project /path/to/repo
 Reports:
 - Real freshness / trust contract data (`indexedCommit`, dirty files, banner)
 - Uses actual hook injection stats when an index exists
-- Reports token savings as `insufficient_evidence` unless a paired task
-  artifact exists; it never invents a baseline or fallback number
+- Reports end-to-end token savings as `insufficient_evidence` unless a paired
+  agentic task artifact exists; it never invents a baseline or fallback number
+
+## Context Cost (paired, no model calls)
+
+```bash
+npm run benchmark:context-cost -- --project /path/to/repo --output ./context-cost.json
+```
+
+Measures the tokens needed to put the answering evidence in front of the model
+versus reading the known-relevant files whole. Deterministic and reproducible —
+it makes no model calls. A query counts only when Reporecall delivered every
+`mustInclude` file, so omitting evidence cannot register as a saving, and the
+baseline counts only known-relevant files, making the result a floor. Exits
+non-zero when no query produced complete evidence.
+
+Scope: context-assembly cost only. It excludes reasoning tokens, tool-call
+overhead and multi-turn exploration, and is not an end-to-end agent measurement.
 
 See `trust-and-tokens.md` for methodology and how to contribute real measurements.
 
