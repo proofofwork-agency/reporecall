@@ -1,5 +1,6 @@
 import { readFile, stat } from "fs/promises";
 import { extname, relative } from "path";
+import { toPosixPath } from "../core/path-safety.js";
 import type Parser from "web-tree-sitter";
 import { getLanguage, createParser, initTreeSitter } from "./tree-sitter.js";
 import { getLanguageForExtension, resolveLanguage, type LanguageConfig } from "./languages.js";
@@ -218,7 +219,11 @@ export async function chunkFileWithCalls(
 
   const ext = extname(filePath);
   let langInfo = getLanguageForExtension(ext);
-  const relPath = relative(projectRoot, filePath);
+  // This becomes every chunk's filePath and the key call-edge resolution matches
+  // on, so it has to be the portable form — a platform separator here leaves the
+  // call graph empty on Windows and silently degrades trace queries to broad
+  // search.
+  const relPath = toPosixPath(relative(projectRoot, filePath));
   const h = await getHasher();
 
   // Guard against huge files blowing memory
