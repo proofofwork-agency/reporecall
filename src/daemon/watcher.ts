@@ -95,10 +95,10 @@ export class FileWatcher {
         return;
       }
 
-      const ext = extname(safePath.relativePath);
+      const ext = extname(safePath.posixRelativePath);
       if (!extensionSet.has(ext)) return;
 
-      const relPath = safePath.relativePath;
+      const relPath = safePath.posixRelativePath;
       if (ig.ignores(relPath)) return;
 
       if (this.pendingChanges.length >= MAX_PENDING) {

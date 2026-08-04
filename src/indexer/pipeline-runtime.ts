@@ -216,7 +216,7 @@ async indexChanged(paths: string[]): Promise<{
       log.warn(`Path traversal blocked: ${pathValue} resolves outside project root`);
       continue;
     }
-    const relPath = safePath.relativePath;
+    const relPath = safePath.posixRelativePath;
     safePaths.push({ relativePath: relPath, absolutePath: safePath.absolutePath });
 
     try {
@@ -255,6 +255,8 @@ async indexChanged(paths: string[]): Promise<{
 
   this.rebuildTargetCatalog();
   for (const safePath of safePaths) {
+    // Already the portable form — these entries were built from
+    // posixRelativePath above.
     const relPath = safePath.relativePath;
     if (!successfulFiles.has(relPath)) continue;
     // Don't commit merkle state for degraded files — they need to retry.
@@ -303,7 +305,7 @@ async removeFiles(paths: string[]): Promise<void> {
       log.warn(`Path traversal blocked in removeFiles: ${pathValue}`);
       continue;
     }
-    safePaths.push(safePath.relativePath);
+    safePaths.push(safePath.posixRelativePath);
   }
   if (safePaths.length > 0) {
     this.metadata.removeFiles(safePaths);

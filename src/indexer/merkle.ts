@@ -16,6 +16,8 @@ interface MerkleFileEntry {
   hash: string;
   mtimeMs: number;
   ctimeMs?: number;
+  /** Recorded size; a mismatch always forces a re-hash. Absent on older state. */
+  size?: number;
 }
 
 interface MerkleState {
@@ -42,6 +44,11 @@ function entryMtime(entry: string | MerkleFileEntry): number {
 /** Extract ctimeMs from a state entry (returns undefined for legacy/older entries). */
 function entryCtime(entry: string | MerkleFileEntry): number | undefined {
   return typeof entry === "string" ? undefined : entry.ctimeMs;
+}
+
+/** Extract size from a state entry (returns undefined for legacy/older entries). */
+function entrySize(entry: string | MerkleFileEntry): number | undefined {
+  return typeof entry === "string" ? undefined : entry.size;
 }
 
 export class MerkleTree {
@@ -101,19 +108,25 @@ export class MerkleTree {
         const existingMtime = existing ? entryMtime(existing) : 0;
         const existingCtime = existing ? entryCtime(existing) : undefined;
 
-        // mtime+ctime pre-filter: skip the expensive hash only when BOTH the
-        // modification time and the inode-change time match. mtime alone is
-        // unreliable — `git checkout`, `touch -r`, and `cp`/rsync without
-        // `--times` can rewrite file contents while preserving mtime. ctime
-        // cannot be reset by userspace on POSIX, so it catches those cases.
+        // Timestamp pre-filter: skip the expensive hash only when every cheap
+        // signal matches. mtime alone is unreliable — `git checkout`, `touch -r`
+        // and `cp`/rsync without `--times` rewrite contents while preserving it.
+        // ctime cannot be reset from userspace on POSIX, so it catches those.
+        //
+        // On Windows, though, ctime is the *creation* time and never moves on a
+        // modification, so it contributes nothing there. Size is therefore part
+        // of the filter: it is free from the stat we already have, and it catches
+        // a same-millisecond rewrite that changes length — which the timestamps
+        // alone would wave through, leaving the file silently un-indexed.
         const stat = await fsPromises.stat(file.absolutePath);
+        const existingSize = existing ? entrySize(existing) : undefined;
         if (
           existingHash
           && existingMtime > 0
           && stat.mtimeMs === existingMtime
           && (existingCtime === undefined || stat.ctimeMs === existingCtime)
+          && (existingSize === undefined || stat.size === existingSize)
         ) {
-          // mtime+ctime unchanged — file is assumed unmodified, skip hash computation
           continue;
         }
 
@@ -122,13 +135,13 @@ export class MerkleTree {
 
         if (!existingHash) {
           changes.push({ path: file.relativePath, type: "added", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         } else if (existingHash !== hash) {
           changes.push({ path: file.relativePath, type: "modified", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         } else {
           // Content unchanged but mtime/ctime changed — update cache
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         }
       } catch (err) {
         getLogger().warn({ err, path: file.relativePath }, "File disappeared during scan, skipping");
@@ -159,6 +172,7 @@ export class MerkleTree {
       hash: h.h64ToString(content),
       mtimeMs: stat.mtimeMs,
       ctimeMs: stat.ctimeMs,
+      size: stat.size,
     };
   }
 

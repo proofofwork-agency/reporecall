@@ -446,7 +446,7 @@ export function resolveImportPath(
 function resolveProjectFile(projectRoot: string, candidate: string): string | null {
   const safePath = resolveProjectPath(projectRoot, candidate, "existing");
   if (!safePath || isDirectory(safePath.absolutePath)) return null;
-  return safePath.relativePath.replace(/\\/g, "/");
+  return safePath.posixRelativePath;
 }
 
 function isDirectory(filePath: string): boolean {

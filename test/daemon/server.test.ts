@@ -159,7 +159,9 @@ describe("daemon HTTP server (3F)", () => {
     await new Promise<void>((res, rej) =>
       server.close((err) => (err ? rej(err) : res()))
     );
-    rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    // Retry on ENOTEMPTY/EBUSY: a late async write (sqlite WAL, a flush) can
+    // land mid-delete, and both describe blocks share this directory.
+    rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     clearFreshnessCache();
   });
 
@@ -664,7 +666,9 @@ describe("daemon HTTP server — debug mode", () => {
     await new Promise<void>((res, rej) =>
       server.close((err) => (err ? rej(err) : res()))
     );
-    rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    // Retry on ENOTEMPTY/EBUSY: a late async write (sqlite WAL, a flush) can
+    // land mid-delete, and both describe blocks share this directory.
+    rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     clearFreshnessCache();
   });
 
