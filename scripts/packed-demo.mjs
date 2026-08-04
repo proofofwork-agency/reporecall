@@ -12,7 +12,12 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+// Node refuses to spawn Windows .cmd shims without a shell, so npm.cmd fails
+// with EINVAL. npm hands its own JS entrypoint down in npm_execpath when it
+// runs a script, so drive that with the current node binary and keep the shell
+// out of it entirely; fall back to the shim behind a shell only if it is absent.
+const npmExecPath = process.env.npm_execpath;
+const npmEntrypoint = npmExecPath && /\.[cm]?js$/i.test(npmExecPath) ? npmExecPath : undefined;
 const workspace = mkdtempSync(join(tmpdir(), "reporecall-packed-demo-"));
 const installRoot = join(workspace, "install");
 const packRoot = join(workspace, "package");
@@ -27,6 +32,7 @@ function run(command, args, options = {}) {
     encoding: "utf8",
     timeout: options.timeout ?? 180_000,
     env: { ...process.env, NO_COLOR: "1" },
+    shell: options.shell ?? false,
   });
   if (result.error || result.status !== 0) {
     throw new Error(
@@ -37,12 +43,22 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
+function runNpm(args, options = {}) {
+  if (npmEntrypoint) {
+    return run(process.execPath, [npmEntrypoint, ...args], options);
+  }
+  return run(process.platform === "win32" ? "npm.cmd" : "npm", args, {
+    ...options,
+    shell: process.platform === "win32",
+  });
+}
+
 try {
   mkdirSync(installRoot, { recursive: true });
   if (!tarball) {
     mkdirSync(packRoot, { recursive: true });
     const packed = JSON.parse(
-      run(npm, ["pack", "--json", "--pack-destination", packRoot]),
+      runNpm(["pack", "--json", "--pack-destination", packRoot]),
     );
     const filename = packed[0]?.filename;
     if (typeof filename !== "string") {
@@ -54,8 +70,8 @@ try {
     throw new Error(`tarball not found: ${tarball}`);
   }
 
-  run(npm, ["init", "--yes"], { cwd: installRoot });
-  run(npm, ["install", "--no-audit", "--no-fund", tarball], {
+  runNpm(["init", "--yes"], { cwd: installRoot });
+  runNpm(["install", "--no-audit", "--no-fund", tarball], {
     cwd: installRoot,
     timeout: 300_000,
   });
