@@ -6,7 +6,7 @@ import { freeEncoder } from "../search/context-assembler.js";
 import { analyzeConventions } from "../analysis/conventions.js";
 import { scanFiles } from "./file-scanner.js";
 import type { EmbeddingProvider } from "./types.js";
-import { MerkleTree } from "./merkle.js";
+import { MerkleTree, type MerkleFileEntry } from "./merkle.js";
 import { MetadataStore } from "../storage/metadata-store.js";
 import { FTSStore } from "../storage/fts-store.js";
 import { VectorStore } from "../storage/vector-store.js";
@@ -151,7 +151,12 @@ async indexAll(
 
   await this.flushWindow(pendingWindow, progressState, successfulFiles, counters, onProgress, degradedFiles);
 
-  const filteredPendingState: Record<string, string | { hash: string; mtimeMs: number }> = {};
+  // MerkleFileEntry, not a narrower inline shape: the entries carry ctimeMs and
+  // size, and those are two of the three cheap signals the change pre-filter
+  // relies on. The values survive today only because this loop copies entries by
+  // reference — a narrower annotation invites someone to rebuild them here and
+  // silently drop both.
+  const filteredPendingState: Record<string, string | MerkleFileEntry> = {};
   for (const [path, entry] of Object.entries(pendingState)) {
     const isChangedFile = toProcess.some((change) => change.path === path);
     // Exclude degraded files: their embeddings fell back to empty vectors,

@@ -12,7 +12,7 @@ import xxhash from "xxhash-wasm";
 import type { FileChange } from "./types.js";
 import { getLogger } from "../core/logger.js";
 
-interface MerkleFileEntry {
+export interface MerkleFileEntry {
   hash: string;
   mtimeMs: number;
   ctimeMs?: number;
@@ -49,6 +49,39 @@ function entryCtime(entry: string | MerkleFileEntry): number | undefined {
 /** Extract size from a state entry (returns undefined for legacy/older entries). */
 function entrySize(entry: string | MerkleFileEntry): number | undefined {
   return typeof entry === "string" ? undefined : entry.size;
+}
+
+/**
+ * How recently a file must have been written for its mtime to be worthless as a
+ * change signal.
+ *
+ * Filesystem timestamps are coarse. The Windows system clock advances in ~15.6ms
+ * steps, HFS+ stores whole seconds and FAT32 two-second steps, so two writes
+ * inside one step share an mtime exactly. If we hash a file between those two
+ * writes and record that shared mtime, the second write is invisible forever
+ * after: the pre-filter in computeChanges sees a matching timestamp and skips
+ * the file on every future scan. On Windows nothing else catches it either —
+ * ctime is the creation time and does not move on modification, so a
+ * length-preserving edit also keeps size identical and clears all three cheap
+ * signals.
+ *
+ * A chunk that is stale while reporting itself fresh is the one failure the
+ * Trust Contract must not have. So when the file we just hashed was written
+ * within the coarsest granularity we might be sitting on, we persist mtimeMs 0 —
+ * the same "do not trust this timestamp" sentinel that legacy string entries
+ * already produce — and pay for one extra hash on the next scan instead.
+ */
+const MTIME_TRUST_WINDOW_MS = 2_000;
+
+/**
+ * The mtime to persist for a freshly hashed file: the real value, or 0 when the
+ * file was written too recently for that value to be a reliable change signal.
+ *
+ * A future-dated mtime (clock skew, a bad archive) also lands in the untrusted
+ * branch, which is the safe direction — it costs a hash, never a missed change.
+ */
+function persistableMtime(mtimeMs: number, observedAt: number): number {
+  return observedAt - mtimeMs < MTIME_TRUST_WINDOW_MS ? 0 : mtimeMs;
 }
 
 export class MerkleTree {
@@ -132,16 +165,21 @@ export class MerkleTree {
 
         const content = await fsPromises.readFile(file.absolutePath, "utf-8");
         const hash = h.h64ToString(content);
+        // Read the clock next to the hash, not once per batch: on a large repo a
+        // single timestamp taken at the top of the loop would drift minutes away
+        // from the files hashed at the end, and start calling their mtimes
+        // trustworthy when they are not.
+        const mtimeMs = persistableMtime(stat.mtimeMs, Date.now());
 
         if (!existingHash) {
           changes.push({ path: file.relativePath, type: "added", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
+          pendingState[file.relativePath] = { hash, mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         } else if (existingHash !== hash) {
           changes.push({ path: file.relativePath, type: "modified", hash });
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
+          pendingState[file.relativePath] = { hash, mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         } else {
           // Content unchanged but mtime/ctime changed — update cache
-          pendingState[file.relativePath] = { hash, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
+          pendingState[file.relativePath] = { hash, mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
         }
       } catch (err) {
         getLogger().warn({ err, path: file.relativePath }, "File disappeared during scan, skipping");
@@ -170,7 +208,7 @@ export class MerkleTree {
     const content = await fsPromises.readFile(absolutePath, "utf-8");
     this.state.files[relativePath] = {
       hash: h.h64ToString(content),
-      mtimeMs: stat.mtimeMs,
+      mtimeMs: persistableMtime(stat.mtimeMs, Date.now()),
       ctimeMs: stat.ctimeMs,
       size: stat.size,
     };
