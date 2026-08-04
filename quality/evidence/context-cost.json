@@ -1,8 +1,8 @@
 {
   "schemaVersion": "reporecall-evidence/v1",
   "evidenceKind": "paired-context-cost",
-  "repoRecallVersion": "0.9.0",
-  "generatedAt": "2026-08-04T14:52:01.829Z",
+  "repoRecallVersion": "0.9.1",
+  "generatedAt": "2026-08-04T18:28:04.202Z",
   "status": "measured",
   "method": {
     "modelCalls": 0,
@@ -26,191 +26,191 @@
   "cohortSize": 30,
   "aggregate": {
     "medianBaselineTokens": 5215,
-    "medianRepoRecallTokens": 1434.5,
-    "medianReductionRatio": 0.7582535655206222,
-    "meanReductionRatio": 0.7019737832011128,
+    "medianRepoRecallTokens": 1439,
+    "medianReductionRatio": 0.7539558378131831,
+    "meanReductionRatio": 0.7008498284748442,
     "totalBaselineTokens": 317527,
-    "totalRepoRecallTokens": 42797,
-    "totalReductionRatio": 0.8652177610093,
+    "totalRepoRecallTokens": 43082,
+    "totalReductionRatio": 0.8643201995420862,
     "queriesWithCompleteEvidence": 30,
     "queriesSkipped": 0
   },
   "perRoute": {
     "R0": {
       "count": 10,
-      "medianReductionRatio": 0.545585823497776
+      "medianReductionRatio": 0.5445264178123127
     },
     "R1": {
       "count": 10,
-      "medianReductionRatio": 0.705300619533147
+      "medianReductionRatio": 0.7039162120810445
     },
     "R2": {
       "count": 10,
-      "medianReductionRatio": 0.9074740666417086
+      "medianReductionRatio": 0.9082280032935206
     }
   },
   "rows": [
     {
       "id": "r0-generate-image-implemented",
       "category": "R0",
-      "repoRecallTokens": 1658,
+      "repoRecallTokens": 1662,
       "baselineTokens": 3396,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.5117785630153121
+      "reductionRatio": 0.5106007067137809
     },
     {
       "id": "r0-upload-media-implemented",
       "category": "R0",
-      "repoRecallTokens": 1368,
+      "repoRecallTokens": 1372,
       "baselineTokens": 5132,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7334372564302416
+      "reductionRatio": 0.7326578332034295
     },
     {
       "id": "r0-auth-callback",
       "category": "R0",
-      "repoRecallTokens": 1269,
+      "repoRecallTokens": 1235,
       "baselineTokens": 1206,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": -0.05223880597014925
+      "reductionRatio": -0.02404643449419569
     },
     {
       "id": "r0-use-auth",
       "category": "R0",
-      "repoRecallTokens": 187,
+      "repoRecallTokens": 191,
       "baselineTokens": 1072,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.8255597014925373
+      "reductionRatio": 0.8218283582089553
     },
     {
       "id": "r0-protected-route",
       "category": "R0",
-      "repoRecallTokens": 1266,
+      "repoRecallTokens": 1270,
       "baselineTokens": 1291,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.019364833462432222
+      "reductionRatio": 0.016266460108443067
     },
     {
       "id": "r0-stripe-checkout-implemented",
       "category": "R0",
-      "repoRecallTokens": 1788,
+      "repoRecallTokens": 1792,
       "baselineTokens": 4251,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.5793930839802399
+      "reductionRatio": 0.5784521289108445
     },
     {
       "id": "r0-billing-controller-file",
       "category": "R0",
-      "repoRecallTokens": 1320,
+      "repoRecallTokens": 1357,
       "baselineTokens": 1394,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.05308464849354376
+      "reductionRatio": 0.02654232424677188
     },
     {
       "id": "r0-auth-modal",
       "category": "R0",
-      "repoRecallTokens": 1392,
+      "repoRecallTokens": 1396,
       "baselineTokens": 4781,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7088475214390295
+      "reductionRatio": 0.7080108763856934
     },
     {
       "id": "r0-subscription-update-implemented",
       "category": "R0",
-      "repoRecallTokens": 1307,
+      "repoRecallTokens": 1311,
       "baselineTokens": 2143,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.3901073261782548
+      "reductionRatio": 0.3882407839477368
     },
     {
       "id": "r0-storyboard-controller-implemented",
       "category": "R0",
-      "repoRecallTokens": 528,
+      "repoRecallTokens": 532,
       "baselineTokens": 12613,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9581384286054071
+      "reductionRatio": 0.9578212954887814
     },
     {
       "id": "r1-generate-image-work",
       "category": "R1",
-      "repoRecallTokens": 1933,
+      "repoRecallTokens": 1913,
       "baselineTokens": 16009,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.8792554188269098
+      "reductionRatio": 0.8805047160971953
     },
     {
       "id": "r1-upload-authenticate",
       "category": "R1",
-      "repoRecallTokens": 1505,
+      "repoRecallTokens": 1511,
       "baselineTokens": 5132,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7067420109119251
+      "reductionRatio": 0.7055728760717069
     },
     {
       "id": "r1-auth-callback-login",
       "category": "R1",
-      "repoRecallTokens": 1466,
+      "repoRecallTokens": 1474,
       "baselineTokens": 4916,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7017900732302685
+      "reductionRatio": 0.7001627339300244
     },
     {
       "id": "r1-protected-route-redirect",
       "category": "R1",
-      "repoRecallTokens": 1481,
+      "repoRecallTokens": 1489,
       "baselineTokens": 5001,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7038592281543691
+      "reductionRatio": 0.7022595480903819
     },
     {
       "id": "r1-use-auth-state",
       "category": "R1",
-      "repoRecallTokens": 414,
+      "repoRecallTokens": 422,
       "baselineTokens": 3710,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.8884097035040431
+      "reductionRatio": 0.8862533692722372
     },
     {
       "id": "r1-stripe-checkout-session",
       "category": "R1",
-      "repoRecallTokens": 2177,
+      "repoRecallTokens": 2149,
       "baselineTokens": 5298,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.5890902227255568
+      "reductionRatio": 0.5943752359380898
     },
     {
       "id": "r1-subscription-update-plan-changes",
       "category": "R1",
-      "repoRecallTokens": 1711,
+      "repoRecallTokens": 1717,
       "baselineTokens": 4927,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.6527298558960828
+      "reductionRatio": 0.6515120763141872
     },
     {
       "id": "r1-storyboard-controller-shot-images",
       "category": "R1",
-      "repoRecallTokens": 898,
+      "repoRecallTokens": 988,
       "baselineTokens": 16009,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9439065525641827
+      "reductionRatio": 0.9382847148478981
     },
     {
       "id": "r1-billing-controller-subscription-info",
@@ -224,92 +224,92 @@
     {
       "id": "r1-storyboard-generation-controller",
       "category": "R1",
-      "repoRecallTokens": 955,
+      "repoRecallTokens": 982,
       "baselineTokens": 26850,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9644320297951583
+      "reductionRatio": 0.9634264432029795
     },
     {
       "id": "r2-auth-flow-files",
       "category": "R2",
-      "repoRecallTokens": 1249,
+      "repoRecallTokens": 1229,
       "baselineTokens": 12892,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9031182128451753
+      "reductionRatio": 0.9046695625193919
     },
     {
       "id": "r2-auth-flow-logging",
       "category": "R2",
-      "repoRecallTokens": 1424,
+      "repoRecallTokens": 1404,
       "baselineTokens": 12892,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.8895439031957804
+      "reductionRatio": 0.8910952528699969
     },
     {
       "id": "r2-auth-redirects",
       "category": "R2",
-      "repoRecallTokens": 1538,
+      "repoRecallTokens": 1625,
       "baselineTokens": 11295,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.8638335546702081
+      "reductionRatio": 0.8561310314298363
     },
     {
       "id": "r2-image-generation-flow",
       "category": "R2",
-      "repoRecallTokens": 1333,
+      "repoRecallTokens": 1334,
       "baselineTokens": 30246,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.955928056602526
+      "reductionRatio": 0.955894994379422
     },
     {
       "id": "r2-billing-checkout-files",
       "category": "R2",
-      "repoRecallTokens": 1998,
+      "repoRecallTokens": 2036,
       "baselineTokens": 26180,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9236822001527883
+      "reductionRatio": 0.9222307104660046
     },
     {
       "id": "r2-upload-media-flow",
       "category": "R2",
-      "repoRecallTokens": 1649,
+      "repoRecallTokens": 1619,
       "baselineTokens": 6302,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7383370358616312
+      "reductionRatio": 0.743097429387496
     },
     {
       "id": "r2-route-protection-pending-nav",
       "category": "R2",
-      "repoRecallTokens": 2445,
+      "repoRecallTokens": 2446,
       "baselineTokens": 29649,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9175351613882424
+      "reductionRatio": 0.91750143343789
     },
     {
       "id": "r2-auth-callback-loops",
       "category": "R2",
-      "repoRecallTokens": 1445,
+      "repoRecallTokens": 1532,
       "baselineTokens": 6514,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.7781700951796131
+      "reductionRatio": 0.7648142462388702
     },
     {
       "id": "r2-billing-portal-checkout-flow",
       "category": "R2",
-      "repoRecallTokens": 2028,
+      "repoRecallTokens": 2029,
       "baselineTokens": 23001,
       "baselineFiles": [],
       "evidenceComplete": true,
-      "reductionRatio": 0.9118299204382418
+      "reductionRatio": 0.9117864440676492
     },
     {
       "id": "r2-storyboard-image-regeneration",

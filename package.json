@@ -1,6 +1,6 @@
 {
   "name": "@proofofwork-agency/reporecall",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Local-first, auto-injecting, self-aware-about-staleness context + memory layer for coding agents (Claude Code, Codex, MCP). Trust contract, hooks-first, hybrid retrieval + compression, zero infra.",
   "type": "module",
   "main": "./dist/index.js",

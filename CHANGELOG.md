@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.9.1] - 2026-08-04
+
+Patch release closing a freshness-integrity hole in change detection, plus the
+CI job that would have caught it and a documentation site with search.
+
+### Fixed
+
+- **A modified file could stay indexed as fresh, forever.** The change
+  pre-filter skips hashing when mtime, ctime and size all match the recorded
+  entry. Filesystem timestamps are coarse — the Windows clock advances in
+  ~15.6ms steps, HFS+ stores whole seconds, FAT32 two-second steps — so two
+  writes inside one step share an mtime exactly. If a file was hashed between
+  those writes, the second one became invisible on every later scan. On Windows
+  nothing else caught it either: ctime is the creation time and does not move on
+  modification, so a length-preserving edit cleared all three signals. The
+  result was a stale chunk reporting itself as fresh, which is precisely what the
+  Trust Contract exists to prevent. A file whose mtime is younger than the
+  coarsest granularity we might be sitting on now records a "do not trust this
+  timestamp" marker and is re-hashed once on the next scan.
+
+### Added
+
+- The full test suite now runs on Windows and macOS in CI, not only Ubuntu.
+  Publish was previously the first place it ever executed on Windows, which is
+  how a class of path-identity defects reached a release gate instead of a pull
+  request.
+- Documentation site gains offline full-text search (no external requests),
+  rendered Mermaid architecture diagrams including a request-flow diagram, a
+  custom 404 with search, and a social preview card.
+
+### Changed
+
+- Re-measured both registered claims against a freshly cloned and re-indexed
+  1,306-file repository using this release's build. Numbers are unchanged within
+  measurement variance; see `quality/evidence/`.
+
 ## [0.9.0] - 2026-08-04
 
 Engineering-hardening release focused on trustworthy context, reproducible

@@ -32,7 +32,7 @@ says `insufficient_evidence` instead of guessing.
 
 | | |
 |---|---|
-| Getting the answering evidence in front of the model costs a median of 75.8% fewer tokens than reading the relevant files whole <!-- claim:context_cost_median_reduction --> | `npm run benchmark:context-cost` |
+| Getting the answering evidence in front of the model costs a median of 75.4% fewer tokens than reading the relevant files whole <!-- claim:context_cost_median_reduction --> | `npm run benchmark:context-cost` |
 | Retrieval holds 91.6% context precision and 95.6% recall at 8.4% pollution, with 100% route accuracy and zero high-confidence-wrong answers <!-- claim:retrieval_gates --> | `npm run benchmark:project-context` |
 
 Both measured on a real 1,306-file / 5,591-chunk codebase over 30 pre-registered
@@ -399,7 +399,7 @@ See `src/core/staleness.ts` and the daemon auto-refresh logic.
 ## Benchmarking & Token Evidence
 
 **Context-assembly cost.** Getting the right evidence in front of the model costs
-a median of 75.8% fewer tokens than reading the relevant files whole. <!-- claim:context_cost_median_reduction -->
+a median of 75.4% fewer tokens than reading the relevant files whole. <!-- claim:context_cost_median_reduction -->
 
 Measured, not estimated — and scoped precisely:
 
@@ -414,9 +414,9 @@ Guard:    a query counts only if RepoRecall delivered every mustInclude file,
           so omitting evidence can never register as a saving. 30/30 passed.
 Model calls: none. Deterministic and reproducible.
 
-median baseline    5,215 tokens  ->  median injected  1,434 tokens
-median reduction   75.8%             aggregate        86.5%
-by route           R0 54.6%   R1 70.5%   R2 90.7%
+median baseline    5,215 tokens  ->  median injected  1,439 tokens
+median reduction   75.4%             aggregate        86.4%
+by route           R0 54.5%   R1 70.4%   R2 90.8%
 ```
 
 Reproduce it:
