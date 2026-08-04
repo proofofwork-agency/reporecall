@@ -82,6 +82,55 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm pack --dry-run
 
+  # The full test suite used to run on Ubuntu only, so publish.yml's release
+  # matrix was the first place it ever executed on Windows. That is how a whole
+  # class of defects reached a release gate: glob returns platform separators,
+  # and repo-relative paths are used as portable identity keys across search,
+  # routing and Merkle state, so on Windows every indexed path carried
+  # backslashes, call graphs came back empty, and trace queries silently
+  # degraded to broad search. `ignore` only matches forward slashes, so every
+  # node_modules/** pattern missed as well. None of it was visible on Linux.
+  # This job exists to make that class fail here instead of at publish time.
+  cross-platform-suite:
+    name: Full suite (${{ matrix.os }} / Node 22)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # Same split as the quality job, for the same WASM-memory reason, and
+      # deliberately the same shape so all three workflows stay comparable.
+      # Coverage is Ubuntu's job — this matrix is about platform behaviour, not
+      # line counts, so it runs the suite without instrumentation.
+      # shell: bash is mandatory here: windows-latest defaults to PowerShell,
+      # which cannot parse line continuations, `for` loops, or VAR=value
+      # command prefixes.
+      - name: Test suite (multi-language suites excluded)
+        shell: bash
+        run: |
+          npx vitest run \
+            --exclude 'test/integration/multilang-pipeline.test.ts' \
+            --exclude 'test/parser/multilang-chunker.test.ts'
+      - name: Multi-language suites (per-language shards)
+        shell: bash
+        run: |
+          for shard in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            MULTILANG_SHARDS=12 MULTILANG_SHARD=$shard \
+              npx vitest run test/integration/multilang-pipeline.test.ts
+            MULTILANG_SHARDS=12 MULTILANG_SHARD=$shard \
+              npx vitest run test/parser/multilang-chunker.test.ts
+          done
+      - run: npm run smoke
+
   native:
     name: Native + packed demo (${{ matrix.os }} / Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
