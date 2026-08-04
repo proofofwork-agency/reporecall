@@ -8,6 +8,7 @@ import { loadMemoryIgnore } from "../core/project.js";
 import {
   canonicalizeProjectRoot,
   resolveProjectPath,
+  toPosixPath,
 } from "../core/path-safety.js";
 
 export interface ScannedFile {
@@ -75,7 +76,10 @@ export async function scanFiles(config: MemoryConfig): Promise<ScannedFile[]> {
 
   const files: ScannedFile[] = [];
   for (const match of matches) {
-    if (ig.ignores(match)) continue;
+    // `ignore` implements gitignore semantics and only understands forward
+    // slashes, so a Windows separator makes every directory pattern
+    // (`node_modules/**`) silently miss. Normalize before testing.
+    if (ig.ignores(toPosixPath(match))) continue;
 
     const absolutePath = resolve(projectRoot, match);
     try {
@@ -90,7 +94,11 @@ export async function scanFiles(config: MemoryConfig): Promise<ScannedFile[]> {
 
       files.push({
         absolutePath: safePath.absolutePath,
-        relativePath: match,
+        // Identity, not a filesystem argument: this value becomes the Merkle
+        // state key and the chunk filePath, and is compared against
+        // slash-separated paths from git, fixtures and queries. glob returns the
+        // platform's separator, so take the portable form from the boundary.
+        relativePath: safePath.posixRelativePath,
         size: fileStat.size,
       });
     } catch {

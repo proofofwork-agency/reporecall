@@ -45,8 +45,19 @@ function makeSeed(
 
 describe("selectFocusedTraceBundle", () => {
   const dirs: string[] = [];
+  const stores: MetadataStore[] = [];
 
   afterEach(() => {
+    // Close before unlinking: Windows refuses to delete a file that still has
+    // an open handle, so leaking the sqlite connection turns cleanup into EBUSY.
+    for (const store of stores) {
+      try {
+        store.close();
+      } catch {
+        // already closed
+      }
+    }
+    stores.length = 0;
     for (const dir of dirs) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -58,6 +69,7 @@ describe("selectFocusedTraceBundle", () => {
     mkdirSync(dir, { recursive: true });
     dirs.push(dir);
     const store = new MetadataStore(dir);
+    stores.push(store);
     for (const chunk of chunks) {
       store.upsertFile(chunk.filePath, chunk.id);
       store.upsertChunk(chunk);

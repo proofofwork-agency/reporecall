@@ -24,6 +24,23 @@ Reporecall helps Claude Code, Codex, Cline, Aider and other agents work more eff
 - **Persistent local memory** — rules, facts and working notes that survive across sessions.
 - **Zero cloud by default** — no external vector DB, no recurring costs, works completely offline.
 
+### Measured, not asserted
+
+Every number below is produced by a command you can run, backed by a committed
+artifact, and registered in `quality/claims.json`. Anything we haven't measured
+says `insufficient_evidence` instead of guessing.
+
+| | |
+|---|---|
+| Getting the answering evidence in front of the model costs a median of 75.8% fewer tokens than reading the relevant files whole <!-- claim:context_cost_median_reduction --> | `npm run benchmark:context-cost` |
+| Retrieval holds 91.6% context precision and 95.6% recall at 8.4% pollution, with 100% route accuracy and zero high-confidence-wrong answers <!-- claim:retrieval_gates --> | `npm run benchmark:project-context` |
+
+Both measured on a real 1,306-file / 5,591-chunk codebase over 30 pre-registered
+queries, with **no model calls** — so you can reproduce them exactly. The token
+figure is context-assembly cost, not end-to-end agent tokens; we don't publish an
+end-to-end number because we haven't earned one yet. See
+[Benchmarking & Token Evidence](#benchmarking--token-evidence).
+
 **v0.9.0 focus:** trustworthy retrieval evidence, unified project-boundary safety, deterministic quality gates, and behavior-preserving module decomposition.
 
 ### Standout Features

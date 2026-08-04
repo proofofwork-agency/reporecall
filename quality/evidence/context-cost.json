@@ -2,7 +2,7 @@
   "schemaVersion": "reporecall-evidence/v1",
   "evidenceKind": "paired-context-cost",
   "repoRecallVersion": "0.9.0",
-  "generatedAt": "2026-08-04T14:26:22.298Z",
+  "generatedAt": "2026-08-04T14:52:01.829Z",
   "status": "measured",
   "method": {
     "modelCalls": 0,

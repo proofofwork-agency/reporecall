@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { detectProjectRoot } from '../core/project.js'
 import { loadConfig } from '../core/config.js'
+import { toPosixPath } from '../core/path-safety.js'
 import { homedir } from 'os'
 
 export function initCommand(): Command {
@@ -128,10 +129,16 @@ export function initCommand(): Command {
         // will reject it, which is safe.
         // Prefer $CLAUDE_PROJECT_DIR, but fall back to $PWD for headless
         // Claude entrypoints that do not propagate the stable project-dir env.
-        const tokenRelPath = relative(projectRoot, tokenPath)
-        const warningRelPath = relative(projectRoot, hookWarningPath)
+        // These are interpolated into a shell command, so they must use forward
+        // slashes on every platform — a Windows separator would both break the
+        // path and be read as an escape by the shell.
+        const tokenRelPath = toPosixPath(relative(projectRoot, tokenPath))
+        const warningRelPath = toPosixPath(relative(projectRoot, hookWarningPath))
         for (const relPath of [tokenRelPath, warningRelPath]) {
-          if (/^[-\w./\\]+$/.test(relPath)) continue
+          // No backslash: the path is normalized to forward slashes above, so a
+          // remaining backslash is a literal one in a filename — which the shell
+          // would read as an escape.
+          if (/^[-\w./]+$/.test(relPath)) continue
           console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
           process.exit(1)
         }

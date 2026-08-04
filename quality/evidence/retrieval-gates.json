@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "reporecall-evidence/v1",
+  "evidenceKind": "retrieval-gates",
+  "repoRecallVersion": "0.9.0",
+  "generatedAt": "2026-08-04T14:52:52.986Z",
+  "status": "measured",
+  "method": {
+    "harness": "npm run benchmark:project-context -- --reporecall-only",
+    "gateSource": "scripts/benchmarks/project-context-audit-lib.ts buildSummary",
+    "mode": "reporecall-only",
+    "modelCalls": 0,
+    "note": "Deterministic retrieval measurement against a real repository. Redacted: aggregate metrics and cohort size only, no query text, file names or source."
+  },
+  "privacy": {
+    "redactedByDefault": true,
+    "containsSource": false,
+    "containsPrompts": false,
+    "containsAbsolutePaths": false,
+    "containsFileNames": false,
+    "containsRepositoryName": false
+  },
+  "cohortSize": 30,
+  "pass": true,
+  "gates": {
+    "contextPrecision": {
+      "measured": 0.916,
+      "bar": 0.6,
+      "comparison": ">="
+    },
+    "contextRecall": {
+      "measured": 0.956,
+      "bar": 0.85,
+      "comparison": ">="
+    },
+    "pollutionRatio": {
+      "measured": 0.084,
+      "bar": 0.1,
+      "comparison": "<="
+    },
+    "routeAccuracy": {
+      "measured": 1,
+      "bar": 0.9,
+      "comparison": ">="
+    },
+    "highConfidenceWrongRate": {
+      "measured": 0,
+      "bar": 0,
+      "comparison": "=="
+    },
+    "freshnessSignalingRate": {
+      "measured": 1,
+      "bar": 1,
+      "comparison": "=="
+    }
+  },
+  "tokenPollutionRatio": 0.093,
+  "byRoute": {
+    "R0": {
+      "queryCount": 10,
+      "routeMatchRate": 1,
+      "contextPrecision": 1,
+      "contextRecall": 1,
+      "pollutionRatio": 0
+    },
+    "R1": {
+      "queryCount": 10,
+      "routeMatchRate": 1,
+      "contextPrecision": 1,
+      "contextRecall": 1,
+      "pollutionRatio": 0
+    },
+    "R2": {
+      "queryCount": 10,
+      "routeMatchRate": 1,
+      "contextPrecision": 0.748,
+      "contextRecall": 0.868,
+      "pollutionRatio": 0.252
+    }
+  }
+}

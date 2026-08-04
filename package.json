@@ -75,7 +75,8 @@
     "demo": "node scripts/demo-project.mjs",
     "demo:packed": "node scripts/packed-demo.mjs",
     "prepublishOnly": "npm run typecheck && npm run lint && npm run coverage && npm run build",
-    "benchmark:context-cost": "tsx scripts/benchmarks/context-cost.ts"
+    "benchmark:context-cost": "tsx scripts/benchmarks/context-cost.ts",
+    "benchmark:retrieval-gates": "tsx scripts/benchmarks/retrieval-gates.ts"
   },
   "engines": {
     "node": ">=22"

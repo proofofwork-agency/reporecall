@@ -19,13 +19,23 @@
   "claims": [
     {
       "id": "context_cost_median_reduction",
-      "location": "README.md:385",
+      "location": "README.md:35",
       "artifact": "quality/evidence/context-cost.json",
       "repoRecallVersion": "0.9.0",
       "fixture": "benchmark/project-context-queries.json",
       "fixtureHash": "sha256:a525c0d0756e5afc3d66d48769359f8fa6478a4088775ff667ed0bc4677bea80",
       "cohortSize": 30,
-      "measuredAt": "2026-08-04T14:26:22.298Z"
+      "measuredAt": "2026-08-04T14:52:01.829Z"
+    },
+    {
+      "id": "retrieval_gates",
+      "location": "README.md:36",
+      "artifact": "quality/evidence/retrieval-gates.json",
+      "repoRecallVersion": "0.9.0",
+      "fixture": "benchmark/project-context-queries.json",
+      "fixtureHash": "sha256:a525c0d0756e5afc3d66d48769359f8fa6478a4088775ff667ed0bc4677bea80",
+      "cohortSize": 30,
+      "measuredAt": "2026-08-04T14:52:52.986Z"
     }
   ]
 }

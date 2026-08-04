@@ -12,6 +12,7 @@ import {
   canonicalizeProjectRoot,
   isProjectPathSafe,
   resolveProjectPath,
+  toPosixPath,
 } from "../../src/core/path-safety.js";
 
 describe("project path safety", () => {
@@ -144,5 +145,30 @@ describe("project path safety", () => {
     const missingRoot = join(sandbox, "missing-root");
     expect(resolveProjectPath(missingRoot, "src/new.ts", "allow-missing")).toBeNull();
     expect(isProjectPathSafe(missingRoot, "src/new.ts", "allow-missing")).toBe(false);
+  });
+
+  it("exposes a portable relative path alongside the platform one", () => {
+    const nested = join(projectRoot, "src", "nested.ts");
+    writeFileSync(nested, "export const nested = 1;\n");
+
+    const result = resolveProjectPath(projectRoot, nested, "existing");
+
+    // Identity form: never carries a platform separator, on any host.
+    expect(result?.posixRelativePath).toBe("src/nested.ts");
+    expect(result?.posixRelativePath).not.toContain("\\");
+  });
+
+  describe("toPosixPath", () => {
+    // The separator is injected so both branches are covered on either host.
+    it("rewrites separators when the platform uses backslashes", () => {
+      expect(toPosixPath("lib\\util\\helper.ts", "\\")).toBe("lib/util/helper.ts");
+    });
+
+    it("leaves values untouched when the platform uses forward slashes", () => {
+      // On POSIX a backslash is a legal filename character, so rewriting it
+      // would merge two genuinely distinct files.
+      expect(toPosixPath("lib/util/helper.ts", "/")).toBe("lib/util/helper.ts");
+      expect(toPosixPath("odd\\name.ts", "/")).toBe("odd\\name.ts");
+    });
   });
 });

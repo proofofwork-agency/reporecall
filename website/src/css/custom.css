@@ -1,123 +1,685 @@
-/* Reporecall docs theme */
+/**
+ * Reporecall design system.
+ *
+ * Visual thesis: this is an instrument. It measures a codebase and reports
+ * honestly about its own freshness, so the surface reads like precision
+ * telemetry — tight editorial headlines, monospaced data, one cool accent, and
+ * one warm accent reserved exclusively for the staleness/trust story so colour
+ * itself carries meaning.
+ *
+ * Motion is CSS-only (no animation dependency) and fully disabled under
+ * prefers-reduced-motion.
+ */
+
+/* ── Tokens ──────────────────────────────────────────────────────────── */
 
 :root {
-  --ifm-color-primary: #4f46e5;
-  --ifm-color-primary-dark: #4338ca;
-  --ifm-color-primary-darker: #3730a3;
-  --ifm-color-primary-darkest: #312e81;
-  --ifm-color-primary-light: #6366f1;
-  --ifm-color-primary-lighter: #818cf8;
-  --ifm-color-primary-lightest: #a5b4fc;
-  --ifm-code-font-size: 95%;
-  --ifm-font-family-monospace: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
-  --docusaurus-highlight-code-line-bg: rgba(0, 0, 0, 0.08);
+  --rr-accent: #0d9488;
+  --rr-accent-bright: #14b8a6;
+  --rr-accent-dim: rgba(13, 148, 136, 0.12);
+  --rr-warn: #b45309;
+  --rr-warn-dim: rgba(180, 83, 9, 0.12);
+  --rr-ink: #0b1220;
+  --rr-ink-soft: #475569;
+  --rr-surface: #ffffff;
+  --rr-surface-2: #f6f8fa;
+  --rr-surface-3: #eef2f6;
+  --rr-line: rgba(11, 18, 32, 0.1);
+  --rr-glow: rgba(13, 148, 136, 0.18);
+
+  --rr-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+  --rr-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Fluid editorial scale — large headline, tight leading. */
+  --rr-step-hero: clamp(2.6rem, 6.5vw, 4.6rem);
+  --rr-step-h2: clamp(1.85rem, 3.6vw, 2.7rem);
+  --rr-step-lead: clamp(1.06rem, 1.7vw, 1.3rem);
+
+  --ifm-color-primary: #0d9488;
+  --ifm-color-primary-dark: #0c847a;
+  --ifm-color-primary-darker: #0b7c72;
+  --ifm-color-primary-darkest: #09665e;
+  --ifm-color-primary-light: #0ea496;
+  --ifm-color-primary-lighter: #0fac9d;
+  --ifm-color-primary-lightest: #14c2b2;
+  --ifm-font-family-base: var(--rr-sans);
+  --ifm-font-family-monospace: var(--rr-mono);
+  --ifm-code-font-size: 92%;
+  --ifm-heading-font-weight: 680;
+  --ifm-navbar-shadow: none;
+  --docusaurus-highlight-code-line-bg: rgba(13, 148, 136, 0.12);
+  --docusaurus-highlighted-code-line-bg: rgba(13, 148, 136, 0.12);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #818cf8;
-  --ifm-color-primary-dark: #6366f1;
-  --ifm-color-primary-darker: #4f46e5;
-  --ifm-color-primary-darkest: #4338ca;
-  --ifm-color-primary-light: #a5b4fc;
-  --ifm-color-primary-lighter: #c7d2fe;
-  --ifm-color-primary-lightest: #e0e7ff;
-  --docusaurus-highlight-code-line-bg: rgba(0, 0, 0, 0.3);
+  --rr-accent: #2dd4bf;
+  --rr-accent-bright: #5eead4;
+  --rr-accent-dim: rgba(45, 212, 191, 0.14);
+  --rr-warn: #fbbf24;
+  --rr-warn-dim: rgba(251, 191, 36, 0.14);
+  --rr-ink: #e8eef6;
+  --rr-ink-soft: #94a3b8;
+  --rr-surface: #080c14;
+  --rr-surface-2: #0d1420;
+  --rr-surface-3: #131c2b;
+  --rr-line: rgba(232, 238, 246, 0.11);
+  --rr-glow: rgba(45, 212, 191, 0.2);
+
+  --ifm-color-primary: #2dd4bf;
+  --ifm-color-primary-dark: #26bfac;
+  --ifm-color-primary-darker: #23b4a3;
+  --ifm-color-primary-darkest: #1c9486;
+  --ifm-color-primary-light: #45dac8;
+  --ifm-color-primary-lighter: #52ddcd;
+  --ifm-color-primary-lightest: #79e6da;
+  --ifm-background-color: #080c14;
+  --ifm-background-surface-color: #0d1420;
+  --docusaurus-highlight-code-line-bg: rgba(45, 212, 191, 0.16);
+  --docusaurus-highlighted-code-line-bg: rgba(45, 212, 191, 0.16);
 }
 
-/* ---- Homepage hero ---- */
-.heroBanner {
-  padding: 5rem 0 4rem;
-  text-align: center;
-  color: #fff;
-  background: linear-gradient(
-    135deg,
-    var(--ifm-color-primary-darkest),
-    var(--ifm-color-primary)
-  );
+html {
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────── */
+
+.rrHero {
+  position: relative;
   overflow: hidden;
+  padding: clamp(3.5rem, 9vw, 7rem) 0 clamp(3rem, 7vw, 5rem);
+  background: var(--rr-surface);
+  border-bottom: 1px solid var(--rr-line);
 }
 
-.heroTitle {
-  font-size: 3.2rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin-bottom: 0.5rem;
+/* Faint engineering grid plus a slow accent bloom. Purely decorative. */
+.rrHero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--rr-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rr-line) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 60% at 50% 0%, #000 20%, transparent 78%);
+  mask-image: radial-gradient(ellipse 75% 60% at 50% 0%, #000 20%, transparent 78%);
+  opacity: 0.55;
+  pointer-events: none;
 }
 
-.heroSubtitle {
-  font-size: 1.3rem;
-  opacity: 0.95;
-  max-width: 720px;
-  margin: 0 auto 1.75rem;
-  line-height: 1.5;
+.rrHero::after {
+  content: '';
+  position: absolute;
+  top: -34%;
+  left: 50%;
+  width: min(1100px, 130%);
+  aspect-ratio: 2 / 1;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, var(--rr-glow), transparent 66%);
+  filter: blur(14px);
+  pointer-events: none;
+  animation: rrBloom 14s ease-in-out infinite;
 }
 
-.heroButtons {
+@keyframes rrBloom {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateX(-50%) scale(1.07);
+  }
+}
+
+.rrHeroInner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: clamp(2rem, 5vw, 4rem);
+  align-items: center;
+}
+
+@media (max-width: 996px) {
+  .rrHeroInner {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rrEyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.34rem 0.8rem;
+  margin-bottom: 1.35rem;
+  border: 1px solid var(--rr-line);
+  border-radius: 999px;
+  background: var(--rr-accent-dim);
+  color: var(--rr-accent);
+  font-family: var(--rr-mono);
+  font-size: 0.735rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rrPulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rr-accent);
+  animation: rrPulse 2.4s ease-out infinite;
+}
+
+@keyframes rrPulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--rr-glow);
+  }
+  70% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.rrHeroTitle {
+  margin: 0 0 1.15rem;
+  font-size: var(--rr-step-hero);
+  line-height: 1.02;
+  letter-spacing: -0.033em;
+  font-weight: 730;
+  color: var(--rr-ink);
+  text-wrap: balance;
+}
+
+.rrHeroTitle em {
+  font-style: normal;
+  background: linear-gradient(100deg, var(--rr-accent), var(--rr-accent-bright));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.rrHeroLead {
+  max-width: 40rem;
+  margin: 0 0 1.9rem;
+  font-size: var(--rr-step-lead);
+  line-height: 1.62;
+  color: var(--rr-ink-soft);
+}
+
+.rrHeroLead strong {
+  color: var(--rr-ink);
+  font-weight: 620;
+}
+
+.rrCta {
   display: flex;
-  gap: 1rem;
-  justify-content: center;
   flex-wrap: wrap;
-}
-
-.heroButtons .button--outline {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.7);
-}
-
-.heroButtons .button--outline:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border-color: #fff;
-}
-
-.heroInstall {
-  margin-top: 2rem;
-  display: inline-block;
-  background: rgba(0, 0, 0, 0.35);
-  padding: 0.6rem 1.1rem;
-  border-radius: 8px;
-  font-family: var(--ifm-font-family-monospace);
-  font-size: 0.95rem;
-}
-
-/* ---- Feature cards ---- */
-.featuresSection {
-  padding: 3.5rem 0 2rem;
-}
-
-.featureCard {
-  height: 100%;
-  padding: 1.5rem;
-  border: 1px solid var(--ifm-color-emphasis-200);
-  border-radius: 12px;
-  background: var(--ifm-background-surface-color);
-  transition: border-color 0.2s ease, transform 0.2s ease;
-}
-
-.featureCard:hover {
-  border-color: var(--ifm-color-primary);
-  transform: translateY(-3px);
-}
-
-.featureCard h3 {
-  margin-bottom: 0.5rem;
-  font-size: 1.15rem;
-}
-
-.featureCard p {
-  margin-bottom: 0;
-  color: var(--ifm-color-emphasis-700);
-}
-
-.col--4 {
+  gap: 0.8rem;
   margin-bottom: 1.5rem;
 }
 
-@media (max-width: 768px) {
-  .heroTitle {
-    font-size: 2.4rem;
+.rrBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.78rem 1.4rem;
+  border-radius: 10px;
+  font-weight: 620;
+  font-size: 0.95rem;
+  text-decoration: none;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.rrBtnPrimary {
+  background: var(--rr-accent);
+  color: #fff;
+  box-shadow: 0 8px 22px -10px var(--rr-accent);
+}
+
+[data-theme='dark'] .rrBtnPrimary {
+  color: #04120f;
+}
+
+.rrBtnPrimary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px -12px var(--rr-accent);
+  color: #fff;
+  text-decoration: none;
+}
+
+[data-theme='dark'] .rrBtnPrimary:hover {
+  color: #04120f;
+}
+
+.rrBtnGhost {
+  border: 1px solid var(--rr-line);
+  color: var(--rr-ink);
+  background: transparent;
+}
+
+.rrBtnGhost:hover {
+  transform: translateY(-2px);
+  border-color: var(--rr-accent);
+  color: var(--rr-accent);
+  text-decoration: none;
+}
+
+.rrInstall {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.62rem 0.9rem;
+  border: 1px dashed var(--rr-line);
+  border-radius: 9px;
+  background: var(--rr-surface-2);
+  font-family: var(--rr-mono);
+  font-size: 0.855rem;
+  color: var(--rr-ink);
+}
+
+.rrInstall span {
+  color: var(--rr-accent);
+  user-select: none;
+}
+
+/* ── Evidence-flow panel ─────────────────────────────────────────────── */
+
+.rrFlow {
+  position: relative;
+  border: 1px solid var(--rr-line);
+  border-radius: 14px;
+  background: var(--rr-surface-2);
+  box-shadow: 0 26px 60px -34px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.rrFlowBar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.62rem 0.9rem;
+  border-bottom: 1px solid var(--rr-line);
+  background: var(--rr-surface-3);
+}
+
+.rrDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rr-line);
+}
+
+.rrFlowTitle {
+  margin-left: 0.4rem;
+  font-family: var(--rr-mono);
+  font-size: 0.735rem;
+  color: var(--rr-ink-soft);
+}
+
+.rrFlowBody {
+  padding: 1.1rem 1.15rem 1.25rem;
+}
+
+.rrStep {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+  font-family: var(--rr-mono);
+  font-size: 0.795rem;
+  line-height: 1.5;
+  color: var(--rr-ink);
+  opacity: 0;
+  animation: rrStepIn 0.5s ease forwards;
+}
+
+.rrStep:nth-child(1) {
+  animation-delay: 0.1s;
+}
+.rrStep:nth-child(2) {
+  animation-delay: 0.5s;
+}
+.rrStep:nth-child(3) {
+  animation-delay: 0.9s;
+}
+.rrStep:nth-child(4) {
+  animation-delay: 1.3s;
+}
+
+@keyframes rrStepIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
   }
-  .heroSubtitle {
-    font-size: 1.1rem;
+  to {
+    opacity: 1;
+    transform: none;
   }
+}
+
+.rrStepMark {
+  color: var(--rr-accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rrStepNote {
+  display: block;
+  color: var(--rr-ink-soft);
+}
+
+.rrLedger {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 0.55rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--rr-line);
+}
+
+.rrLedgerValue {
+  display: block;
+  font-family: var(--rr-mono);
+  font-size: 1.28rem;
+  font-weight: 700;
+  color: var(--rr-accent);
+  letter-spacing: -0.02em;
+}
+
+.rrLedgerValue.rrStruck {
+  color: var(--rr-ink-soft);
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+.rrLedgerLabel {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--rr-mono);
+  font-size: 0.665rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--rr-ink-soft);
+}
+
+/* ── Sections ────────────────────────────────────────────────────────── */
+
+.rrSection {
+  padding: clamp(3.2rem, 7vw, 5.4rem) 0;
+}
+
+.rrSectionAlt {
+  background: var(--rr-surface-2);
+  border-top: 1px solid var(--rr-line);
+  border-bottom: 1px solid var(--rr-line);
+}
+
+.rrSectionHead {
+  max-width: 46rem;
+  margin-bottom: clamp(1.8rem, 4vw, 2.8rem);
+}
+
+.rrKicker {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-family: var(--rr-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--rr-accent);
+}
+
+.rrSectionTitle {
+  margin: 0 0 0.85rem;
+  font-size: var(--rr-step-h2);
+  line-height: 1.14;
+  letter-spacing: -0.024em;
+  color: var(--rr-ink);
+  text-wrap: balance;
+}
+
+.rrSectionLead {
+  margin: 0;
+  color: var(--rr-ink-soft);
+  font-size: 1.03rem;
+  line-height: 1.65;
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+
+.rrGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(266px, 1fr));
+  gap: 1rem;
+}
+
+.rrCard {
+  position: relative;
+  padding: 1.45rem 1.4rem;
+  border: 1px solid var(--rr-line);
+  border-radius: 13px;
+  background: var(--rr-surface);
+  transition:
+    transform 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.rrCard:hover {
+  transform: translateY(-3px);
+  border-color: var(--rr-accent);
+  box-shadow: 0 18px 38px -24px var(--rr-glow);
+}
+
+/* Accent hairline that draws in on hover. */
+.rrCard::after {
+  content: '';
+  position: absolute;
+  left: 1.4rem;
+  right: 1.4rem;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--rr-accent), transparent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.32s ease;
+}
+
+.rrCard:hover::after {
+  transform: scaleX(1);
+}
+
+.rrCardIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 0.9rem;
+  border-radius: 9px;
+  background: var(--rr-accent-dim);
+  color: var(--rr-accent);
+  font-family: var(--rr-mono);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.rrCardTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.055rem;
+  font-weight: 650;
+  color: var(--rr-ink);
+}
+
+.rrCardBody {
+  margin: 0;
+  font-size: 0.925rem;
+  line-height: 1.62;
+  color: var(--rr-ink-soft);
+}
+
+.rrCardBody code {
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  background: var(--rr-surface-3);
+  font-size: 0.86em;
+}
+
+/* ── Trust chips ─────────────────────────────────────────────────────── */
+
+.rrChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.4rem;
+}
+
+.rrChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.78rem;
+  border-radius: 8px;
+  border: 1px solid var(--rr-line);
+  font-family: var(--rr-mono);
+  font-size: 0.775rem;
+  background: var(--rr-surface);
+}
+
+.rrChipFresh {
+  color: var(--rr-accent);
+  border-color: var(--rr-accent);
+  background: var(--rr-accent-dim);
+}
+
+.rrChipStale {
+  color: var(--rr-warn);
+  border-color: var(--rr-warn);
+  background: var(--rr-warn-dim);
+}
+
+.rrChipEmpty {
+  color: var(--rr-ink-soft);
+}
+
+/* ── Proof table ─────────────────────────────────────────────────────── */
+
+.rrProof {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.rrProof th,
+.rrProof td {
+  padding: 0.82rem 0.9rem;
+  text-align: left;
+  border-bottom: 1px solid var(--rr-line);
+}
+
+.rrProof th {
+  font-family: var(--rr-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--rr-ink-soft);
+  font-weight: 600;
+}
+
+.rrProof td:first-child {
+  color: var(--rr-ink);
+}
+
+.rrProof tbody tr:hover {
+  background: var(--rr-accent-dim);
+}
+
+.rrMetric {
+  font-family: var(--rr-mono);
+  font-weight: 700;
+  color: var(--rr-accent);
+}
+
+.rrBar {
+  font-family: var(--rr-mono);
+  font-size: 0.82rem;
+  color: var(--rr-ink-soft);
+}
+
+.rrCaption {
+  margin-top: 1.15rem;
+  font-size: 0.875rem;
+  line-height: 1.62;
+  color: var(--rr-ink-soft);
+}
+
+.rrScroll {
+  overflow-x: auto;
+}
+
+/* ── Closing band ────────────────────────────────────────────────────── */
+
+.rrClose {
+  padding: clamp(3.2rem, 7vw, 5rem) 0;
+  border-top: 1px solid var(--rr-line);
+  background:
+    radial-gradient(ellipse 70% 130% at 50% 0%, var(--rr-accent-dim), transparent 70%),
+    var(--rr-surface);
+  text-align: center;
+}
+
+.rrCloseTitle {
+  margin: 0 0 0.85rem;
+  font-size: var(--rr-step-h2);
+  letter-spacing: -0.024em;
+  color: var(--rr-ink);
+}
+
+.rrCloseLead {
+  max-width: 34rem;
+  margin: 0 auto 1.7rem;
+  color: var(--rr-ink-soft);
+  line-height: 1.65;
+}
+
+.rrClose .rrCta {
+  justify-content: center;
+}
+
+/* ── Motion & a11y ───────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .rrHero::after,
+  .rrPulse {
+    animation: none;
+  }
+  .rrStep {
+    opacity: 1;
+    animation: none;
+  }
+  .rrCard,
+  .rrBtn,
+  .rrCard::after {
+    transition: none;
+  }
+  .rrCard:hover,
+  .rrBtn:hover {
+    transform: none;
+  }
+}
+
+:where(a, button):focus-visible {
+  outline: 2px solid var(--rr-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
 }
