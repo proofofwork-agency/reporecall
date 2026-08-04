@@ -486,5 +486,14 @@ console.log(`\n${'═'.repeat(54)}`);
 console.log(`  ${passed}/${total} passed${failed > 0 ? `  (${failed} failed)` : '  ✓'}`);
 console.log(`${'═'.repeat(54)}`);
 
-rmSync(PROJECT, { recursive: true, force: true });
+// Best-effort cleanup of a temp directory. On Windows the daemon we just stopped
+// was terminated abruptly (no POSIX signals), so the OS can still hold handles
+// for a moment and rmSync raises EPERM. Retry, then give up quietly: failing to
+// delete a temp directory says nothing about whether the product works, and
+// throwing here would fail an otherwise green smoke run.
+try {
+  rmSync(PROJECT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+} catch (err) {
+  console.log(`  note: could not remove ${PROJECT} (${err.code ?? err.message})`);
+}
 process.exit(failed > 0 ? 1 : 0);
