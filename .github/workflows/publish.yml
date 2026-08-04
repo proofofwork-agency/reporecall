@@ -51,6 +51,18 @@ jobs:
           MULTILANG_SHARDS: "3"
           MULTILANG_SHARD: "3"
       - run: npx vitest run test/parser/multilang-chunker.test.ts
+        if: matrix.node == 22
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check

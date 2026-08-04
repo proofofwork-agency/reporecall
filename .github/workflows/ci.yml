@@ -66,8 +66,21 @@ jobs:
         env:
           MULTILANG_SHARDS: "3"
           MULTILANG_SHARD: "3"
-      # Chunker only parses — no pipelines or stores — so a fresh process is enough.
+      # Chunker is sharded the same way: even parse-only, all 22 grammars in one
+      # process is past the Node 24 ceiling (2 + 10 + 10 = 22, the full file).
       - run: npx vitest run test/parser/multilang-chunker.test.ts
+        if: matrix.node == 22
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check
