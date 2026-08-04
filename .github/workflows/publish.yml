@@ -34,7 +34,11 @@ jobs:
       # Matches ci.yml: the pipeline suite is sharded across processes
       # (2 + 11 + 11 = 24, the full file) because one Node 24 process cannot hold
       # all 22 grammars plus a pipeline per language.
+      # See ci.yml: the two all-languages tests need one process to hold every
+      # grammar plus a full pipeline, which does not fit on a Node 24 runner.
+      # Gate them on Node 22; Node 24 gates everything else.
       - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        if: matrix.node == 22
         env:
           MULTILANG_SHARDS: "3"
           MULTILANG_SHARD: "1"
