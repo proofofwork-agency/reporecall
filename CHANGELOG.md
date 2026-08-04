@@ -18,7 +18,10 @@ CI job that would have caught it and a documentation site with search.
   result was a stale chunk reporting itself as fresh, which is precisely what the
   Trust Contract exists to prevent. A file whose mtime is younger than the
   coarsest granularity we might be sitting on now records a "do not trust this
-  timestamp" marker and is re-hashed once on the next scan.
+  timestamp" marker and is re-hashed on the next scan. That costs a read, not
+  parse or embed work: on a 2,000-file repository a no-change re-index still
+  processes 0 files and creates 0 chunks (`npm run stress:large-repo:ci`, which
+  fails outright if a no-change pass touches any file).
 
 ### Added
 
