@@ -9,7 +9,7 @@
           |_|
 ```
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/) [![MCP](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/) [![MCP](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io/)
 
 **Local-first context + memory for coding agents**  
 Automatic injection + an explicit **Trust Contract** so agents (and you) always know when the context is fresh.

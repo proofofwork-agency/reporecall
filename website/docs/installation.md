@@ -8,7 +8,7 @@ sidebar_position: 2
 
 ## Requirements
 
-- **Node.js >= 20** (see `engines` in `package.json`).
+- **Node.js >= 22** (see `engines` in `package.json`).
 - A Unix-compatible shell for Claude Code hooks. On Windows the generated hooks use `curl`/`cat`, so **Git Bash or WSL must be on your PATH**.
 - No cloud account or API key is required for the default (local) provider.
 

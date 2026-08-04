@@ -39,11 +39,18 @@ evidence, project-boundary safety, and release verification.
   lookup precision. Overview pages are still injected in full for breadth
   queries, where they are the point.
 
+### Breaking
+
+- **Node 22 is now the minimum supported runtime** (was Node 20). Node 20
+  reached end-of-life, and `better-sqlite3` 12.9+ no longer ships Node 20
+  prebuilds for Windows, so a Node 20 install could silently fall back to
+  compiling from source and fail without a local toolchain. Upgrade to Node 22
+  or newer before installing.
+
 ### Compatibility
 
 - The existing CLI commands, six public MCP tools, config contracts, JSON
   contracts, and package exports remain compatible.
-- Node 20 remains the minimum supported runtime.
 - All data remains local; evidence exports are explicit and redacted by
   default.
 

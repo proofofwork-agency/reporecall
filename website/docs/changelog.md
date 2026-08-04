@@ -20,6 +20,9 @@ sidebar_position: 9
   package façades.
 - Fixed precise lookups injecting unrelated wiki overview pages that matched on
   a single shared token; breadth queries still receive them in full.
+- **Breaking:** Node 22 is now the minimum supported runtime. Node 20 is
+  end-of-life and `better-sqlite3` 12.9+ dropped its Windows prebuilds, so a
+  Node 20 install could fall back to a source build.
 
 See the root CHANGELOG for details.
 
