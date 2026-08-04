@@ -10,19 +10,6 @@ export default defineConfig({
     // are excluded from the default `npm test` run and executed in isolation
     // via the dedicated `npm run benchmark:memory` / stress scripts.
     exclude: ["**/node_modules/**", "**/dist/**", "test/benchmark/**"],
-    poolOptions: {
-      forks: {
-        // Every worker loads tree-sitter WASM, lancedb and sqlite, and the
-        // parser/deep-call-chain suites build very large inputs on top of that.
-        // Under V8 coverage the CI runners die with "Fatal process out of
-        // memory: Zone" — a V8 parser/compiler allocator failure driven by
-        // total process memory, not by the old-space cap (raising
-        // --max-old-space-size made it strictly worse: two concurrent workers
-        // with larger heaps produced two OOMs instead of one). Serialize in CI
-        // so one worker has the whole runner. The full suite still runs.
-        maxForks: process.env.CI ? 1 : undefined,
-      },
-    },
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "lcov"],

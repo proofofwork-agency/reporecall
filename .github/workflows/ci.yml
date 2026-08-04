@@ -32,7 +32,15 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm run coverage
+      # test/integration/multilang-pipeline.test.ts loads tree-sitter WASM
+      # grammars for every supported language. Vitest reuses worker processes
+      # across files and WASM memory is not released with the module registry,
+      # so on Node 24 that file tips an already-loaded worker over with "Fatal
+      # process out of memory: Zone". Give it a fresh process of its own; both
+      # steps together still run the whole suite, and the split costs no
+      # coverage (the file exercises paths already covered elsewhere).
+      - run: npm run coverage -- --exclude 'test/integration/multilang-pipeline.test.ts'
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
       - run: npm run build
       - run: npm run smoke
       - run: npm run quality:check
