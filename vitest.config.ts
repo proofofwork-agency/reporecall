@@ -10,6 +10,16 @@ export default defineConfig({
     // are excluded from the default `npm test` run and executed in isolation
     // via the dedicated `npm run benchmark:memory` / stress scripts.
     exclude: ["**/node_modules/**", "**/dist/**", "test/benchmark/**"],
+    poolOptions: {
+      forks: {
+        // Every worker loads tree-sitter WASM, lancedb and sqlite, so peak
+        // memory scales with worker count. At the default of one fork per core
+        // the 4-core CI runners die with "Fatal process out of memory: Zone"
+        // once V8 coverage instrumentation is added on top. Cap concurrency in
+        // CI only — the whole suite still runs, just less of it at once.
+        maxForks: process.env.CI ? 2 : undefined,
+      },
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "lcov"],
