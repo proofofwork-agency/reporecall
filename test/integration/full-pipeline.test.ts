@@ -321,6 +321,9 @@ describe("conventions analysis", () => {
 
     const report = analyzeConventions(store);
     expect(report.docstringCoverage).toBe(50);
+
+    store.setConventions(report);
+    expect(store.getConventions()?.docstringCoverage).toBe(50);
   });
 
   it("should store and retrieve conventions", () => {

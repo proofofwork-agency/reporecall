@@ -3,6 +3,51 @@ import { generateHTML } from "../../src/visualize/html-template.js";
 import type { DashboardData } from "../../src/visualize/types.js";
 
 describe("generateHTML", () => {
+  it.each([
+    "</script><script>globalThis.pwned = true</script>",
+    "</script\t><script>globalThis.pwned = true</script>",
+    "</script\n><script>globalThis.pwned = true</script>",
+    "</script/><script>globalThis.pwned = true</script>",
+    "</script ><script>globalThis.pwned = true</script>",
+  ])("safely embeds repository-controlled data containing %j", (projectName) => {
+    const data: DashboardData = {
+      meta: {
+        projectName,
+        generatedAt: "2026-05-09T00:00:00.000Z",
+        totalSymbols: 0,
+        totalFiles: 0,
+        totalEdges: 0,
+        communityCount: 0,
+        wikiPageCount: 0,
+        businessPageCount: 0,
+        productAreaCount: 0,
+        hubCount: 0,
+        surpriseCount: 0,
+      },
+      communities: [],
+      hubs: [],
+      surprises: [],
+      questions: [],
+      wikiPages: [],
+      wikiGraphNodes: [],
+      wikiGraphEdges: [],
+      businessPages: [],
+      productAreas: [],
+      chordMatrix: [],
+      chordLabels: [],
+      chordColors: [],
+    };
+
+    const html = generateHTML(data);
+    const embeddedData = html.match(/var DATA = (.+);\n/)?.[1];
+
+    expect(embeddedData).toBeDefined();
+    expect(embeddedData).not.toContain("<");
+    expect(embeddedData).not.toContain(">");
+    expect(embeddedData).not.toContain("&");
+    expect(JSON.parse(embeddedData!).meta.projectName).toBe(projectName);
+  });
+
   it("renders business pages in the lens dashboard", () => {
     const data: DashboardData = {
       meta: {

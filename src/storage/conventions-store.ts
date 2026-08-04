@@ -7,7 +7,7 @@ const ConventionsSchema = z.object({
     functions: z.enum(["camelCase", "snake_case", "PascalCase", "mixed"]),
     classes: z.enum(["camelCase", "snake_case", "PascalCase", "mixed"]),
   }),
-  docstringCoverage: z.number().min(0).max(1),
+  docstringCoverage: z.number().min(0).max(100),
   averageFunctionLength: z.number().min(0),
   medianFunctionLength: z.number().min(0),
   topCallTargets: z.array(z.string()),

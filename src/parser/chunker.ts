@@ -135,6 +135,23 @@ function extractDocstring(
   node: SyntaxNode,
   docTypes: string[]
 ): string | undefined {
+  // Python docstrings are the first statement inside a function/class body,
+  // unlike the leading comments used by the other supported languages.
+  const definition = node.type === "decorated_definition"
+    ? node.childForFieldName("definition") ?? node
+    : node;
+  if (docTypes.includes("expression_statement")) {
+    const firstStatement = definition.childForFieldName("body")?.namedChild(0);
+    if (
+      firstStatement
+      && docTypes.includes(firstStatement.type)
+      && firstStatement.namedChild(0)?.type === "string"
+    ) {
+      return firstStatement.text;
+    }
+    return undefined;
+  }
+
   const prev = node.previousNamedSibling;
   if (prev && docTypes.includes(prev.type)) {
     return prev.text;

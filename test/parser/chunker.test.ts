@@ -38,20 +38,26 @@ describe("chunker", () => {
     }
   });
 
-  it("should fall back to whole-file chunk for unsupported extensions", async () => {
-    // Create a temp file with unsupported extension - use the .py file with forced .txt treatment
-    // Actually, let's just test with a file that has no tree-sitter support
+  it("should chunk Python definitions and extract their docstrings", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.py"),
       FIXTURES
     );
 
-    // Python has tree-sitter support, so it should produce multiple chunks
     expect(chunks.length).toBeGreaterThan(0);
 
     const names = chunks.map((c) => c.name);
     expect(names.some((n) => n === "DatabaseConnection")).toBe(true);
     expect(names.some((n) => n === "create_tables")).toBe(true);
+
+    const databaseClass = chunks.find((chunk) => chunk.name === "DatabaseConnection");
+    const initMethod = chunks.find((chunk) => chunk.name === "__init__");
+    const connectMethod = chunks.find((chunk) => chunk.name === "connect");
+    const createTables = chunks.find((chunk) => chunk.name === "create_tables");
+    expect(databaseClass?.docstring).toBe('"""Manages database connections with connection pooling."""');
+    expect(initMethod?.docstring).toBeUndefined();
+    expect(connectMethod?.docstring).toBe('"""Establish a new database connection."""');
+    expect(createTables?.docstring).toBe('"""Create initial database tables."""');
   });
 
   it("should name Deno.serve() callback as serve_handler", async () => {

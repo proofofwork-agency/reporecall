@@ -1,10 +1,10 @@
 /**
- * Generates a self-contained HTML dashboard for the Reporecall Lens.
+ * Generates an HTML dashboard for the Reporecall Lens.
  * Embeds D3.js from CDN, all data inlined as JSON, dark theme.
  *
- * Security note: All data originates from local SQLite stores (not user web input).
- * String values are escaped via esc() before DOM insertion. This file is opened
- * locally in a browser, not served to external users.
+ * Security note: Indexed repository content is untrusted even though it comes
+ * from local SQLite stores. Inline JSON is escaped for a script-data context,
+ * and string values are escaped via esc() before DOM insertion.
  */
 
 import type { DashboardData } from "./types.js";
@@ -12,7 +12,12 @@ import { clientScript } from "./html-client-script.js";
 import { styles } from "./html-styles.js";
 
 export function generateHTML(data: DashboardData): string {
-  const dataJSON = JSON.stringify(data).replace(/<\/script>/gi, "<\\/script>");
+  const dataJSON = JSON.stringify(data)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
   const graphNotice = data.meta.graphDetails && !data.meta.graphDetails.included
     ? `<div class="legend-box graph-warning"><strong>Graph details skipped</strong> — Lens skipped graph-heavy chunk and call-edge loading because this index has ${data.meta.graphDetails.totalChunks} symbols and the graph cap is ${data.meta.graphDetails.maxGraphChunks}. Core stats, wiki, and business context remain available.</div>`
     : "";

@@ -324,6 +324,12 @@ await (async () => {
   ]);
   if (exitResult?.code === 0) {
     pass('serve graceful shutdown');
+  } else if (process.platform === 'win32' && exitResult !== null) {
+    // Windows has no POSIX signals. proc.kill('SIGTERM') maps to an abrupt
+    // TerminateProcess, so the daemon never gets to run its shutdown path and the
+    // exit code is not 0 by design. The contract under test simply does not exist
+    // on this platform; assert only that the process actually terminated.
+    pass('serve graceful shutdown (terminated; SIGTERM semantics are POSIX-only)');
   } else {
     if (exitResult === null) proc.kill('SIGKILL');
     fail(
