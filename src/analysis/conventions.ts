@@ -1,4 +1,9 @@
-import type { MetadataStore, ChunkLightweight } from "../storage/metadata-store.js";
+import type { ChunkLightweight } from "../storage/chunk-store.js";
+
+export interface ConventionsMetadata {
+  getChunksLightweight(): ChunkLightweight[];
+  getTopCallTargets(limit: number): string[];
+}
 
 export interface ConventionsReport {
   namingStyle: {
@@ -71,7 +76,7 @@ function median(values: number[]): number {
   return sorted[mid] ?? 0;
 }
 
-export function analyzeConventions(metadata: MetadataStore): ConventionsReport {
+export function analyzeConventions(metadata: ConventionsMetadata): ConventionsReport {
   const allChunks: ChunkLightweight[] = metadata.getChunksLightweight();
 
   const functionNames: string[] = [];

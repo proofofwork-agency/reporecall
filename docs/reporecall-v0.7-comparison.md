@@ -367,15 +367,10 @@ The README now explains this, but the CLI UX could still do more to guide users 
 
 ### The benchmark story is mixed
 
-The current keyword benchmark after the review fixes reports:
-
-| Metric | Current |
-| --- | ---: |
-| NDCG@10 | `0.396` |
-| MRR | `0.568` |
-| Route accuracy | `88.9%` |
-
-Those numbers are stable after the documentation and review fixes. They do not fully capture the new capability evidence behavior, because the benchmark is not solely a project-context recall audit.
+The original review recorded historical keyword-benchmark numbers, but its
+machine-readable artifact was not retained in this repository. It therefore
+cannot support a current numerical claim. New claims must point to a versioned
+artifact and fixture hash in `quality/claims.json`.
 
 The more important acceptance check for this release is whether trace and architecture questions get better file coverage without damaging lookup behavior.
 

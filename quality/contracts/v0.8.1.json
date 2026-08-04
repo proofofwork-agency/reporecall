@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "reporecall-contract-snapshot/v1",
+  "baselineVersion": "0.8.1",
+  "cliCommands": [
+    "init",
+    "index",
+    "search",
+    "serve",
+    "stats",
+    "graph",
+    "conventions",
+    "mcp",
+    "doctor",
+    "explain",
+    "lens"
+  ],
+  "additiveCliOptions": {
+    "stats": [
+      "--json",
+      "--output <file>"
+    ]
+  },
+  "mcpTools": [
+    "search_context",
+    "search_code",
+    "explain_flow",
+    "memory",
+    "refresh_context",
+    "get_stats"
+  ],
+  "package": {
+    "name": "@proofofwork-agency/reporecall",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "bin": {
+      "reporecall": "dist/memory.js",
+      "memory": "dist/memory.js"
+    }
+  },
+  "jsonContracts": [
+    "reporecall explain --json",
+    "reporecall lens --json",
+    "reporecall stats --json"
+  ]
+}

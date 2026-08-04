@@ -10,5 +10,24 @@ export default defineConfig({
     // are excluded from the default `npm test` run and executed in isolation
     // via the dedicated `npm run benchmark:memory` / stress scripts.
     exclude: ["**/node_modules/**", "**/dist/**", "test/benchmark/**"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.ts"],
+      exclude: ["src/index.ts"],
+      thresholds: {
+        statements: 66.38,
+        branches: 57.13,
+        functions: 71.67,
+        lines: 69.01,
+        "src/core/path-safety.ts": {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+      },
+    },
   },
 });

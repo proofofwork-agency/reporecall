@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -56,5 +56,21 @@ describe("VectorStore corruption recovery", () => {
     expect(predicates[0].match(/filePath =/g)).toHaveLength(25);
     expect(predicates[1].match(/filePath =/g)).toHaveLength(25);
     expect(predicates[2].match(/filePath =/g)).toHaveLength(10);
+  });
+
+  it("closes the cached table before closing its connection", async () => {
+    const store = new VectorStore(mkdtempSync(join(tmpdir(), "vs-test-")), 384);
+    const order: string[] = [];
+    (store as any).cachedTable = {
+      close: vi.fn(() => order.push("table")),
+    };
+    (store as any).dbPromise = Promise.resolve({
+      close: vi.fn(() => order.push("connection")),
+    });
+
+    await store.close();
+
+    expect(order).toEqual(["table", "connection"]);
+    expect((store as any).cachedTable).toBeUndefined();
   });
 });

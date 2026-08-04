@@ -3,11 +3,8 @@ import { IndexScheduler } from "../../src/daemon/scheduler.js";
 
 // 3I: IndexScheduler
 
-// Creates a mock pipeline that records calls and resolves after an optional delay
-function makeMockPipeline(opts: {
-  indexChangedDelay?: number;
-  removeFilesDelay?: number;
-} = {}): {
+// Creates a mock pipeline that records calls.
+function makeMockPipeline(): {
   pipeline: any;
   indexChangedCalls: string[][];
   removeFilesCalls: string[][];
@@ -17,16 +14,10 @@ function makeMockPipeline(opts: {
 
   const pipeline = {
     indexChanged: async (paths: string[]) => {
-      if (opts.indexChangedDelay) {
-        await new Promise((r) => setTimeout(r, opts.indexChangedDelay));
-      }
       indexChangedCalls.push([...paths]);
       return { filesProcessed: paths.length, chunksCreated: paths.length };
     },
     removeFiles: async (paths: string[]) => {
-      if (opts.removeFilesDelay) {
-        await new Promise((r) => setTimeout(r, opts.removeFilesDelay));
-      }
       removeFilesCalls.push([...paths]);
     },
   };
@@ -34,9 +25,15 @@ function makeMockPipeline(opts: {
   return { pipeline, indexChangedCalls, removeFilesCalls };
 }
 
-// Wait for the scheduler's internal flush to finish
-function waitForIdle(ms = 100): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => resolvePromise?.(),
+  };
 }
 
 describe("IndexScheduler (3I)", () => {
@@ -50,7 +47,7 @@ describe("IndexScheduler (3I)", () => {
       { path: "src/app.ts", type: "change" },
     ]);
 
-    await waitForIdle(200);
+    await scheduler.drain();
 
     // Should only pass src/app.ts once to indexChanged
     const allPaths = indexChangedCalls.flat();
@@ -71,7 +68,7 @@ describe("IndexScheduler (3I)", () => {
       { path: "src/temp.ts", type: "unlink" },
     ]);
 
-    await waitForIdle(200);
+    await scheduler.drain();
 
     // src/temp.ts was unlinked in the same batch, so it should go to deleteQueue
     const indexed = indexChangedCalls.flat();
@@ -91,7 +88,7 @@ describe("IndexScheduler (3I)", () => {
       { path: "src/gone.ts", type: "unlink" },
     ]);
 
-    await waitForIdle(200);
+    await scheduler.drain();
 
     expect(indexChangedCalls.length).toBe(0);
     const removed = removeFilesCalls.flat();
@@ -108,7 +105,7 @@ describe("IndexScheduler (3I)", () => {
       { path: "src/modified.ts", type: "change" },
     ]);
 
-    await waitForIdle(200);
+    await scheduler.drain();
 
     expect(removeFilesCalls.length).toBe(0);
     const indexed = indexChangedCalls.flat();
@@ -117,19 +114,32 @@ describe("IndexScheduler (3I)", () => {
   });
 
   it("should process items enqueued during processing (re-flush)", async () => {
-    // Use a delay to ensure second enqueue arrives while first is processing
-    const { pipeline, indexChangedCalls } = makeMockPipeline({ indexChangedDelay: 80 });
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const indexChangedCalls: string[][] = [];
+    let calls = 0;
+    const pipeline = {
+      indexChanged: async (paths: string[]) => {
+        indexChangedCalls.push([...paths]);
+        calls += 1;
+        if (calls === 1) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return { filesProcessed: paths.length, chunksCreated: paths.length };
+      },
+      removeFiles: async () => undefined,
+    };
     const scheduler = new IndexScheduler(pipeline as any);
 
     // First batch
     scheduler.enqueue([{ path: "src/file1.ts", type: "add" }]);
 
-    // Wait a bit, then enqueue a second batch while first is processing
-    await new Promise((r) => setTimeout(r, 20));
+    await firstStarted.promise;
     scheduler.enqueue([{ path: "src/file2.ts", type: "add" }]);
+    releaseFirst.resolve();
 
-    // Wait for both batches to complete
-    await waitForIdle(400);
+    await scheduler.drain();
 
     const allIndexed = indexChangedCalls.flat();
     expect(allIndexed).toContain("src/file1.ts");
@@ -146,7 +156,7 @@ describe("IndexScheduler (3I)", () => {
       { path: "src/flip.ts", type: "change" },
     ]);
 
-    await waitForIdle(200);
+    await scheduler.drain();
 
     // Should be indexed (change won over unlink), not deleted
     const indexed = indexChangedCalls.flat();

@@ -82,4 +82,4 @@ Optional semantic backends (`ollama`, `openai`) can be configured separately if 
 - [MCP Tools](./mcp-tools.md) — the six tools coding agents call.
 - [Configuration](./configuration.md) — `.memory/config.json`, providers, and the `OPENAI_API_KEY` security note.
 - [Architecture](./architecture.md), [Memory](./memory.md), [Lens](./lens.md).
-- [Competitive Positioning & Analysis](./competitive-positioning.md) — rating, matrix vs CodeGraph/Cline/Cognee/etc., and path to 9/10.
+- [Competitive Positioning & Analysis](./competitive-positioning.md) — current position, threat matrix, and path to external validation.

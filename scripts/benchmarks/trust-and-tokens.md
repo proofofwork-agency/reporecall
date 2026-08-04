@@ -1,4 +1,4 @@
-# Trust Contract + Token Savings Benchmark (Placeholder)
+# Trust Contract + Token Evidence
 
 This directory will contain reproducible measurements for:
 
@@ -7,17 +7,17 @@ This directory will contain reproducible measurements for:
 - Staleness detection accuracy (how often `get_stats` correctly flags drift)
 - Hook injection effectiveness
 
-## Current Claims (to be measured)
+## Current claim status
 
-- 40-70% context token savings on complex questions while preserving or improving answer quality
-- 100% of hook/MCP responses carry freshness metadata
-- Auto-refresh catches the majority of drift cases within the debounce window
+There is not yet enough paired external evidence for a token-savings claim.
+Fresh/stale/empty classification and auto-refresh behavior are release-gate
+targets, not published results. Missing measurements remain
+`insufficient_evidence`.
 
 ## How to Run
 
 ```bash
-# Example (to be implemented)
-node scripts/benchmarks/token-savings.js --repo /path/to/target --queries queries.json
+npm run benchmark:tokens -- --project /path/to/target --output /tmp/reporecall-evidence.json
 ```
 
 Contributions of real measurements + methodology on public or anonymized repos are extremely welcome. This is one of the highest-leverage things for adoption.

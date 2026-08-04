@@ -30,7 +30,7 @@ function createTestMetadata(db: Database.Database) {
     // Only expose the methods that buildStackTree actually uses
     asFacade(): Pick<
       MetadataStore,
-      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds" | "findChunksByFilePath" | "findTargetById" | "getImportsForFile"
+      "findCallers" | "findCallees" | "findCalleesForChunk" | "findChunksByNames" | "getChunksByIds" | "findChunksByFilePath" | "findTargetById" | "getImportsForFile" | "findImporterFiles" | "findImportByName"
     > {
       return {
         findCallers: (targetName: string, limit?: number, targetFilePath?: string, targetId?: string) =>
@@ -44,6 +44,8 @@ function createTestMetadata(db: Database.Database) {
         getChunksByIds: (ids: string[]) => chunks.getChunksByIds(ids),
         findChunksByFilePath: (filePath: string) => chunks.findChunksByFilePath(filePath),
         getImportsForFile: (filePath: string) => imports.getImportsForFile(filePath),
+        findImporterFiles: (filePath: string) => imports.findImporterFiles(filePath),
+        findImportByName: (name: string, filePath?: string) => imports.findImportByName(name, filePath),
         findTargetById: (_id: string) => undefined,
       };
     },
@@ -315,6 +317,62 @@ describe("buildStackTree", () => {
     expect(tree.downTree.some((node) => node.chunkId === "auth-utils")).toBe(true);
     expect(tree.downTree.some((node) => node.chunkId === "auth-page")).toBe(false);
     expect(tree.downTree.some((node) => node.chunkId === "cors")).toBe(false);
+  });
+
+  it("ranks a query-matching same-file implementation ahead of generic endpoint helpers", () => {
+    const seedChunk = makeChunk({ id: "seed", name: "serve_handler", filePath: "supabase/functions/upload-media/index.ts", kind: "arrow_function" });
+    const mimeHelper = makeChunk({ id: "mime", name: "detectMimeType", filePath: seedChunk.filePath, kind: "function_declaration" });
+    const archiveHelper = makeChunk({ id: "archive", name: "detectArchive", filePath: seedChunk.filePath, kind: "function_declaration" });
+    const authHelper = makeChunk({ id: "auth", name: "authenticateRequest", filePath: seedChunk.filePath, kind: "function_declaration" });
+    seedChunks(seedChunk, mimeHelper, archiveHelper, authHelper);
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: {
+        chunkId: "seed",
+        name: "serve_handler",
+        filePath: seedChunk.filePath,
+        kind: "arrow_function",
+        targetId: "endpoint:supabase/functions/upload-media/index.ts",
+        targetKind: "endpoint",
+      },
+      direction: "both",
+      query: "how does upload-media authenticate requests",
+    });
+
+    expect(tree.downTree[0]?.chunkId).toBe("auth");
+  });
+
+  it("follows unresolved path-alias imports by symbol name in both directions", () => {
+    const protectedRoute = makeChunk({ id: "protected", name: "ProtectedRoute", filePath: "src/components/ProtectedRoute.tsx", kind: "function_declaration" });
+    const useAuth = makeChunk({ id: "use-auth", name: "useAuth", filePath: "src/hooks/useAuth.tsx", kind: "function_declaration" });
+    const app = makeChunk({ id: "app", name: "App", filePath: "src/App.tsx", kind: "function_declaration" });
+    seedChunks(protectedRoute, useAuth, app);
+    seedImports([
+      {
+        filePath: protectedRoute.filePath,
+        importedName: "useAuth",
+        sourceModule: "@/hooks/useAuth",
+      },
+      {
+        filePath: app.filePath,
+        importedName: "ProtectedRoute",
+        sourceModule: "@/components/ProtectedRoute",
+      },
+    ]);
+
+    const tree = buildStackTree(meta.asFacade() as MetadataStore, {
+      seed: {
+        chunkId: protectedRoute.id,
+        name: protectedRoute.name,
+        filePath: protectedRoute.filePath,
+        kind: protectedRoute.kind,
+      },
+      direction: "both",
+      query: "how does ProtectedRoute decide whether to redirect",
+    });
+
+    expect(tree.downTree.some((node) => node.chunkId === "use-auth")).toBe(true);
+    expect(tree.upTree.some((node) => node.chunkId === "app")).toBe(true);
   });
 
   it("implementation-shaped class seeds include same-file methods before expanding outward", () => {

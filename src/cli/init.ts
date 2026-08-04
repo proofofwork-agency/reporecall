@@ -131,7 +131,7 @@ export function initCommand(): Command {
         const tokenRelPath = relative(projectRoot, tokenPath)
         const warningRelPath = relative(projectRoot, hookWarningPath)
         for (const relPath of [tokenRelPath, warningRelPath]) {
-          if (/^[\w./\\\-]+$/.test(relPath)) continue
+          if (/^[-\w./\\]+$/.test(relPath)) continue
           console.error(`Error: data directory path contains unsafe characters: ${relPath}`)
           process.exit(1)
         }
@@ -425,7 +425,13 @@ function setupWindowsTask(projectRoot: string): void {
   }
 
   // Create a safe task name from the project path
-  const taskName = `Reporecall-${projectRoot.replace(/[:\\\/\s]/g, '-').replace(/^-/, '').replace(/-+/g, '-')}`
+  const taskName = `Reporecall-${projectRoot
+    .replaceAll(':', '-')
+    .replaceAll('\\', '-')
+    .replaceAll('/', '-')
+    .replace(/\s/g, '-')
+    .replace(/^-/, '')
+    .replace(/-+/g, '-')}`
 
   // Find the Reporecall binary
   const reporecallBin = resolve(

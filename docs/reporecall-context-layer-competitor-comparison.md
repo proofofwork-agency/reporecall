@@ -48,11 +48,11 @@ See `src/core/staleness.ts`, the daemon auto-refresh logic, and `src/daemon/mcp-
 | Tool          | Retrieval + Compression      | Trust / Freshness Signals | Auto-Inject Hooks | Local + Zero-Infra | Adoption     | Notes |
 |---------------|------------------------------|---------------------------|-------------------|--------------------|--------------|-------|
 | **Reporecall** | Hybrid + intent + expand    | ✅ Full (banners + indexedCommit + auto-refresh) | ✅ Per-prompt    | ✅ Full           | 🔴 Nascent  | Best local bundle |
-| CodeGraph     | Graph + FTS                 | ✅ Banner                | ❌               | ✅                | 🟢 ~50k     | Closest narrative twin |
-| Cline         | Agentic file reads          | ⚠️ "always fresh" claim  | ❌               | ✅                | 🟢 64k      | Anti-index philosophy |
+| CodeGraph     | Graph + FTS                 | ✅ Banner                | ❌               | ✅                | 🟢 established | Closest narrative twin |
+| Cline         | Agentic file reads          | ⚠️ "always fresh" claim  | ❌               | ✅                | 🟢 established | Anti-index philosophy |
 | Cognee        | Graph KG                    | ⚠️                      | ✅               | ✅                | 🟡 + funding| Same quadrant threat |
 | Native Claude Code | Agentic grep             | ✅ (files are live)      | ✅ (it is the agent) | ✅             | 🌊 Default  | Biggest existential threat |
-| Augment       | Cloud semantic              | ✅ real-time             | ❌               | ❌                | 💰 $977M    | Different (cloud) model |
+| Augment       | Cloud semantic              | ✅ real-time             | ❌               | ❌                | Well funded | Different (cloud) model |
 
 **Key observation**: No other local OSS tool combines auto-injection + sophisticated compression + full trust signals + the complete stack.
 

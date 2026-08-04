@@ -50,6 +50,26 @@ const LANGUAGE_FIXTURES: Array<{
   { file: "sample.toml", extension: ".toml", language: "toml", searchTerm: "database", expectedChunkName: "" },
 ];
 
+/**
+ * This suite loads a tree-sitter WASM grammar for every supported language and
+ * builds an IndexingPipeline (sqlite + vector store) per language. On Node 24
+ * that exceeds what V8's zone allocator can obtain on a CI runner and the
+ * worker dies with "Fatal process out of memory: Zone", so CI splits the file
+ * across processes: shard 1 runs the all-languages test, later shards divide the
+ * per-language tests. Unset (local runs) executes everything, as before.
+ */
+const SHARD_COUNT = Number(process.env.MULTILANG_SHARDS ?? 0);
+const SHARD_INDEX = Number(process.env.MULTILANG_SHARD ?? 0);
+const RUN_ALL_LANGUAGES_TEST = SHARD_COUNT === 0 || SHARD_INDEX === 1;
+const PER_LANGUAGE_FIXTURES =
+  SHARD_COUNT === 0
+    ? LANGUAGE_FIXTURES
+    : SHARD_INDEX === 1
+      ? []
+      : LANGUAGE_FIXTURES.filter(
+          (_, index) => index % (SHARD_COUNT - 1) === SHARD_INDEX - 2
+        );
+
 function makeConfig(extensions: string[]): MemoryConfig {
   return {
     projectRoot: TEST_PROJECT,
@@ -99,7 +119,7 @@ describe("multi-language full pipeline (index → search → retrieve)", () => {
     rmSync(TEST_PROJECT, { recursive: true, force: true });
   });
 
-  it("should index all 22 languages and produce chunks", async () => {
+  (RUN_ALL_LANGUAGES_TEST ? it : it.skip)("should index all 22 languages and produce chunks", async () => {
     const allExtensions = [...new Set(LANGUAGE_FIXTURES.map((f) => f.extension))];
     const config = makeConfig(allExtensions);
     const pipeline = new IndexingPipeline(config);
@@ -128,7 +148,7 @@ describe("multi-language full pipeline (index → search → retrieve)", () => {
   }, 30000);
 
   // Test each language individually for FTS search
-  for (const fixture of LANGUAGE_FIXTURES) {
+  for (const fixture of PER_LANGUAGE_FIXTURES) {
     it(`should index and search ${fixture.language} (${fixture.file})`, async () => {
       const config = makeConfig([fixture.extension]);
       const pipeline = new IndexingPipeline(config);
@@ -170,7 +190,7 @@ describe("multi-language full pipeline (index → search → retrieve)", () => {
     }, 15000);
   }
 
-  it("should retrieve full content for chunks from all languages", async () => {
+  (RUN_ALL_LANGUAGES_TEST ? it : it.skip)("should retrieve full content for chunks from all languages", async () => {
     const allExtensions = [...new Set(LANGUAGE_FIXTURES.map((f) => f.extension))];
     const config = makeConfig(allExtensions);
     const pipeline = new IndexingPipeline(config);

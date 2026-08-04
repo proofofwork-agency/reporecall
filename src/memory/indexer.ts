@@ -231,7 +231,7 @@ export class MemoryIndexer {
    * Index a single memory file. Returns true if it was indexed/updated.
    * Skips if the file hasn't changed since last index.
    */
-  async indexFile(filePath: string): Promise<boolean> {
+  async indexFile(filePath: string, options: { force?: boolean } = {}): Promise<boolean> {
     const log = getLogger();
 
     let stat;
@@ -246,7 +246,7 @@ export class MemoryIndexer {
 
     // Check if already indexed with same mtime
     const existing = this.store.get(id);
-    if (existing && existing.fileMtime === fileMtime) {
+    if (!options.force && existing && existing.fileMtime === fileMtime) {
       return false;
     }
 

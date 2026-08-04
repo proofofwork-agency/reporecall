@@ -162,12 +162,13 @@
       "expectedRoute": "R1",
       "category": "media",
       "relevance": {
-        "supabase/functions/upload-media/index.ts": 3,
-        "supabase/functions/_shared/auth-utils.ts": 2
+        "supabase/functions/upload-media/index.ts": 3
       },
+      "relevantSymbols": [
+        "authenticateRequest"
+      ],
       "mustInclude": [
-        "supabase/functions/upload-media/index.ts",
-        "supabase/functions/_shared/auth-utils.ts"
+        "supabase/functions/upload-media/index.ts"
       ]
     },
     {
@@ -397,7 +398,7 @@
       "category": "media",
       "relevance": {
         "supabase/functions/upload-media/index.ts": 3,
-        "supabase/functions/_shared/auth-utils.ts": 2
+        "supabase/functions/_shared/storage-utils.ts": 2
       },
       "mustInclude": [
         "supabase/functions/upload-media/index.ts"

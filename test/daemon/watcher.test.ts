@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { relative, extname } from "path";
+import { describe, it, expect, vi } from "vitest";
+import { extname } from "path";
+import { FileWatcher } from "../../src/daemon/watcher.js";
 
 // Test that the ignore filtering logic works correctly
 // This tests the pattern matching without creating actual file watchers
@@ -42,5 +43,27 @@ describe("watcher ignore filtering", () => {
     for (const p of shouldPass) {
       expect(ig.ignores(p), `${p} should not be ignored`).toBe(false);
     }
+  });
+
+  it("quiesces pending callbacks without closing the native watcher", () => {
+    const callback = vi.fn();
+    const watcher = new FileWatcher({} as never, callback);
+    const internals = watcher as unknown as {
+      stopped: boolean;
+      pendingChanges: Array<{ path: string; type: "change" }>;
+      debounceTimer: ReturnType<typeof setTimeout> | undefined;
+      maxWaitTimer: ReturnType<typeof setTimeout> | undefined;
+    };
+    internals.pendingChanges = [{ path: "src/app.ts", type: "change" }];
+    internals.debounceTimer = setTimeout(callback, 10_000);
+    internals.maxWaitTimer = setTimeout(callback, 10_000);
+
+    watcher.prepareToStop();
+
+    expect(internals.stopped).toBe(true);
+    expect(internals.pendingChanges).toEqual([]);
+    expect(internals.debounceTimer).toBeUndefined();
+    expect(internals.maxWaitTimer).toBeUndefined();
+    expect(callback).not.toHaveBeenCalled();
   });
 });

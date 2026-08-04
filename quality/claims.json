@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "reporecall-claims/v1",
+  "currentVersion": "0.9.0",
+  "maximumAgeDays": 180,
+  "files": [
+    "README.md",
+    "docs/architecture-overview.md",
+    "docs/competitive-positioning-2026.md",
+    "docs/reporecall-context-layer-competitor-comparison.md",
+    "docs/retrieval-context-pipeline.md",
+    "scripts/benchmarks/README.md",
+    "scripts/benchmarks/trust-and-tokens.md",
+    "website/docs/intro.md",
+    "website/docs/architecture.md",
+    "website/docs/cli-reference.md",
+    "website/docs/competitive-positioning.md",
+    "website/docs/mcp-tools.md"
+  ],
+  "claims": []
+}

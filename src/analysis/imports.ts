@@ -1,6 +1,7 @@
 import type Parser from "web-tree-sitter";
-import { existsSync, statSync } from "fs";
-import { resolve, dirname, isAbsolute, relative } from "path";
+import { statSync } from "fs";
+import { resolve, dirname, isAbsolute } from "path";
+import { resolveProjectPath } from "../core/path-safety.js";
 
 type SyntaxNode = Parser.SyntaxNode;
 
@@ -423,36 +424,29 @@ export function resolveImportPath(
   );
   const basePath = resolve(importingDir, sourceModule);
 
-  // Guard: resolved path must stay within project root
-  const rel = relative(projectRoot, basePath);
-  if (rel.startsWith("..") || isAbsolute(rel)) return null;
-
   // Try exact path first
-  if (existsSync(basePath) && !isDirectory(basePath)) {
-    return normalizeToRelative(basePath, projectRoot);
-  }
+  const exact = resolveProjectFile(projectRoot, basePath);
+  if (exact) return exact;
 
   // Try with extensions
   for (const ext of RESOLVE_EXTENSIONS) {
-    const candidate = basePath + ext;
-    if (existsSync(candidate)) {
-      return normalizeToRelative(candidate, projectRoot);
-    }
+    const resolvedFile = resolveProjectFile(projectRoot, basePath + ext);
+    if (resolvedFile) return resolvedFile;
   }
 
   // Try index files (for directory imports)
   for (const indexFile of RESOLVE_INDEX_FILES) {
-    const candidate = basePath + indexFile;
-    if (existsSync(candidate)) {
-      return normalizeToRelative(candidate, projectRoot);
-    }
+    const resolvedFile = resolveProjectFile(projectRoot, basePath + indexFile);
+    if (resolvedFile) return resolvedFile;
   }
 
   return null;
 }
 
-function normalizeToRelative(absPath: string, projectRoot: string): string {
-  return relative(projectRoot, absPath).replace(/\\/g, "/");
+function resolveProjectFile(projectRoot: string, candidate: string): string | null {
+  const safePath = resolveProjectPath(projectRoot, candidate, "existing");
+  if (!safePath || isDirectory(safePath.absolutePath)) return null;
+  return safePath.relativePath.replace(/\\/g, "/");
 }
 
 function isDirectory(filePath: string): boolean {

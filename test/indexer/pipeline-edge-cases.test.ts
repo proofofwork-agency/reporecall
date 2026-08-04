@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, mkdirSync, symlinkSync, writeFileSync } from "fs";
 import { resolve, join } from "path";
 import { tmpdir } from "os";
 import { IndexingPipeline } from "../../src/indexer/pipeline.js";
@@ -241,5 +241,32 @@ describe("pipeline — path traversal blocked in indexChanged", () => {
 
     expect(result.filesProcessed).toBe(0);
     expect(result.chunksCreated).toBe(0);
+  }, 30000);
+
+  it("blocks an existing file reached through an escaping directory symlink", async () => {
+    const outsideFile = resolve(outsideDir, "through-link.ts");
+    writeFileSync(outsideFile, "export const escaped = true;\n", "utf-8");
+    symlinkSync(outsideDir, resolve(projectDir, "linked-outside"), "dir");
+
+    const config = makeConfig(projectDir, dataDir);
+    pipeline = new IndexingPipeline(config);
+
+    const result = await pipeline.indexChanged(["linked-outside/through-link.ts"]);
+
+    expect(result.filesProcessed).toBe(0);
+    expect(pipeline.getMetadataStore().getStats().totalFiles).toBe(0);
+  }, 30000);
+
+  it("blocks removal through a symlinked parent but permits a missing in-root deletion", async () => {
+    symlinkSync(outsideDir, resolve(projectDir, "linked-outside"), "dir");
+    const config = makeConfig(projectDir, dataDir);
+    pipeline = new IndexingPipeline(config);
+
+    await expect(
+      pipeline.removeFiles([
+        "linked-outside/missing.ts",
+        "src/legitimately-deleted.ts",
+      ]),
+    ).resolves.toBeUndefined();
   }, 30000);
 });

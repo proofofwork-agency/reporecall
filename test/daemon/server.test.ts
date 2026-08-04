@@ -184,6 +184,7 @@ describe("daemon HTTP server (3F)", () => {
     expect(body).toHaveProperty("hookSpecificOutput");
     expect(body.hookSpecificOutput).toHaveProperty("hookEventName", "SessionStart");
     expect(typeof body.hookSpecificOutput.additionalContext).toBe("string");
+    expect(body.reporecall.staleness.level).toBe("fresh");
   });
 
   it("POST /hooks/prompt-context with query returns context", async () => {
@@ -227,6 +228,7 @@ describe("daemon HTTP server (3F)", () => {
     expect(body).toHaveProperty("hookSpecificOutput");
     expect(body.hookSpecificOutput).toHaveProperty("hookEventName", "UserPromptSubmit");
     expect(body.hookSpecificOutput.additionalContext).toContain("authenticate");
+    expect(body.reporecall.staleness.level).toBe("fresh");
   });
 
   it("POST /hooks/prompt-context with empty query returns empty context", async () => {
@@ -237,6 +239,7 @@ describe("daemon HTTP server (3F)", () => {
     expect(body).toHaveProperty("hookSpecificOutput");
     expect(body.hookSpecificOutput.additionalContext).toBe("");
     expect(body.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(body.reporecall.staleness.level).toBe("fresh");
   });
 
   it("POST /hooks/prompt-context with empty index returns only the honesty banner", async () => {
@@ -270,6 +273,7 @@ describe("daemon HTTP server (3F)", () => {
       hookEventName: "UserPromptSubmit",
       additionalContext: "⚠ reporecall index EMPTY: no indexed code context is available. Run refresh_context or `reporecall index`.",
     });
+    expect(body.reporecall.staleness.level).toBe("empty");
   });
 
   it("POST /hooks/prompt-context schedules background auto-refresh when index is stale", async () => {
@@ -302,6 +306,10 @@ describe("daemon HTTP server (3F)", () => {
       });
       const config = { ...makeConfig(port), projectRoot, debounceMs: 10 };
       let refreshCalls = 0;
+      let markRefreshed: (() => void) | undefined;
+      const refreshed = new Promise<void>((resolveRefresh) => {
+        markRefreshed = resolveRefresh;
+      });
       const result = createDaemonServer(
         config,
         makeSearch({ searchWithContext }),
@@ -315,6 +323,7 @@ describe("daemon HTTP server (3F)", () => {
         {
           refreshIndex: async () => {
             refreshCalls += 1;
+            markRefreshed?.();
           },
         }
       );
@@ -325,11 +334,12 @@ describe("daemon HTTP server (3F)", () => {
       const { status, body } = await request(port, "POST", "/hooks/prompt-context", {
         query: "how does authentication work",
       }, token);
-      await new Promise((res) => setTimeout(res, 40));
+      await refreshed;
 
       expect(status).toBe(200);
       expect(body.hookSpecificOutput.additionalContext).toContain("reporecall index STALE");
       expect(body.hookSpecificOutput.additionalContext).toContain("authenticate");
+      expect(body.reporecall.staleness.level).toBe("stale");
       expect(refreshCalls).toBe(1);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
@@ -382,6 +392,78 @@ describe("daemon HTTP server (3F)", () => {
     );
     expect(status).toBe(200);
     expect(body).toHaveProperty("hookSpecificOutput");
+  });
+
+  it("does not recursively contaminate repeated prompt-context hooks", async () => {
+    const seenQueries: string[] = [];
+    const searchWithContext = async (query: string) => {
+      seenQueries.push(query);
+      const billing = query.includes("billing");
+      const symbol = billing ? "createInvoice" : "authenticate";
+      const filePath = billing ? "src/billing.ts" : "src/auth.ts";
+      return {
+        text: [
+          "## Relevant codebase context",
+          "",
+          `> Files included: ${filePath}`,
+          "",
+          `### ${filePath}`,
+          `function ${symbol}() {}`,
+        ].join("\n"),
+        tokenCount: 20,
+        chunks: [{
+          id: billing ? "billing" : "auth",
+          filePath,
+          name: symbol,
+          kind: "function_declaration",
+          startLine: 1,
+          endLine: 1,
+          content: `function ${symbol}() {}`,
+          language: "typescript",
+          score: 0.9,
+        }],
+      };
+    };
+
+    await new Promise<void>((resolveClose, rejectClose) =>
+      server.close((err) => (err ? rejectClose(err) : resolveClose()))
+    );
+    const result = createDaemonServer(
+      makeConfig(port),
+      makeSearch({ searchWithContext }),
+      makeMetadata(),
+    );
+    server = result.server;
+    token = result.token;
+    await new Promise<void>((resolveListen) => server.listen(port, "127.0.0.1", resolveListen));
+
+    const first = await request(port, "POST", "/hooks/prompt-context", {
+      query: "where is authentication handled",
+      session_id: "repetition-contamination-test",
+    }, token);
+    const firstContext = first.body.hookSpecificOutput.additionalContext as string;
+
+    const second = await request(port, "POST", "/hooks/prompt-context", {
+      query: `where is billing handled\n\n${firstContext}`,
+      session_id: "repetition-contamination-test",
+    }, token);
+    const secondContext = second.body.hookSpecificOutput.additionalContext as string;
+
+    const repeated = await request(port, "POST", "/hooks/prompt-context", {
+      query: "where is billing handled",
+      session_id: "repetition-contamination-test",
+    }, token);
+    const repeatedContext = repeated.body.hookSpecificOutput.additionalContext as string;
+
+    expect(seenQueries).toEqual([
+      "where is authentication handled",
+      "where is billing handled",
+      "where is billing handled",
+    ]);
+    expect(secondContext).toContain("createInvoice");
+    expect(secondContext).not.toContain("authenticate");
+    expect(secondContext.match(/## Relevant codebase context/g)).toHaveLength(1);
+    expect(repeatedContext).toBe(secondContext);
   });
 
   // Bearer token auth tests

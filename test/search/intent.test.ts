@@ -34,11 +34,13 @@ describe("classifyIntent", () => {
 
   it("classifies broad inventory and flow questions as architecture", () => {
     expectMode("which files implement the authentication flow", "architecture");
+    expectMode("which files implement route protection and pending navigation", "architecture");
     expectMode("how does auth flow work?", "architecture");
     expectMode("trace the full image generation flow from UI to edge function", "architecture");
     expectMode("how does the telegram bot work?", "architecture");
     expectMode("how does saving and publishing a flow work?", "architecture");
     expectMode("how are credits checked before generation runs?", "architecture");
+    expectMode("where does authentication redirect after success or failure", "architecture");
   });
 
   it("classifies cross-cutting edit prompts as change", () => {

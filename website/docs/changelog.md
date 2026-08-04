@@ -6,6 +6,26 @@ sidebar_position: 9
 
 # Changelog
 
+## v0.9.0 — Engineering Hardening (2026-08-04)
+
+- Added reproducible evidence, compatibility snapshots, claims validation, and
+  machine-readable release gates.
+- Unified filesystem containment across indexing, watcher, removal, MCP, and
+  daemon entry points.
+- Added type-aware linting, coverage, module/cycle checks, multi-OS CI, packed
+  demos, and nightly stress/benchmark jobs.
+- Hardened retrieval confidence, freshness signaling, and repeated hook-context
+  contamination handling.
+- Decomposed large internals behind compatible CLI, MCP, config, JSON, and
+  package façades.
+- Fixed precise lookups injecting unrelated wiki overview pages that matched on
+  a single shared token; breadth queries still receive them in full.
+- **Breaking:** Node 22 is now the minimum supported runtime. Node 20 is
+  end-of-life and `better-sqlite3` 12.9+ dropped its Windows prebuilds, so a
+  Node 20 install could fall back to a source build.
+
+See the root CHANGELOG for details.
+
 ## v0.8.1 — Positioning, Trust & Distribution (2026-07-09)
 
 Patch release focused on making the product story match the engineering quality (per competitive analysis).

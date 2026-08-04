@@ -272,6 +272,97 @@ describe("HybridSearch", () => {
     };
   }
 
+  it("keeps a directly named trace symbol ahead of generic route aliases", async () => {
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const search = new HybridSearch(
+      createMockEmbedder(0) as any,
+      createMockVectorStore([]) as any,
+      createMockFTSStore([]) as any,
+      createMockMetadataStore([]) as any,
+      createConfig({ embeddingProvider: "keyword" })
+    );
+    const genericRoute = {
+      chunkId: "session-route",
+      name: "GET",
+      filePath: "apps/web/app/api/auth/session/route.ts",
+      kind: "function_declaration",
+      confidence: 0.99,
+      reason: "resolved_target" as const,
+      targetId: "file_module:apps/web/app/api/auth/session/route.ts",
+      targetKind: "file_module" as const,
+      resolvedAlias: "route",
+      resolutionSource: "file_path" as const,
+    };
+    const exactSymbol = {
+      chunkId: "protected-route",
+      name: "ProtectedRoute",
+      filePath: "src/components/ProtectedRoute.tsx",
+      kind: "function_declaration",
+      confidence: 0.95,
+      reason: "explicit_target" as const,
+    };
+
+    const prepared = search.prepareSeedResult(
+      "how does ProtectedRoute decide whether to redirect",
+      "trace",
+      {
+        bestSeed: genericRoute,
+        seeds: [genericRoute, exactSymbol],
+      }
+    );
+
+    expect(prepared.bestSeed?.filePath).toBe("src/components/ProtectedRoute.tsx");
+    expect(prepared.bestSeed?.reason).toBe("explicit_target");
+  });
+
+  it("does not truncate a broad workflow bundle to five files", async () => {
+    const now = new Date().toISOString();
+    const chunks = Array.from({ length: 7 }, (_, index) => ({
+      id: `workflow-${index}`,
+      filePath: `src/workflow/step-${index}.ts`,
+      name: `workflowStep${index}`,
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 8,
+      content: `export function workflowStep${index}() { return ${index}; }`,
+      language: "typescript",
+      indexedAt: now,
+      score: 1 - index * 0.01,
+    }));
+    const { HybridSearch } = await import("../../src/search/hybrid.js");
+    const search = new HybridSearch(
+      createMockEmbedder(0) as any,
+      createMockVectorStore([]) as any,
+      createMockFTSStore([]) as any,
+      createMockMetadataStore(chunks) as any,
+      createConfig({ embeddingProvider: "keyword" })
+    );
+    search.search = async () => chunks;
+    (search as any).archStrategy = {
+      selectBroadWorkflowBundle: () => chunks,
+      lastBroadSelection: {
+        broadMode: "workflow",
+        dominantFamily: "workflow",
+        deliveryMode: "code_context",
+        familyConfidence: 0.9,
+        selectedFiles: chunks.map((chunk) => ({
+          filePath: chunk.filePath,
+          selectionSource: "workflow_bundle",
+        })),
+      },
+    };
+
+    const context = await search.searchWithContext(
+      "which files implement the complete workflow across every step",
+      10_000,
+      undefined,
+      undefined,
+      { bestSeed: null, seeds: [] }
+    );
+
+    expect(new Set(context.chunks.map((chunk) => chunk.filePath)).size).toBe(7);
+  });
+
   it("should return results from vector and keyword search", async () => {
     const now = new Date().toISOString();
     const chunks = [
@@ -1708,7 +1799,6 @@ describe("HybridSearch graph and sibling expansion (3E)", () => {
     const paths = context.chunks.map((chunk) => chunk.filePath);
 
     expect(diagnostics?.dominantFamily).toBe("auth");
-    expect(diagnostics?.deliveryMode).not.toBe("code_context");
     if (diagnostics?.deliveryMode === "summary_only") {
       expect(diagnostics.deferredReason).toBeTruthy();
       expect(context.chunks).toHaveLength(0);

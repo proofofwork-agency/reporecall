@@ -410,7 +410,7 @@ export class WikiGenerator {
   private extractFrontmatterValue(filePath: string, key: string): string | undefined {
     try {
       const raw = readFileSync(filePath, "utf-8");
-      const match = raw.match(new RegExp(`^${key}:\\s*\"?([^\"\\n]+)\"?`, "m"));
+      const match = raw.match(new RegExp(`^${key}:\\s*"?([^"\\n]+)"?`, "m"));
       return match?.[1];
     } catch {
       return undefined;

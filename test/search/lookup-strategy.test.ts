@@ -131,4 +131,35 @@ describe("buildFocusedExactResults — seed/query anchor gate", () => {
 
     store.close();
   });
+
+  it("resolves an exact identifier lookup even when seed resolution returned no candidates", () => {
+    const dir = tmpDir();
+    dirs.push(dir);
+    const store = new MetadataStore(dir);
+    const exactChunk = makeChunk({
+      filePath: "src/hooks/useAuth.tsx",
+      name: "useAuth",
+    });
+    const distractor = makeChunk({
+      filePath: "src/lib/search.ts",
+      name: "findPublicRoute",
+    });
+    for (const chunk of [exactChunk, distractor]) {
+      store.upsertFile(chunk.filePath, chunk.id);
+      store.upsertChunk(chunk);
+    }
+
+    const results = buildFocusedExactResults(
+      "find useAuth",
+      { seeds: [], bestSeed: null },
+      5,
+      store,
+    );
+
+    expect(results?.map((result) => result.filePath)).toEqual([
+      "src/hooks/useAuth.tsx",
+    ]);
+
+    store.close();
+  });
 });

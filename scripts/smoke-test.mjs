@@ -314,8 +314,25 @@ await (async () => {
     else fail('serve /ready', `status ${ready.status}`);
   }
 
+  const exitPromise = new Promise(resolve => {
+    proc.once('exit', (code, signal) => resolve({ code, signal }));
+  });
   proc.kill('SIGTERM');
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  const exitResult = await Promise.race([
+    exitPromise,
+    new Promise(resolve => setTimeout(() => resolve(null), 12_000)),
+  ]);
+  if (exitResult?.code === 0) {
+    pass('serve graceful shutdown');
+  } else {
+    if (exitResult === null) proc.kill('SIGKILL');
+    fail(
+      'serve graceful shutdown',
+      exitResult === null
+        ? 'process did not exit within 12s'
+        : `exit ${exitResult.code ?? `signal ${exitResult.signal}`}`,
+    );
+  }
 })();
 
 // ══════════════════════════════════════════════════════════════════════════════

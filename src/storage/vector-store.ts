@@ -335,8 +335,15 @@ export class VectorStore {
   }
 
   async close(): Promise<void> {
-    // Drop the cached table reference first so no further queries can start.
+    // Drop and explicitly close the cached table before its connection. LanceDB
+    // tables own native resources independently from the connection.
+    const table = this.cachedTable;
     this.cachedTable = undefined;
+    try {
+      table?.close();
+    } catch (err) {
+      getLogger().debug({ err }, "VectorStore.close: table close failed");
+    }
 
     // Attempt to resolve the existing connection and close it explicitly.
     // LanceDB's Connection type does not expose a formal close() method in all

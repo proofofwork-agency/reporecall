@@ -49,7 +49,6 @@ export class RotatingLog {
     // Use console.error (not the rotating log itself) to avoid recursion.
     this.writeQueue = op.catch((err) => {
       try {
-        // eslint-disable-next-line no-console
         console.error("[RotatingLog] write/rotate failed:", err);
       } catch {
         // Last-resort: never throw out of the queue chain.

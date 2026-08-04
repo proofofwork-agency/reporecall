@@ -6,21 +6,106 @@ on:
 permissions:
   contents: read
 jobs:
-  publish:
+  required-matrix:
+    name: Release verification (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, "lts/*"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      # Matches ci.yml: the two all-languages suites need a fresh worker or they
+      # OOM on Node 24 (tree-sitter WASM accumulates across reused vitest
+      # workers). Together these steps still run the whole suite.
+      - run: |
+          npm run coverage -- \
+            --exclude 'test/integration/multilang-pipeline.test.ts' \
+            --exclude 'test/parser/multilang-chunker.test.ts'
+      # Matches ci.yml: the pipeline suite is sharded across processes
+      # (2 + 11 + 11 = 24, the full file) because one Node 24 process cannot hold
+      # all 22 grammars plus a pipeline per language.
+      # See ci.yml: the two all-languages tests need one process to hold every
+      # grammar plus a full pipeline, which does not fit on a Node 24 runner.
+      # Gate them on Node 22; Node 24 gates everything else.
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        if: matrix.node == 22
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        if: matrix.node == 22
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/parser/multilang-chunker.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
+      - run: npm run build
+      - run: npm run smoke
+      - run: npm run quality:check
+      - run: npm run quality:claims
+      - run: npm run demo:packed
+      - run: npm audit --omit=dev --audit-level=high
+
+  package:
+    needs: required-matrix
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
+          node-version: 22
+          cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm test -- --run
       - run: npm run build
-      - run: npm run smoke
-      - run: npm audit --omit=dev --audit-level=high
-      - run: npm pack --dry-run
-      - run: npm publish --access public
+      - run: mkdir package
+      - id: pack
+        shell: bash
+        run: |
+          TARBALL="$(npm pack --pack-destination package --json | node -e "let value='';process.stdin.on('data',chunk=>value+=chunk);process.stdin.on('end',()=>process.stdout.write(JSON.parse(value)[0].filename))")"
+          echo "tarball=package/$TARBALL" >> "$GITHUB_OUTPUT"
+      - run: node scripts/packed-demo.mjs --tarball "${{ steps.pack.outputs.tarball }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-npm-tarball
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-npm-tarball
+          path: package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm publish package/*.tgz --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

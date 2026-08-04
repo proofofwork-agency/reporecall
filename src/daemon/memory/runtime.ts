@@ -12,9 +12,9 @@ import type { MemoryStore } from "../../storage/memory-store.js";
 
 const execFileAsync = promisify(execFile);
 
-type MemoryFileEventType = "add" | "change" | "unlink";
+export type MemoryFileEventType = "add" | "change" | "unlink";
 
-interface PendingMemoryChange {
+export interface MemoryFileChange {
   path: string;
   type: MemoryFileEventType;
 }
@@ -53,12 +53,14 @@ export class MemoryRuntime {
   private workingHistoryLimit: number;
   private watcher: FSWatcher | undefined;
   private watchedDirs: string[] = [];
-  private pendingChanges: PendingMemoryChange[] = [];
+  private pendingChanges: MemoryFileChange[] = [];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private compactionTimer: ReturnType<typeof setInterval> | undefined;
   private processing = false;
   private stopped = false;
   private flushDoneCallbacks: Array<() => void> = [];
+  private refreshGeneration = 0;
+  private refreshWaiters: Array<{ afterGeneration: number; resolve: () => void }> = [];
   private lastCompaction: { at: string; result: { deduped: number; archived: number; superseded: number } } | null = null;
   private lastFlushCompaction = 0;
   private static FLUSH_COMPACT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -90,6 +92,7 @@ export class MemoryRuntime {
   }
 
   async start(): Promise<MemoryIndexResult> {
+    this.stopped = false;
     this.watchedDirs = Array.from(
       new Set(this.indexer.getMemoryDirs().filter((dir) => existsSync(dir)))
     );
@@ -123,6 +126,7 @@ export class MemoryRuntime {
     }
 
     await this.drain();
+    this.resolveRefreshWaiters(true);
   }
 
   drain(): Promise<void> {
@@ -133,6 +137,35 @@ export class MemoryRuntime {
     return new Promise<void>((resolve) => {
       this.flushDoneCallbacks.push(resolve);
     });
+  }
+
+  getRefreshGeneration(): number {
+    return this.refreshGeneration;
+  }
+
+  /**
+   * Wait for a watcher batch observed after `afterGeneration` to finish.
+   * Capture getRefreshGeneration() before changing a file, then await this
+   * method. This is an event-driven synchronization point for callers and
+   * tests; the filesystem watcher remains responsible for detecting the event.
+   */
+  waitForRefresh(afterGeneration: number): Promise<void> {
+    if (this.refreshGeneration > afterGeneration || this.stopped) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.refreshWaiters.push({ afterGeneration, resolve });
+    });
+  }
+
+  /**
+   * Process an explicit watcher-equivalent batch and resolve when persistence
+   * is complete. This is also the deterministic synchronization surface for
+   * tests and callers that already own a filesystem event stream.
+   */
+  async refreshChanges(changes: MemoryFileChange[]): Promise<void> {
+    this.pendingChanges.push(...changes);
+    await this.flush(true);
   }
 
   getLastCompaction(): { at: string; result: { deduped: number; archived: number; superseded: number } } | null {
@@ -251,7 +284,10 @@ export class MemoryRuntime {
           continue;
         }
 
-        const ok = await this.indexer.indexFile(change.path);
+        // A watcher change is authoritative. Filesystems with coarse mtime
+        // precision can report the same timestamp for two rapid writes, so
+        // bypass the indexer's no-change shortcut for an observed event.
+        const ok = await this.indexer.indexFile(change.path, { force: true });
         if (ok) indexed++;
       }
 
@@ -274,16 +310,31 @@ export class MemoryRuntime {
       log.error({ err }, "Memory runtime refresh failed");
     } finally {
       this.processing = false;
-      const callbacks = this.flushDoneCallbacks;
-      this.flushDoneCallbacks = [];
-      for (const cb of callbacks) cb();
+      this.refreshGeneration += 1;
+      this.resolveRefreshWaiters(false);
 
       if (!this.stopped && this.pendingChanges.length > 0) {
         this.debounceTimer = setTimeout(() => {
           void this.flush();
         }, this.debounceMs);
+      } else {
+        const callbacks = this.flushDoneCallbacks;
+        this.flushDoneCallbacks = [];
+        for (const cb of callbacks) cb();
       }
     }
+  }
+
+  private resolveRefreshWaiters(force: boolean): void {
+    const pending: typeof this.refreshWaiters = [];
+    for (const waiter of this.refreshWaiters) {
+      if (force || this.refreshGeneration > waiter.afterGeneration) {
+        waiter.resolve();
+      } else {
+        pending.push(waiter);
+      }
+    }
+    this.refreshWaiters = pending;
   }
 
   private async upsertWorkingMemory(input: ObservePromptInput): Promise<void> {

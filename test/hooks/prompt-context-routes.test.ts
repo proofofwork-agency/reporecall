@@ -110,6 +110,79 @@ describe("handlePromptContext — route integration", () => {
     expect(result.advisoryText).toContain("Reporecall Guidance");
   });
 
+  it("does not call broad context high-confidence when structural coverage is thin", async () => {
+    const context: AssembledContext = {
+      text: "## auth context",
+      tokenCount: 80,
+      chunks: [
+        {
+          ...makeAssembledContext().chunks[0]!,
+          id: "auth-page",
+          filePath: "src/pages/Auth.tsx",
+          name: "Auth",
+        },
+        {
+          ...makeAssembledContext().chunks[0]!,
+          id: "auth-callback",
+          filePath: "src/pages/AuthCallback.tsx",
+          name: "AuthCallback",
+        },
+      ],
+    };
+    const result = await handlePromptContextDetailed(
+      "which files implement the complete authentication flow",
+      makeSearch({
+        searchWithContext: async () => context,
+        getLastBroadSelectionDiagnostics: () => ({
+          broadMode: "workflow",
+          deliveryMode: "code_context",
+          dominantFamily: "auth",
+          familyConfidence: 0.94,
+          selectedFiles: context.chunks.map((chunk) => ({
+            filePath: chunk.filePath,
+            selectionSource: "workflow_bundle",
+          })),
+        }),
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "architecture"
+    );
+
+    expect(result.contextStrength).toBe("partial");
+    expect(result.evidenceConfidence).toBeLessThan(0.75);
+  });
+
+  it("does not reuse broad diagnostics for a following bug query", async () => {
+    const result = await handlePromptContextDetailed(
+      "why does ProtectedRoute redirect in a loop",
+      makeSearch({
+        searchWithContext: async () => makeAssembledContext(),
+        getLastBroadSelectionDiagnostics: () => ({
+          broadMode: "workflow",
+          deliveryMode: "summary_only",
+          dominantFamily: "upload",
+          familyConfidence: 0.97,
+          selectedFiles: [{
+            filePath: "src/upload.ts",
+            selectionSource: "workflow_bundle",
+          }],
+          deferredReason: "missing_upload_backbone",
+        }),
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "bug"
+    );
+
+    expect(result.deliveryMode).toBe("code_context");
+    expect(result.dominantFamily).toBeUndefined();
+    expect(result.deferredReason).toBeUndefined();
+    expect(result.selectedFiles?.map((file) => file.filePath)).not.toContain("src/upload.ts");
+  });
+
   it("discloses selected files that vanished from the index", async () => {
     const context = makeAssembledContext("## src/app.ts\nfunction main() {}", 80);
     const metadata: any = {
@@ -886,6 +959,105 @@ describe("handlePromptContext — route integration", () => {
     expect(result.context?.text).toContain("src/hooks/useAuth.tsx");
     expect(result.context?.text).not.toContain("src/pages/Auth.tsx");
     expect(result.context?.text).not.toContain("src/pages/AuthCallback.tsx");
+  });
+
+  it("keeps an exact trace flow instead of replacing it with generic high-scoring routes", async () => {
+    const timestamp = new Date().toISOString();
+    const protectedRoute = {
+      id: "protected-route",
+      filePath: "src/components/ProtectedRoute.tsx",
+      name: "ProtectedRoute",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 30,
+      content: "export function ProtectedRoute() { useAuth(); return <Navigate />; }",
+      language: "typescript",
+      indexedAt: timestamp,
+    };
+    const useAuth = {
+      id: "use-auth",
+      filePath: "src/hooks/useAuth.tsx",
+      name: "useAuth",
+      kind: "function_declaration",
+      startLine: 1,
+      endLine: 20,
+      content: "export function useAuth() { return session; }",
+      language: "typescript",
+      indexedAt: timestamp,
+    };
+    const genericRouteContext: AssembledContext = {
+      text: "## apps/web/app/api/session/route.ts\nexport function GET() {}",
+      tokenCount: 50,
+      chunks: Array.from({ length: 4 }, (_, index) => ({
+        ...protectedRoute,
+        id: `generic-route-${index}`,
+        filePath: `apps/web/app/api/session-${index}/route.ts`,
+        name: "redirectRoute",
+        content: "export function redirectRoute() {}",
+        score: 4 - index * 0.01,
+      })),
+    };
+    const seedResult: SeedResult = {
+      bestSeed: {
+        chunkId: protectedRoute.id,
+        name: protectedRoute.name,
+        filePath: protectedRoute.filePath,
+        kind: protectedRoute.kind,
+        confidence: 0.95,
+        reason: "explicit_target",
+      },
+      seeds: [{
+        chunkId: protectedRoute.id,
+        name: protectedRoute.name,
+        filePath: protectedRoute.filePath,
+        kind: protectedRoute.kind,
+        confidence: 0.95,
+        reason: "explicit_target",
+      }],
+    };
+    const metadata: any = {
+      findCallers: () => [],
+      findCallees: () => [],
+      findCalleesForChunk: () => [],
+      findChunksByNames: (names: string[]) => names.includes("useAuth") ? [useAuth] : [],
+      getChunksByIds: (ids: string[]) => [protectedRoute, useAuth].filter((chunk) => ids.includes(chunk.id)),
+      findChunksByFilePath: (filePath: string) => [protectedRoute, useAuth].filter((chunk) => chunk.filePath === filePath),
+      getImportsForFile: (filePath: string) => filePath === protectedRoute.filePath
+        ? [{
+            filePath,
+            importedName: "useAuth",
+            sourceModule: "@/hooks/useAuth",
+            resolvedPath: null,
+            isDefault: false,
+            isNamespace: false,
+          }]
+        : [],
+      findImportByName: () => [],
+      findImporterFiles: () => [],
+      getAllCommunities: () => [],
+      getGodNodes: () => [],
+      getTopSurprises: () => [],
+    };
+
+    const result = await handlePromptContextDetailed(
+      "how does ProtectedRoute decide whether to redirect",
+      makeSearch({
+        searchWithContext: async () => genericRouteContext,
+        prepareSeedResult: () => seedResult,
+      }),
+      makeConfig(),
+      undefined,
+      undefined,
+      "trace",
+      metadata,
+      { search: () => [] } as any,
+      seedResult
+    );
+
+    expect(result.context?.chunks.map((chunk) => chunk.filePath)).toEqual([
+      "src/components/ProtectedRoute.tsx",
+      "src/hooks/useAuth.tsx",
+    ]);
   });
 
   it("does not inject business wiki pages into prompt context by default", async () => {

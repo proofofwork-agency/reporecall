@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.9.0] - 2026-08-04
+
+Engineering-hardening release focused on trustworthy context, reproducible
+evidence, project-boundary safety, and release verification.
+
+### Added
+
+- Versioned compatibility snapshots for CLI help, MCP schemas, config defaults,
+  package exports, and JSON output contracts.
+- A machine-readable improvement graph, claims registry, evidence schema, and
+  pilot validation contract under `quality/`.
+- Backward-compatible JSON/file evidence export for `reporecall stats`.
+- A unified canonical path-safety boundary covering symlinks, missing
+  descendants, deletion events, prefix collisions, and platform separators.
+- Type-aware ESLint, coverage gates, module-size and cycle checks, packed
+  tarball demos, multi-OS CI, and nightly stress/benchmark workflows.
+- Retrieval trust metrics for high-confidence-wrong results and
+  fresh/stale/empty classification.
+
+### Changed
+
+- Prompt-context, daemon, indexing, MCP, search, Lens, wiki, and product-area
+  internals are decomposed behind their existing public façades.
+- Scheduler and runtime tests use explicit idle/readiness signals instead of
+  sleep-based synchronization.
+- Retrieval selection now suppresses repeated hook contamination and weak
+  adjacent context while preserving response and persistence contracts.
+- Token reports return insufficient evidence when measurements are unavailable;
+  estimated fallback savings are no longer presented as measured results.
+
+### Fixed
+
+- Precise lookup queries ("where is X implemented") no longer inject wiki
+  overview pages describing code that is not part of the answer. A hub page
+  could win the lexical match on a single shared token — a
+  `subscription-update` lookup pulling in an `UpdateNode` hub — which diluted
+  lookup precision. Overview pages are still injected in full for breadth
+  queries, where they are the point.
+
+### Breaking
+
+- **Node 22 is now the minimum supported runtime** (was Node 20). Node 20
+  reached end-of-life, and `better-sqlite3` 12.9+ no longer ships Node 20
+  prebuilds for Windows, so a Node 20 install could silently fall back to
+  compiling from source and fail without a local toolchain. Upgrade to Node 22
+  or newer before installing.
+
+### Compatibility
+
+- The existing CLI commands, six public MCP tools, config contracts, JSON
+  contracts, and package exports remain compatible.
+- All data remains local; evidence exports are explicit and redacted by
+  default.
+
 ## [0.8.1] - 2026-07-09
 
 ### Positioning, Trust & Distribution Improvements (toward 9/10)

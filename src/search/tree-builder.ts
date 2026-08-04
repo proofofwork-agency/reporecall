@@ -5,7 +5,7 @@ type TreeMetadata = Pick<
   MetadataStore,
   "findCallers" | "findCallees" | "findChunksByNames" | "getChunksByIds"
 > &
-  Partial<Pick<MetadataStore, "findCalleesForChunk" | "findImporterFiles" | "findChunksByFilePath" | "findTargetById" | "getImportsForFile">>;
+  Partial<Pick<MetadataStore, "findCalleesForChunk" | "findImporterFiles" | "findImportByName" | "findChunksByFilePath" | "findTargetById" | "getImportsForFile">>;
 
 export interface TreeOptions {
   seed: { chunkId: string; name: string; filePath: string; kind: string; targetId?: string; targetKind?: string };
@@ -152,11 +152,13 @@ function shouldKeepImplementationCaller(
 
 function scoreSameFileSibling(
   seedKind: string,
-  chunk: { filePath: string; name: string; kind: string }
+  chunk: { filePath: string; name: string; kind: string },
+  queryTerms: string[]
 ): number {
   let score = 0;
   if (!isTestFile(chunk.filePath)) score += 100;
   if (seedKind === "class_declaration" && /method_definition|function_declaration/.test(chunk.kind)) score += 20;
+  score += countQueryMatches(queryTerms, chunk.name) * 30;
   if (/constructor|describe|it|test/.test(chunk.name.toLowerCase())) score -= 25;
   return score;
 }
@@ -548,7 +550,10 @@ export function buildStackTree(
     if (!shouldExpandSameFile) return;
     const fileChunks = metadata.findChunksByFilePath(seed.filePath)
       .filter((chunk) => chunk.id !== seed.chunkId && !isTestFile(chunk.filePath))
-      .sort((a, b) => scoreSameFileSibling(seed.kind, b) - scoreSameFileSibling(seed.kind, a))
+      .sort((a, b) =>
+        scoreSameFileSibling(seed.kind, b, queryTerms)
+        - scoreSameFileSibling(seed.kind, a, queryTerms)
+      )
       .slice(0, traversalProfile === "implementation" ? 3 : maxBranchFactor);
     for (const chunk of fileChunks) {
       if (totalNodes >= maxNodes) break;
@@ -576,29 +581,34 @@ export function buildStackTree(
     if (traversalProfile !== "implementation") return;
 
     const imports = metadata.getImportsForFile(seed.filePath)
-      .filter((record) => !!record.resolvedPath && !isTestFile(record.resolvedPath!))
-      .filter((record) => !isSchemaOrDocNoise(record.resolvedPath!));
+      .filter((record) => !record.resolvedPath || !isTestFile(record.resolvedPath))
+      .filter((record) => !record.resolvedPath || !isSchemaOrDocNoise(record.resolvedPath));
     if (imports.length === 0) return;
 
     const rankedImports = imports
-      .map((record) => ({
-        record,
-        score: scoreImportedNeighbor(
-          seed.filePath,
-          record.resolvedPath!,
-          record.importedName,
-          queryTerms
-        ),
-      }))
+      .flatMap((record) => {
+        const chunks = record.resolvedPath
+          ? metadata.findChunksByFilePath!(record.resolvedPath)
+          : metadata.findChunksByNames([record.importedName]);
+        const rep = chunks.find((chunk) => chunk.name === record.importedName) ?? chunks[0];
+        if (!rep || rep.filePath === seed.filePath || isTestFile(rep.filePath) || isSchemaOrDocNoise(rep.filePath)) {
+          return [];
+        }
+        return [{
+          record,
+          rep,
+          score:
+            scoreImportedNeighbor(seed.filePath, rep.filePath, record.importedName, queryTerms)
+            + (record.resolvedPath ? 0 : 25),
+        }];
+      })
       .filter((item) => item.score >= 25)
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
 
     for (const item of rankedImports) {
       if (totalNodes >= maxNodes) break;
-      const resolvedPath = item.record.resolvedPath!;
-      const chunks = metadata.findChunksByFilePath(resolvedPath);
-      const rep = chunks.find((chunk) => chunk.name === item.record.importedName) ?? chunks[0];
+      const rep = item.rep;
       if (!rep || visited.has(rep.id)) continue;
 
       visited.add(rep.id);
@@ -619,8 +629,55 @@ export function buildStackTree(
     }
   }
 
+  function addNamedImporters(): void {
+    if (traversalProfile !== "implementation") return;
+    if (!metadata.findImportByName || !metadata.findChunksByFilePath) return;
+    if (!/^[A-Z][A-Za-z0-9_]*$/.test(seed.name)) return;
+
+    const importers = metadata.findImportByName(seed.name)
+      .filter((record) => record.filePath !== seed.filePath)
+      .filter((record) => !isTestFile(record.filePath) && !isSchemaOrDocNoise(record.filePath))
+      .map((record) => {
+        const chunks = metadata.findChunksByFilePath!(record.filePath);
+        const ranked = [...chunks].sort((a, b) => {
+          const score = (chunk: typeof a): number =>
+            countQueryMatches(queryTerms, chunk.filePath, chunk.name, chunk.content) * 20
+            + (chunk.content.includes(seed.name) ? 40 : 0)
+            + (/^(App|Root|Main|Layout|Router)/.test(chunk.name) ? 10 : 0);
+          return score(b) - score(a);
+        });
+        return ranked[0];
+      })
+      .filter((chunk): chunk is NonNullable<typeof chunk> => !!chunk)
+      .sort((a, b) =>
+        countQueryMatches(queryTerms, b.filePath, b.name, b.content)
+        - countQueryMatches(queryTerms, a.filePath, a.name, a.content)
+      )
+      .slice(0, 2);
+
+    for (const chunk of importers) {
+      if (totalNodes >= maxNodes || visited.has(chunk.id)) continue;
+      visited.add(chunk.id);
+      totalNodes++;
+      upTree.push({
+        chunkId: chunk.id,
+        name: chunk.name,
+        filePath: chunk.filePath,
+        kind: chunk.kind,
+        depth: 1,
+        direction: "up",
+      });
+      edges.push({
+        from: chunk.id,
+        to: seed.chunkId,
+        callType: "import",
+      });
+    }
+  }
+
   if (direction === "up" || direction === "both") {
     buildUpBFS(seed.name, seed.chunkId, seed.filePath);
+    addNamedImporters();
   }
 
   addSameFileSeedSiblings();

@@ -15,6 +15,16 @@ import { mean, rate } from "../../test/benchmark/metrics.js";
 
 export type AuditRoute = "skip" | "R0" | "R1" | "R2";
 
+export function auditRouteFromQueryMode(value: unknown): AuditRoute | undefined {
+  if (value === "skip" || value === "R0" || value === "R1" || value === "R2") {
+    return value;
+  }
+  if (value === "lookup") return "R0";
+  if (value === "trace") return "R1";
+  if (value === "architecture" || value === "bug" || value === "change") return "R2";
+  return undefined;
+}
+
 export interface ProjectContextAuditQuery {
   id: string;
   query: string;
@@ -58,6 +68,7 @@ export interface DirectExplainResult {
   dominantFamily?: string;
   deliveryMode?: "code_context" | "summary_only";
   familyConfidence?: number;
+  evidenceConfidence?: number;
   chunksInjected?: number;
   tokensInjected?: number;
   resolvedTarget?: string;
@@ -76,10 +87,12 @@ export interface HookContextSection {
 
 export interface HookContextResult {
   ok: boolean;
+  freshnessLevel?: "fresh" | "stale" | "empty";
   route?: AuditRoute;
   deliveryMode?: "code_context" | "summary_only";
   dominantFamily?: string;
   familyConfidence?: number;
+  evidenceConfidence?: number;
   deferredReason?: string;
   files: string[];
   sections: HookContextSection[];
@@ -132,6 +145,7 @@ export interface ContextMetrics {
   redundantExplorerUsed: boolean;
   contextFailed: boolean;
   legitimateGap: boolean;
+  highConfidenceWrong: boolean;
   relevantInjectedFiles: string[];
   irrelevantInjectedFiles: string[];
   missingRelevantFiles: string[];
@@ -164,6 +178,7 @@ export interface RouteSummary {
   avgTokenPollutionRatio: number;
   explorerAfterContextRate: number;
   legitimateGapRate: number;
+  highConfidenceWrongRate: number;
 }
 
 export interface AuditSummary {
@@ -176,12 +191,15 @@ export interface AuditSummary {
   explorerAfterContextRate: number;
   redundantExplorerRate: number;
   legitimateGapRate: number;
+  highConfidenceWrongRate: number;
+  freshnessSignalingRate: number;
   netTokenRegressionRate: number;
   netToolRegressionRate: number;
   routeBreakdown: Record<AuditRoute, RouteSummary>;
   worstPollutionQueries: string[];
   worstExplorerQueries: string[];
   tokenRegressionQueries: string[];
+  highConfidenceWrongQueries: string[];
   reporecallOnlyPass: boolean;
   claudeE2ePass: boolean | null;
 }
@@ -234,7 +252,7 @@ interface ParsedClaudeUsage {
 interface HookDaemonState {
   healthy: boolean;
   startedByAudit: boolean;
-  stop: () => void;
+  stop: () => Promise<void>;
   port: number;
 }
 
@@ -370,8 +388,10 @@ function parseHookDebug(body: unknown): {
   chunksInjected: number;
   latencyMs?: number;
   deliveryMode?: "code_context" | "summary_only";
+  confidence?: number;
   dominantFamily?: string;
   familyConfidence?: number;
+  evidenceConfidence?: number;
   deferredReason?: string;
 } {
   const debug = typeof body === "object" && body !== null ? (body as Record<string, unknown>)._debug : undefined;
@@ -380,13 +400,14 @@ function parseHookDebug(body: unknown): {
   }
   const record = debug as Record<string, unknown>;
   return {
-    route: typeof record.route === "string" ? (record.route as AuditRoute) : undefined,
+    route: auditRouteFromQueryMode(record.route ?? record.queryMode),
     tokensInjected: typeof record.tokensInjected === "number" ? record.tokensInjected : 0,
     chunksInjected: typeof record.chunksInjected === "number" ? record.chunksInjected : 0,
     latencyMs: typeof record.latencyMs === "number" ? record.latencyMs : undefined,
     deliveryMode: record.deliveryMode === "summary_only" ? "summary_only" : "code_context",
     dominantFamily: typeof record.dominantFamily === "string" ? record.dominantFamily : undefined,
     familyConfidence: typeof record.familyConfidence === "number" ? record.familyConfidence : undefined,
+    evidenceConfidence: typeof record.evidenceConfidence === "number" ? record.evidenceConfidence : undefined,
     deferredReason: typeof record.deferredReason === "string" ? record.deferredReason : undefined,
   };
 }
@@ -656,14 +677,14 @@ async function ensureDaemonForHook(
   if (!forceDedicated && existingToken) {
     const healthyBefore = await waitForAuthenticatedDaemon(existingPort, existingToken, 4_000);
     if (healthyBefore) {
-      return { healthy: true, startedByAudit: false, stop: () => undefined, port: existingPort };
+      return { healthy: true, startedByAudit: false, stop: async () => undefined, port: existingPort };
     }
     if (existsSync(pidPath)) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await sleep(500);
         const retryHealthy = await waitForAuthenticatedDaemon(existingPort, existingToken, 1_500);
         if (retryHealthy) {
-          return { healthy: true, startedByAudit: false, stop: () => undefined, port: existingPort };
+          return { healthy: true, startedByAudit: false, stop: async () => undefined, port: existingPort };
         }
       }
     }
@@ -695,6 +716,32 @@ async function ensureDaemonForHook(
   const logChunks: Buffer[] = [];
   child.stdout?.on("data", (chunk) => logChunks.push(Buffer.from(chunk)));
   child.stderr?.on("data", (chunk) => logChunks.push(Buffer.from(chunk)));
+  let stopPromise: Promise<void> | undefined;
+  const stopSpawnedDaemon = async () => {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      if (child && child.exitCode === null) {
+        const exited = new Promise<boolean>((resolveExit) => {
+          const timeout = setTimeout(() => resolveExit(false), 12_000);
+          child!.once("exit", () => {
+            clearTimeout(timeout);
+            resolveExit(true);
+          });
+        });
+        child.kill("SIGTERM");
+        if (!(await exited) && child.exitCode === null) {
+          child.kill("SIGKILL");
+          await new Promise<void>((resolveExit) => child!.once("exit", () => resolveExit()));
+        }
+      }
+      writeFileSync(logPath, Buffer.concat(logChunks).toString("utf-8"));
+      child?.stdout?.removeAllListeners();
+      child?.stderr?.removeAllListeners();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+    })();
+    return stopPromise;
+  };
 
   let healthy = false;
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -711,28 +758,23 @@ async function ensureDaemonForHook(
       ? await waitForAuthenticatedDaemon(resolveDaemonPortFromPid(pidPath, config.port), fallbackToken, 2_000)
       : false;
     if (existingHealthy) {
-      writeFileSync(logPath, Buffer.concat(logChunks).toString("utf-8"));
-      if (child.exitCode === null) child.kill("SIGTERM");
+      await stopSpawnedDaemon();
       return {
         healthy: true,
         startedByAudit: false,
-        stop: () => undefined,
+        stop: async () => undefined,
         port: resolveDaemonPortFromPid(pidPath, config.port),
       };
     }
-    writeFileSync(logPath, Buffer.concat(logChunks).toString("utf-8"));
-    child.kill("SIGTERM");
-    return { healthy: false, startedByAudit, stop: () => undefined, port };
+    await stopSpawnedDaemon();
+    return { healthy: false, startedByAudit, stop: async () => undefined, port };
   }
 
   return {
     healthy: true,
     startedByAudit,
     port,
-    stop: () => {
-      writeFileSync(logPath, Buffer.concat(logChunks).toString("utf-8"));
-      if (child && child.exitCode === null) child.kill("SIGTERM");
-    },
+    stop: stopSpawnedDaemon,
   };
 }
 
@@ -822,7 +864,7 @@ export async function runDirectExplain(
     const seed = parsed.seed as Record<string, unknown> | null | undefined;
     return {
       ok: true,
-      route: parsed.route as AuditRoute,
+      route: auditRouteFromQueryMode(parsed.route ?? parsed.queryMode),
       seedName: typeof seed?.name === "string" ? seed.name : null,
       seedFilePath: typeof seed?.filePath === "string" ? normalizeFixturePath(projectRoot, seed.filePath) : null,
       seedConfidence: typeof seed?.confidence === "number" ? seed.confidence : null,
@@ -831,6 +873,7 @@ export async function runDirectExplain(
       dominantFamily: typeof parsed.dominantFamily === "string" ? parsed.dominantFamily : undefined,
       deliveryMode: parsed.deliveryMode === "summary_only" ? "summary_only" : "code_context",
       familyConfidence: typeof parsed.familyConfidence === "number" ? parsed.familyConfidence : undefined,
+      evidenceConfidence: typeof parsed.evidenceConfidence === "number" ? parsed.evidenceConfidence : undefined,
       chunksInjected: typeof parsed.chunksInjected === "number" ? parsed.chunksInjected : undefined,
       tokensInjected: typeof parsed.tokensInjected === "number" ? parsed.tokensInjected : undefined,
       resolvedTarget: typeof parsed.resolvedTarget === "string" ? parsed.resolvedTarget : undefined,
@@ -876,12 +919,20 @@ export async function runHookContext(
     const additionalContext =
       ((((body.hookSpecificOutput as Record<string, unknown> | undefined)?.additionalContext) as string | undefined) ?? "");
     const debug = parseHookDebug(body);
+    const freshnessLevel =
+      (((body.reporecall as Record<string, unknown> | undefined)?.staleness as
+        Record<string, unknown> | undefined)?.level);
     return {
       ok: response.ok,
+      freshnessLevel:
+        freshnessLevel === "fresh" || freshnessLevel === "stale" || freshnessLevel === "empty"
+          ? freshnessLevel
+          : undefined,
       route: debug.route,
       deliveryMode: debug.deliveryMode,
       dominantFamily: debug.dominantFamily,
       familyConfidence: debug.familyConfidence,
+      evidenceConfidence: debug.evidenceConfidence,
       deferredReason: debug.deferredReason,
       files: parseInjectedFilesFromContext(additionalContext).map((filePath) =>
         normalizeFixturePath(projectRoot, filePath)
@@ -1077,6 +1128,7 @@ export function computeContextMetrics(input: {
   relevance: Record<string, number>;
   mustInclude?: string[];
   mustNotInclude?: string[];
+  confidence?: number;
   claudeRun?: ClaudeRunResult;
 }): ContextMetrics {
   const relevantExpected = Object.entries(input.relevance)
@@ -1119,6 +1171,18 @@ export function computeContextMetrics(input: {
       ? false
       : input.claudeRun?.contextFailed ?? false;
   const legitimateGap = contextFailed && missingRelevantFiles.length > 0;
+  const requiredEvidence = mustInclude.length > 0
+    ? mustInclude
+    : Object.entries(input.relevance)
+      .filter(([, grade]) => grade >= 3)
+      .map(([filePath]) => filePath);
+  const missingRequiredEvidence = requiredEvidence.filter(
+    (filePath) => !input.injectedFiles.some((candidate) => matchesPath(candidate, filePath))
+  );
+  const highConfidenceWrong =
+    input.deliveryMode === "code_context"
+    && (input.confidence ?? 0) >= 0.75
+    && missingRequiredEvidence.length > 0;
 
   return {
     routeMatch: input.actualRoute === input.expectedRoute,
@@ -1136,6 +1200,7 @@ export function computeContextMetrics(input: {
     redundantExplorerUsed,
     contextFailed: contextFailed && !redundantExplorerUsed,
     legitimateGap,
+    highConfidenceWrong,
     relevantInjectedFiles,
     irrelevantInjectedFiles,
     missingRelevantFiles,
@@ -1155,6 +1220,7 @@ function summarizeRoute(results: AuditQueryResult[], route: AuditRoute): RouteSu
     avgTokenPollutionRatio: round3(mean(routeResults.map((result) => result.contextMetrics.tokenPollutionRatio))),
     explorerAfterContextRate: round3(rate(routeResults.map((result) => result.contextMetrics.contextFailed))),
     legitimateGapRate: round3(rate(routeResults.map((result) => result.contextMetrics.legitimateGap))),
+    highConfidenceWrongRate: round3(rate(routeResults.map((result) => result.contextMetrics.highConfidenceWrong))),
   };
 }
 
@@ -1172,6 +1238,10 @@ export function buildSummary(results: AuditQueryResult[]): AuditSummary {
     explorerAfterContextRate: round3(rate(results.map((result) => result.contextMetrics.contextFailed))),
     redundantExplorerRate: round3(rate(results.map((result) => result.contextMetrics.redundantExplorerUsed))),
     legitimateGapRate: round3(rate(results.map((result) => result.contextMetrics.legitimateGap))),
+    highConfidenceWrongRate: round3(rate(results.map((result) => result.contextMetrics.highConfidenceWrong))),
+    freshnessSignalingRate: round3(rate(results.map((result) =>
+      result.hookContext.freshnessLevel !== undefined
+    ))),
     netTokenRegressionRate:
       withClaude.length === 0 ? 0 : round3(tokenRegressions.length / withClaude.length),
     netToolRegressionRate:
@@ -1197,9 +1267,16 @@ export function buildSummary(results: AuditQueryResult[]): AuditSummary {
       .slice(0, 10)
       .map((result) => result.id),
     tokenRegressionQueries: tokenRegressions.slice(0, 10).map((result) => result.id),
+    highConfidenceWrongQueries: results
+      .filter((result) => result.contextMetrics.highConfidenceWrong)
+      .map((result) => result.id),
     reporecallOnlyPass:
       mean(results.map((result) => result.contextMetrics.contextPrecision)) >= 0.6 &&
-      rate(results.map((result) => result.contextMetrics.routeMatch)) >= 0.8,
+      mean(results.map((result) => result.contextMetrics.contextRecall)) >= 0.85 &&
+      mean(results.map((result) => result.contextMetrics.pollutionRatio)) <= 0.1 &&
+      rate(results.map((result) => result.contextMetrics.routeMatch)) >= 0.9 &&
+      rate(results.map((result) => result.contextMetrics.highConfidenceWrong)) === 0 &&
+      rate(results.map((result) => result.hookContext.freshnessLevel !== undefined)) === 1,
     claudeE2ePass:
       withClaude.length === 0
         ? null
@@ -1296,6 +1373,8 @@ export function renderMarkdownReport(report: ProjectContextAuditReport): string 
   lines.push(`- Avg token pollution ratio: ${formatPct(report.summary.avgTokenPollutionRatio)}`);
   lines.push(`- Explorer-after-context rate: ${formatPct(report.summary.explorerAfterContextRate)}`);
   lines.push(`- Legitimate-gap rate: ${formatPct(report.summary.legitimateGapRate)}`);
+  lines.push(`- High-confidence-wrong rate: ${formatPct(report.summary.highConfidenceWrongRate)}`);
+  lines.push(`- Fresh/stale/empty signaling: ${formatPct(report.summary.freshnessSignalingRate)}`);
   lines.push("");
   lines.push("## Route Split");
   lines.push("");
@@ -1393,7 +1472,7 @@ export async function runProjectContextAudit(
     if (!smoke.ok) health.blockedReasons.push("explain_failed");
   }
 
-  let stopDaemon = () => undefined;
+  let stopDaemon = async () => undefined;
   let hookPort: number | undefined;
   let cleanClaudeEnv: CleanClaudeEnv | undefined;
   if (health.distExists && health.projectExists) {
@@ -1407,7 +1486,7 @@ export async function runProjectContextAudit(
     } else {
       let hookSmoke = await runHookContext(projectRoot, fixture.queries[0]?.query ?? "find useAuth", hookPort);
       if (!hookSmoke.ok) {
-        stopDaemon();
+        await stopDaemon();
         const dedicatedDaemon = await ensureDaemonForHook(ideaRoot, projectRoot, true);
         health.daemonHealthy = dedicatedDaemon.healthy;
         health.daemonStartedByAudit = dedicatedDaemon.startedByAudit;
@@ -1515,6 +1594,13 @@ export async function runProjectContextAudit(
         expectedRoute: query.expectedRoute,
         actualRoute: hookContext.route ?? directExplain.route,
         deliveryMode: hookContext.deliveryMode ?? directExplain.deliveryMode,
+        confidence:
+          hookContext.evidenceConfidence
+          ?? directExplain.evidenceConfidence
+          ?? hookContext.familyConfidence
+          ?? directExplain.familyConfidence
+          ?? directExplain.seedConfidence
+          ?? undefined,
         injectedFiles: actualInjectedFiles,
         sections: hookContext.sections,
         relevance: query.relevance,
@@ -1556,7 +1642,7 @@ export async function runProjectContextAudit(
     }
   } finally {
     cleanClaudeEnv?.cleanup();
-    stopDaemon();
+    await stopDaemon();
   }
 
   const report: ProjectContextAuditReport = {
@@ -1589,4 +1675,11 @@ export async function main(argv: string[]): Promise<void> {
       report.summary.routeAccuracy
     )} | precision ${formatPct(report.summary.avgContextPrecision)} | recall ${formatPct(report.summary.avgContextRecall)}\n`
   );
+  process.exitCode = auditExitCode(report);
+}
+
+export function auditExitCode(report: ProjectContextAuditReport): number {
+  if (!report.summary.reporecallOnlyPass) return 1;
+  if (report.metadata.mode === "full" && report.summary.claudeE2ePass !== true) return 1;
+  return 0;
 }

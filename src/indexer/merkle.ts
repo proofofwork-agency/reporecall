@@ -1,5 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
-import { promises as fsPromises } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  unlinkSync,
+  promises as fsPromises,
+} from "fs";
 import { resolve, dirname } from "path";
 import xxhash from "xxhash-wasm";
 import type { FileChange } from "./types.js";

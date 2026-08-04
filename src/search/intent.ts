@@ -173,6 +173,9 @@ export function classifyIntent(query: string): QueryIntent {
     LONG_FORM_SYMPTOM_RE.test(lower)
     && /\b(auth|login|signin|signup|session|redirect|callback|route|router|navigation|protected|destination)\b/.test(lower);
   const hasTraceCue = TRACE_RE.test(lower);
+  const describesRedirectOutcome =
+    REDIRECT_DEBUG_RE.test(lower)
+    && /^(?:where\s+does|what\s+happens|show|describe|explain)\b/.test(lower);
   const hasArchitectureCue =
     ARCHITECTURE_RE.test(lower)
     || hasFileInventoryCue
@@ -182,6 +185,7 @@ export function classifyIntent(query: string): QueryIntent {
     || (hasWorkflowNoun && hasJobOrchestrationCue)
     || (hasBotSystemCue && /\bhow\s+does\b.*\bwork\b/.test(lower))
     || (hasCrossDomainBoundaryCue && mentionsBillingDomain && mentionsGenerationDomain)
+    || describesRedirectOutcome
     || (!looksLikeDirectLookup && hasWorkflowNoun && hasConceptFamily)
     || (hasWholeSystemScope && LIFECYCLE_SYSTEM_RE.test(lower));
   const hasChangeCue =
@@ -203,8 +207,15 @@ export function classifyIntent(query: string): QueryIntent {
     || (hasWholeSystemScope && hasCrossCuttingCue)
     || (hasFileInventoryCue && hasWorkflowNoun);
   const isChange = hasChangeCue && !looksLikeDirectLookup;
-  const isArchitecture = hasArchitectureCue && !hasBugCue && !isChange && !looksLikeDirectTrace;
-  const isBug = (hasBugCue || hasLongFormSymptomCue) && !looksLikeDirectLookup;
+  const isArchitecture =
+    hasArchitectureCue
+    && (!hasBugCue || describesRedirectOutcome)
+    && !isChange
+    && !looksLikeDirectTrace;
+  const isBug =
+    (hasBugCue || (hasLongFormSymptomCue && !hasFileInventoryCue))
+    && !describesRedirectOutcome
+    && !looksLikeDirectLookup;
   const isTrace = looksLikeDirectTrace || hasTraceCue || (hasNavigationCue && !isArchitecture && !isBug && !isChange);
   const isLookup =
     looksLikeDirectLookup

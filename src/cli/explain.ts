@@ -64,6 +64,7 @@ export interface ExplainResult {
   contextStrength?: 'sufficient' | 'partial' | 'weak'
   executionSurface?: string
   familyConfidence?: number
+  evidenceConfidence?: number
   selectedFiles?: Array<{
     filePath: string
     selectionSource: string
@@ -235,6 +236,7 @@ export async function resolveExplainResult(
     contextStrength: promptContext.contextStrength,
     executionSurface: promptContext.executionSurface,
     familyConfidence: promptContext.familyConfidence ?? broadSelection?.familyConfidence,
+    evidenceConfidence: promptContext.evidenceConfidence,
     selectedFiles: broadSelection?.selectedFiles
       ?? Array.from(new Set((context?.chunks ?? []).map((chunk) => chunk.filePath))).map((filePath) => ({
         filePath,

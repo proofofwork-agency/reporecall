@@ -5,6 +5,36 @@ import { chunkFileWithCalls } from "../../src/parser/chunker.js";
 const FIXTURES = resolve(import.meta.dirname, "..", "fixtures");
 
 /**
+ * Loading a tree-sitter WASM grammar for all 22 languages in one process
+ * exceeds what V8's zone allocator can obtain on a Node 24 CI runner, which
+ * kills the worker with "Fatal process out of memory: Zone". CI therefore runs
+ * this file in shards via MULTILANG_SHARDS/MULTILANG_SHARD so each process
+ * loads roughly half the grammars. With the env unset — every local run — the
+ * whole file executes exactly as before.
+ */
+const SHARD_COUNT = Number(process.env.MULTILANG_SHARDS ?? 0);
+const SHARD_INDEX = Number(process.env.MULTILANG_SHARD ?? 0);
+
+/** Shard 1 carries the tests that walk every language in one process. */
+const RUN_ALL_LANGUAGES_TESTS = SHARD_COUNT === 0 || SHARD_INDEX === 1;
+const allLanguagesIt = RUN_ALL_LANGUAGES_TESTS ? it : it.skip;
+
+let shardCursor = 0;
+
+/** One language per test — spread across every shard after the first. */
+function shardedIt(name: string, body: () => Promise<void>): void {
+  const index = shardCursor;
+  shardCursor += 1;
+  const isMine =
+    SHARD_COUNT === 0
+      ? true
+      : SHARD_INDEX === 1
+        ? false
+        : index % (SHARD_COUNT - 1) === SHARD_INDEX - 2;
+  (isMine ? it : it.skip)(name, body);
+}
+
+/**
  * Multi-language chunker tests.
  *
  * Each test verifies that tree-sitter can parse the fixture file
@@ -13,7 +43,7 @@ const FIXTURES = resolve(import.meta.dirname, "..", "fixtures");
 
 describe("multi-language chunker", () => {
   // ── TSX ────────────────────────────────────────────────────────────
-  it("should chunk TSX with functions, classes, interfaces, enums", async () => {
+  shardedIt("should chunk TSX with functions, classes, interfaces, enums", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.tsx"),
       FIXTURES
@@ -34,7 +64,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── JavaScript ─────────────────────────────────────────────────────
-  it("should chunk JavaScript with functions, arrow functions, classes", async () => {
+  shardedIt("should chunk JavaScript with functions, arrow functions, classes", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.js"),
       FIXTURES
@@ -52,7 +82,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Go ─────────────────────────────────────────────────────────────
-  it("should chunk Go with functions, methods, type declarations", async () => {
+  shardedIt("should chunk Go with functions, methods, type declarations", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.go"),
       FIXTURES
@@ -70,7 +100,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Rust ───────────────────────────────────────────────────────────
-  it("should chunk Rust with functions, structs, enums, traits, impls", async () => {
+  shardedIt("should chunk Rust with functions, structs, enums, traits, impls", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.rs"),
       FIXTURES
@@ -90,7 +120,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Java ───────────────────────────────────────────────────────────
-  it("should chunk Java with classes, interfaces, enums, methods", async () => {
+  shardedIt("should chunk Java with classes, interfaces, enums, methods", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.java"),
       FIXTURES
@@ -109,7 +139,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Ruby ───────────────────────────────────────────────────────────
-  it("should chunk Ruby with classes, modules, methods", async () => {
+  shardedIt("should chunk Ruby with classes, modules, methods", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.rb"),
       FIXTURES
@@ -127,7 +157,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── C ──────────────────────────────────────────────────────────────
-  it("should chunk C with functions, structs, enums, typedefs", async () => {
+  shardedIt("should chunk C with functions, structs, enums, typedefs", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.c"),
       FIXTURES
@@ -150,7 +180,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── C++ ────────────────────────────────────────────────────────────
-  it("should chunk C++ with functions, classes, structs, enums, namespaces", async () => {
+  shardedIt("should chunk C++ with functions, classes, structs, enums, namespaces", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.cpp"),
       FIXTURES
@@ -171,7 +201,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── C# ─────────────────────────────────────────────────────────────
-  it("should chunk C# with classes, interfaces, structs, enums, methods", async () => {
+  shardedIt("should chunk C# with classes, interfaces, structs, enums, methods", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.cs"),
       FIXTURES
@@ -188,7 +218,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── PHP ────────────────────────────────────────────────────────────
-  it("should chunk PHP with functions, classes, interfaces, traits", async () => {
+  shardedIt("should chunk PHP with functions, classes, interfaces, traits", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.php"),
       FIXTURES
@@ -206,7 +236,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Swift ──────────────────────────────────────────────────────────
-  it("should chunk Swift with functions, classes, structs, protocols, enums", async () => {
+  shardedIt("should chunk Swift with functions, classes, structs, protocols, enums", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.swift"),
       FIXTURES
@@ -224,7 +254,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Kotlin ─────────────────────────────────────────────────────────
-  it("should chunk Kotlin with functions, classes, objects, interfaces", async () => {
+  shardedIt("should chunk Kotlin with functions, classes, objects, interfaces", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.kt"),
       FIXTURES
@@ -243,7 +273,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Scala ──────────────────────────────────────────────────────────
-  it("should chunk Scala with functions, classes, objects, traits", async () => {
+  shardedIt("should chunk Scala with functions, classes, objects, traits", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.scala"),
       FIXTURES
@@ -262,7 +292,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Zig ────────────────────────────────────────────────────────────
-  it("should chunk Zig with functions and test declarations", async () => {
+  shardedIt("should chunk Zig with functions and test declarations", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.zig"),
       FIXTURES
@@ -282,7 +312,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Bash ───────────────────────────────────────────────────────────
-  it("should chunk Bash with function definitions", async () => {
+  shardedIt("should chunk Bash with function definitions", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.sh"),
       FIXTURES
@@ -301,7 +331,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Lua ────────────────────────────────────────────────────────────
-  it("should chunk Lua with function declarations and definitions", async () => {
+  shardedIt("should chunk Lua with function declarations and definitions", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.lua"),
       FIXTURES
@@ -319,7 +349,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── HTML ───────────────────────────────────────────────────────────
-  it("should chunk HTML with elements", async () => {
+  shardedIt("should chunk HTML with elements", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.html"),
       FIXTURES
@@ -335,7 +365,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Vue ────────────────────────────────────────────────────────────
-  it("should chunk Vue with template, script, style elements", async () => {
+  shardedIt("should chunk Vue with template, script, style elements", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.vue"),
       FIXTURES
@@ -350,7 +380,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── CSS ────────────────────────────────────────────────────────────
-  it("should chunk CSS with rule sets, media queries, keyframes", async () => {
+  shardedIt("should chunk CSS with rule sets, media queries, keyframes", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.css"),
       FIXTURES
@@ -365,7 +395,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── TOML ───────────────────────────────────────────────────────────
-  it("should chunk TOML with tables and table arrays", async () => {
+  shardedIt("should chunk TOML with tables and table arrays", async () => {
     const { chunks } = await chunkFileWithCalls(
       resolve(FIXTURES, "sample.toml"),
       FIXTURES
@@ -380,7 +410,7 @@ describe("multi-language chunker", () => {
   });
 
   // ── Cross-language invariants ──────────────────────────────────────
-  it("should produce stable IDs across all languages", async () => {
+  allLanguagesIt("should produce stable IDs across all languages", async () => {
     const languages = [
       "sample.tsx", "sample.js", "sample.go", "sample.rs",
       "sample.java", "sample.rb", "sample.c", "sample.cpp",
@@ -403,7 +433,7 @@ describe("multi-language chunker", () => {
     }
   });
 
-  it("every chunk should have required fields regardless of language", async () => {
+  allLanguagesIt("every chunk should have required fields regardless of language", async () => {
     const languages = [
       "sample.tsx", "sample.js", "sample.go", "sample.rs",
       "sample.java", "sample.rb", "sample.c", "sample.cpp",

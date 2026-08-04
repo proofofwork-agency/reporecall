@@ -1,10 +1,14 @@
 import { glob } from "glob";
-import { readFileSync, existsSync, openSync, readSync, closeSync, realpathSync } from "fs";
+import { readFileSync, existsSync, openSync, readSync, closeSync } from "fs";
 import { stat } from "fs/promises";
-import { resolve, sep } from "path";
+import { resolve } from "path";
 import ignore from "ignore";
 import type { MemoryConfig } from "../core/config.js";
 import { loadMemoryIgnore } from "../core/project.js";
+import {
+  canonicalizeProjectRoot,
+  resolveProjectPath,
+} from "../core/path-safety.js";
 
 export interface ScannedFile {
   absolutePath: string;
@@ -33,12 +37,11 @@ function isBinaryFile(absolutePath: string): boolean {
 
 export async function scanFiles(config: MemoryConfig): Promise<ScannedFile[]> {
   const { extensions, ignorePatterns, maxFileSize } = config;
-  // Resolve projectRoot to its real path to handle platform symlinks (e.g., macOS /var -> /private/var)
   let projectRoot: string;
   try {
-    projectRoot = realpathSync(config.projectRoot);
+    projectRoot = canonicalizeProjectRoot(config.projectRoot);
   } catch {
-    projectRoot = config.projectRoot;
+    return [];
   }
 
   // Build ignore filter
@@ -76,18 +79,17 @@ export async function scanFiles(config: MemoryConfig): Promise<ScannedFile[]> {
 
     const absolutePath = resolve(projectRoot, match);
     try {
-      // Verify real path is within project root (prevents symlink escapes)
-      const realPath = realpathSync(absolutePath);
-      if (!realPath.startsWith(projectRoot + sep) && realPath !== projectRoot) continue;
+      const safePath = resolveProjectPath(projectRoot, absolutePath, "existing");
+      if (!safePath) continue;
 
-      const fileStat = await stat(absolutePath);
+      const fileStat = await stat(safePath.absolutePath);
       if (fileStat.size > maxFileSize) continue;
       if (fileStat.size === 0) continue;
 
-      if (isBinaryFile(absolutePath)) continue;
+      if (isBinaryFile(safePath.absolutePath)) continue;
 
       files.push({
-        absolutePath: realPath,
+        absolutePath: safePath.absolutePath,
         relativePath: match,
         size: fileStat.size,
       });

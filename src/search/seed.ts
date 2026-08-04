@@ -402,6 +402,7 @@ function compareSeedCandidates(a: SeedCandidate, b: SeedCandidate): number {
   const targetRank = (candidate: SeedCandidate): number => {
     switch (candidate.targetKind) {
       case "endpoint":
+      case "route":
         return 4;
       case "file_module":
         return 3;
@@ -409,7 +410,7 @@ function compareSeedCandidates(a: SeedCandidate, b: SeedCandidate): number {
         return 2;
       case "subsystem":
         return 1;
-      default:
+      case undefined:
         return 0;
     }
   };
