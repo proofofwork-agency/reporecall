@@ -12,12 +12,15 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**", "test/benchmark/**"],
     poolOptions: {
       forks: {
-        // Every worker loads tree-sitter WASM, lancedb and sqlite, so peak
-        // memory scales with worker count. At the default of one fork per core
-        // the 4-core CI runners die with "Fatal process out of memory: Zone"
-        // once V8 coverage instrumentation is added on top. Cap concurrency in
-        // CI only — the whole suite still runs, just less of it at once.
-        maxForks: process.env.CI ? 2 : undefined,
+        // Every worker loads tree-sitter WASM, lancedb and sqlite, and the
+        // parser/deep-call-chain suites build very large inputs on top of that.
+        // Under V8 coverage the CI runners die with "Fatal process out of
+        // memory: Zone" — a V8 parser/compiler allocator failure driven by
+        // total process memory, not by the old-space cap (raising
+        // --max-old-space-size made it strictly worse: two concurrent workers
+        // with larger heaps produced two OOMs instead of one). Serialize in CI
+        // so one worker has the whole runner. The full suite still runs.
+        maxForks: process.env.CI ? 1 : undefined,
       },
     },
     coverage: {
