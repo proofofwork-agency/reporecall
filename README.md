@@ -41,7 +41,7 @@ figure is context-assembly cost, not end-to-end agent tokens; we don't publish a
 end-to-end number because we haven't earned one yet. See
 [Benchmarking & Token Evidence](#benchmarking--token-evidence).
 
-**v0.9.0 focus:** trustworthy retrieval evidence, unified project-boundary safety, deterministic quality gates, and behavior-preserving module decomposition.
+**v0.9.1 focus:** freshness integrity — a modified file can no longer stay indexed as fresh, the full test suite now runs on Windows and macOS, and the docs site gained offline search and rendered architecture diagrams.
 
 ### Standout Features
 - **6-tool MCP surface** — deliberately small and reliable after the v0.8 surface collapse.
@@ -76,7 +76,7 @@ Injected context + banner   (optional MCP tools for gaps)
 **📖 Full docs + honest competitive analysis** (current position, target position, and threat matrix):
 https://proofofwork-agency.github.io/reporecall/
 
-> **v0.9.0 in practice** — reproducible evidence, stricter path containment, contamination-resistant hooks, and a release gate that stays blocked when current proof is missing.
+> **v0.9.1 in practice** — change detection that refuses to trust a timestamp it cannot rely on, platform coverage that fails in CI instead of at publish, and every published figure re-measured against the build that ships it.
 
 ## Quick Start
 
@@ -551,6 +551,35 @@ reporecall conventions
 ```
 
 ## Changelog
+
+### v0.9.1 - Freshness Integrity
+
+A modified file could stay indexed as fresh indefinitely, and this release closes
+that:
+
+- Change detection skips hashing when mtime, ctime and size all match. Filesystem
+  timestamps are coarse — the Windows clock advances in ~15.6ms steps, HFS+ stores
+  whole seconds, FAT32 two-second steps — so two writes inside one step share an
+  mtime exactly. A file hashed between them lost the second write on every later
+  scan, and on Windows `ctime` is the creation time and does not move on
+  modification, so a length-preserving edit cleared all three signals at once.
+  Files written within that granularity are now marked timestamp-untrusted and
+  re-hashed on the next scan. That costs a read, not parse or embed work: a
+  no-change re-index of 2,000 files still processes 0 files.
+- The full test suite runs on Windows and macOS in CI, not only Ubuntu. Publish was
+  previously the first place it ever ran on Windows, which is how a class of
+  path-identity defects reached a release gate instead of a pull request.
+- The release gate now audits the dependency tree a *consumer* resolves, not the
+  one this repo develops against — npm honors `overrides` only from the root
+  project, so the two differ. See the note in Quick Start.
+- The quantitative-claim detector in `quality:claims` never actually matched
+  anything: its percent pattern required a word character after the `%`, which
+  prose never provides. Fixed and pinned by regression tests.
+- Docs site: offline full-text search, rendered Mermaid architecture diagrams, a
+  custom 404, and a social preview card.
+- Both registered claims re-measured against a freshly cloned and re-indexed
+  1,306-file repository using this release's build. Retrieval gate unchanged;
+  context-assembly cost moved inside measurement variance.
 
 ### v0.9.0 - Engineering Hardening
 

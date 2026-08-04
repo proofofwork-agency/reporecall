@@ -117,5 +117,8 @@ This document is the north star. Every change to README, docs, examples, and mar
 
 ---
 
-*Updated for v0.9.0 release (July 2026). Quantitative release claims still require current benchmark artifacts.*
+*This analysis was last reviewed for the v0.9.0 release (August 2026); the shipping
+release is v0.9.1. Quantitative claims are now registered in `quality/claims.json`
+with committed evidence artifacts — `npm run quality:claims` fails if a published
+figure loses its backing.*
 *Engineering claims cross-checked against source (staleness, MCP surface, hooks, compression, etc.).*
