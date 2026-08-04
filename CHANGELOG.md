@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.9.0](https://github.com/proofofwork-agency/reporecall/compare/v0.8.1...v0.9.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* minimum supported runtime is now Node 22 (was Node 20).
+
+### Features
+
+* **benchmark:** measure and publish context-assembly token cost ([2c0e616](https://github.com/proofofwork-agency/reporecall/commit/2c0e6168af06f06cac210fef06b1283f5b136dc5))
+* require Node 22, and fix coverage OOM + publish gate parity ([d7b8717](https://github.com/proofofwork-agency/reporecall/commit/d7b8717ddfef0828819a23e194eabd8ecab7c8b9))
+
+
+### Bug Fixes
+
+* **ci:** cap vitest fork concurrency in CI to stop coverage OOM ([6d54534](https://github.com/proofofwork-agency/reporecall/commit/6d54534c98762971171bf1faf0dfcfdb0d1cf8de))
+* **ci:** declare shell bash on multi-line steps ([944c6a8](https://github.com/proofofwork-agency/reporecall/commit/944c6a8edfa9af96c3cdcb597f14bdd9109fea00))
+* **ci:** give the all-languages integration test its own worker ([b9ff5a6](https://github.com/proofofwork-agency/reporecall/commit/b9ff5a67cea1d01db8ad14b3b7b8fb565862f2eb))
+* **ci:** isolate both all-languages WASM suites, not just one ([0e196c0](https://github.com/proofofwork-agency/reporecall/commit/0e196c0043dfc683bc8d0856c14882f833e79ed4))
+* **ci:** patch production advisories and unbreak the packed demo on Windows ([70a46bd](https://github.com/proofofwork-agency/reporecall/commit/70a46bd117278f820b2e69fe0e81b2ffab417838))
+* **ci:** run each all-languages WASM suite in its own process ([6cd6487](https://github.com/proofofwork-agency/reporecall/commit/6cd6487f9b21c63d7427e035c1cc4bd67422e044))
+* **ci:** serialize vitest in CI instead of raising the heap ([852af8d](https://github.com/proofofwork-agency/reporecall/commit/852af8d394ff1135c8c36b49349c3e9c6122aca7))
+* **indexer:** never trust the mtime of a file hashed right after it was written ([f9500f7](https://github.com/proofofwork-agency/reporecall/commit/f9500f7b0151293cd6b93c52b111c723e1bfe277))
+* **publish:** prefix the tarball path so npm treats it as a file ([f49a7c0](https://github.com/proofofwork-agency/reporecall/commit/f49a7c041b299548de393901d0c2992e73bb6c68))
+* **quality:** make fixture hashes portable across line-ending checkouts ([9b5a41f](https://github.com/proofofwork-agency/reporecall/commit/9b5a41f4d48c34b522daa689c64a996eac0fdbf1))
+* **quality:** the claims detector never actually detected anything ([f6b3b1f](https://github.com/proofofwork-agency/reporecall/commit/f6b3b1f160f2f1eed8230398d7cd72bed743df71))
+* **release:** audit the tree consumers get, not the one we develop against ([bbd458a](https://github.com/proofofwork-agency/reporecall/commit/bbd458a50f1fa1f7e17fa155087ad6e7afa98448))
+* **smoke:** tolerate Windows temp-dir cleanup failure ([b693bc3](https://github.com/proofofwork-agency/reporecall/commit/b693bc37dabd65cf59a6d2e8399a4dd626e5d7bb))
+* Windows smoke signal semantics, Lens inline-JSON XSS, conventions schema, Python docstrings ([47dffec](https://github.com/proofofwork-agency/reporecall/commit/47dffecae8e712b4d253cfc5e5389d6a6af56601))
+* **windows:** finish the portable-path boundary; harden merkle and test teardown ([27126a3](https://github.com/proofofwork-agency/reporecall/commit/27126a38c304c976d22aa5c580f5b3f289eed4b5))
+* **windows:** normalize repo-relative paths at the boundary; redesign docs site ([71d10a7](https://github.com/proofofwork-agency/reporecall/commit/71d10a797c9f35cd0840e78886778b9d7da23781))
+* **windows:** normalize the chunk filePath the call graph keys on ([5846c70](https://github.com/proofofwork-agency/reporecall/commit/5846c70c67dcdfaaba4fe98468c1357c47e07e74))
+
 ## [0.9.1] - 2026-08-04
 
 Patch release closing a freshness-integrity hole in change detection, plus the
