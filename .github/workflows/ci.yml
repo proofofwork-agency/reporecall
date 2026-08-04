@@ -43,8 +43,23 @@ jobs:
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
-      # One process each: the two together exhaust a single worker as well.
+      # The pipeline suite builds an IndexingPipeline per language on top of all
+      # 22 grammars, which is too much for one Node 24 process even alone, so it
+      # runs in shards: 1 = the all-languages tests, 2 and 3 = half the
+      # per-language tests each (2 + 11 + 11 = 24, the full file).
       - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
+      # Chunker only parses — no pipelines or stores — so a fresh process is enough.
       - run: npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke

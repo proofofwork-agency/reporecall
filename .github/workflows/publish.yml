@@ -31,8 +31,21 @@ jobs:
           npm run coverage -- \
             --exclude 'test/integration/multilang-pipeline.test.ts' \
             --exclude 'test/parser/multilang-chunker.test.ts'
-      # One process each: the two together exhaust a single worker as well.
+      # Matches ci.yml: the pipeline suite is sharded across processes
+      # (2 + 11 + 11 = 24, the full file) because one Node 24 process cannot hold
+      # all 22 grammars plus a pipeline per language.
       - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "1"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "2"
+      - run: npx vitest run test/integration/multilang-pipeline.test.ts
+        env:
+          MULTILANG_SHARDS: "3"
+          MULTILANG_SHARD: "3"
       - run: npx vitest run test/parser/multilang-chunker.test.ts
       - run: npm run build
       - run: npm run smoke
